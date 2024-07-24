@@ -1,5 +1,9 @@
-/gallama.egg-info
+/src/gallama.egg-info
 /log
 /build
 **/__pycache__/
 /.idea
+.idea
+*.egg-info/
+__pycache__/
+/src/gallama.egg-info/
