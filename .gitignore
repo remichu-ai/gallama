@@ -6,3 +6,4 @@
 *.egg-info/
 /**/__pycache__/
 /src/gallama.egg-info/
+/src/__pycache__/
