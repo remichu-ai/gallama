@@ -1,0 +1,726 @@
+# generator.py
+from typing import List, Dict, Union, Literal, Type, AsyncIterator
+import transformers
+from lmformatenforcer.integrations.exllamav2 import (
+    ExLlamaV2TokenEnforcerFilter,
+    build_token_enforcer_tokenizer_data
+)
+from lmformatenforcer.integrations.llamacpp import (
+    build_llamacpp_logits_processor,
+    build_token_enforcer_tokenizer_data as build_token_enforcer_tokenizer_data_llama_cpp
+)
+
+from llama_cpp import LogitsProcessorList
+from lmformatenforcer import JsonSchemaParser, RegexParser
+from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+from pydantic import BaseModel, Field, create_model
+from fastapi import HTTPException
+#from chat_response import chat_completion_response
+#from typing import Iterator
+from .model import Model
+from .data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
+from .tools import Tools, create_function_models_v1, create_function_models_v2
+from exllamav2 import (
+    ExLlamaV2Cache,
+    ExLlamaV2Cache_Q4,
+)
+from exllamav2.generator import (
+    ExLlamaV2Sampler,
+    ExLlamaV2DynamicGeneratorAsync,
+    ExLlamaV2DynamicJobAsync,
+)
+from exllamav2.generator.filters import ExLlamaV2PrefixFilter
+from dataclasses import dataclass
+import time
+from datetime import datetime
+from copy import deepcopy
+from gallama.utils import get_token_length, parse_xml_to_dict
+from .logger import logger
+from .thinking_template import THINKING_TEMPLATE, Thinking
+import asyncio
+from .chat_response import chat_completion_response, get_response_from_queue
+import uuid
+import weakref
+
+
+TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
+
+@dataclass
+class QueueContext:
+    """ helper class for short live handling of multiple Queue"""
+    gen_queue: 'weakref.ReferenceType[asyncio.Queue]'
+    include_GenStats: bool
+    include_GenEnd: bool
+
+    @classmethod
+    def create(cls, gen_queue: GenQueue, include_GenStats=True, include_GenEnd=True) -> 'QueueContext':
+        return cls(
+            gen_queue=weakref.ref(gen_queue),
+            include_GenStats=include_GenStats,
+            include_GenEnd=include_GenEnd)
+
+    def get_queue(self) -> GenQueue | None:
+        return self.gen_queue()
+
+
+
+class ChatGenerator(Model):
+    def __init__(
+        self,
+        llm_base: Model,
+        # model, cache, tokenizer, model_name,
+        # cache_size: int = None,        # the length of cache size, can be more than context length
+        # eos_token_id: List[int] = [],
+        # eos_token_str: List[str] = [],
+        # max_seq_len=512
+    ):
+        # unpack all variables from llm_base
+        # refer Model class for details of variable available
+        self.__dict__.update(llm_base.__dict__)
+
+        # placeholder
+        self.pipeline = None
+        
+        # self.model = model
+        # self.cache = cache  # for exllamav2
+        # if cache_size:
+        #     self.cache_size = cache_size
+        # else:
+        #     self.cache_size = max_seq_len
+        # self.tokenizer = tokenizer
+        # self.eos_token_id = eos_token_id
+        # self.eos_token_str = eos_token_str
+        # self.max_seq_len = max_seq_len
+        # self.model_name = model_name
+        # # logger.info(f"Max sequence length: {self.max_seq_len}")
+        #
+        # # setting for speculative decoding
+        # self.draft_model = None
+        # self.draft_cache = None
+
+        # without skip_prompt, the prompt repeated
+        # self.streamer = transformers.TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+        # self.pipeline = None
+        #self.pipeline = await self._get_pipeline()
+        #self.pipeline = asyncio.run(self._get_pipeline())
+        # Create a new event loop
+        #loop = asyncio.new_event_loop()
+        #asyncio.set_event_loop(loop)
+        # Run the async task and get the result
+        #self.pipeline = loop.run_until_complete(self._get_pipeline())
+        # Close the loop
+        #loop.close()
+
+    # def add_speculative_decoding(self, draft_model, draft_cache):
+    #     self.draft_model = draft_model
+    #     self.draft_cache = draft_cache
+
+
+    async def chat(self, query: ChatMLQuery, prompt_eng, gen_queue: GenQueue):
+        chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
+        return await chat_method(query=query, prompt_eng=prompt_eng, gen_queue=gen_queue)
+
+    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None):
+        return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue)
+
+    def validate_token_length(self, token_length):
+        if token_length > self.max_seq_len:
+            raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
+
+    async def chat_no_tool(self, query, prompt_eng, gen_queue):
+
+        prompt = prompt_eng.get_prompt(
+            query,
+            thinking_template=query.thinking_template,
+        )
+
+        lm_enforcer_parser_regex = RegexParser(query.regex_pattern) if query.regex_pattern else None
+        lm_enforcer_parser_prefix_regex = RegexParser(
+            query.regex_prefix_pattern) if query.regex_prefix_pattern else None
+
+        token_length_prompt = get_token_length(self.tokenizer, prompt)
+        self.validate_token_length(token_length_prompt)
+
+        # think template prompting
+        if query.thinking_template:
+            try:
+                thinking = Thinking(query.thinking_template)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
+
+
+            thinking_queue = GenQueue()
+            queue_group = [
+                QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
+                # QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
+            ]
+            await self.generate(
+                prompt,
+                gen_queue=queue_group,
+                temperature=query.temperature,
+                stop_words=thinking.root_key_stop_words,
+            )
+            thinking_response, _ = await get_response_from_queue(thinking_queue)
+
+            # Get the new prompt with thinking response
+            prompt = prompt_eng.get_prompt(
+                query,
+                thinking_template=query.thinking_template,
+                thinking_response=thinking_response,
+            )
+
+        # 1st response if there is regex to match the regex pattern
+        first_response = ""
+
+        if query.regex_prefix_pattern:
+            prefix_queue = GenQueue()
+            queue_group = [
+                QueueContext.create(gen_queue=prefix_queue, include_GenEnd=True, include_GenStats=False),
+                QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
+            ]
+
+            await self.generate(
+                prompt,
+                gen_queue=queue_group,
+                temperature=query.temperature,
+                lm_enforcer_parser=lm_enforcer_parser_prefix_regex,
+                # stop_words=query.stop_words,
+            )
+
+            first_response, _ = await get_response_from_queue(prefix_queue)
+
+            prompt = prompt.strip() + first_response.strip()
+
+        await self.generate(
+            prompt=prompt,
+            gen_queue=gen_queue,
+            **{
+                'temperature': query.temperature,
+                'lm_enforcer_parser': lm_enforcer_parser_regex,
+                'stop_words': query.stop_words,
+                'max_tokens': query.max_tokens,
+            }
+        )
+
+
+    async def chat_with_tool(self, query, prompt_eng, gen_queue):
+        # use_tool marker
+        use_tool_bool = False       # this will be set to True if tool is used
+        fall_back_bool = False      # this will decide if fallback generation with regex enforcement is required
+
+        # tool class have the method to handle converting processing or tool requirement, schema and response
+        tool_handler = Tools(
+            prompt_eng=prompt_eng,
+            tools=query.tools,
+            tool_choice=query.tool_choice,
+        )
+
+        # perform generation with tool thinking to evaluate if it is neccessity
+        tool_thinking_queue = GenQueue()
+        prompt = prompt_eng.get_prompt(
+            query,
+            pydantic_tool_dict=tool_handler.tool_dict,
+            thinking_template=TOOL_THINKING.xml,
+            answer_format_schema=False,
+            #leading_prompt=leading_prompt,
+        )
+        # lm_enforcer_parser_regex = RegexParser(
+        #                     TOOL_THINKING.regex) if TOOL_THINKING.regex else None
+        await self.generate(
+            prompt,
+            gen_queue=tool_thinking_queue,
+            temperature=query.temperature,
+            stop_words=TOOL_THINKING.root_key_stop_words,
+            #lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
+        )
+
+        # evaluate tool usage neccessity
+        tool_thinking_response, _ = await get_response_from_queue(tool_thinking_queue)
+        # add the closing root_key_stop
+        # tool_thinking_response += TOOL_THINKING.root_key_stop_words[0]    #TODO check if exllama v2 have way to get the stop_word returned
+
+        # see if llm able to generate the xml format correctly
+        try:
+            # parse the xml object
+            tool_thinking_response_dict = Thinking.parse_xml_to_dict(tool_thinking_response)
+            tool_decision = tool_thinking_response_dict[TOOL_THINKING.root_tag]["final_decision"]["is_tool_needed"]     # TODO implement a less hardcoding way
+            if tool_decision.lower()=="yes":
+                use_tool_bool = True
+            elif tool_decision.lower()=="no":
+                use_tool_bool = False
+            else:
+                # the format was not enforce, to perform fall back check
+                fall_back_bool = True
+        except Exception as e:
+            logger.error(e)
+            fall_back_bool = True
+        logger.info(tool_thinking_response)
+
+
+        # Fall back plan
+        fall_back_prompt = ""
+        if fall_back_bool:
+            # generate fall back response with regex enforcement:
+            fall_back_prompt = "\n Assistant's answer (Yes or No) to the question whether is_tool_needed is:\nis_tool_needed: "
+            prompt += fall_back_prompt
+
+            # perform generation with tool thinking to evaluate if it is neccessity
+            tool_thinking_queue_fallback = GenQueue()
+
+            lm_enforcer_parser_regex = RegexParser(r'(Yes|No|YES|NO)')
+            await self.generate(
+                prompt,
+                gen_queue=tool_thinking_queue_fallback,
+                temperature=query.temperature,
+                # stop_words=TOOL_THINKING.root_key_stop_words,
+                lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
+            )
+
+            # evaluate tool usage neccessity
+            tool_thinking_decision_fallback, _ = await get_response_from_queue(tool_thinking_queue)
+
+            # decide if tool call is required
+            if tool_thinking_decision_fallback.lower()=="yes":
+                use_tool_bool = True
+            elif tool_thinking_decision_fallback.lower()=="no":
+                use_tool_bool = False
+
+        # USE TOOL
+        if use_tool_bool:
+            # create the pydantic schema to enforce generation
+            tool_combined_pydantic = create_function_models_v2(tool_handler.tool_dict)
+
+            class ToolCalling(BaseModel):
+                """ The format to call one or multiple tools """
+                functions_calling: List[Union[tuple(tool_combined_pydantic)]] = Field(
+                    description='the list of functions to call in chronological order',
+                    default=[]
+                )
+
+            class ItemModel(BaseModel):
+                Use: Literal['Yes', 'No']
+                reason: str
+
+            answer_format_schema = tool_handler.replace_refs_with_definitions_v2(ToolCalling.schema())
+
+            # get format enforcer
+            lm_enforcer_parser = JsonSchemaParser(answer_format_schema)
+
+            # get final prompt
+            prompt = prompt_eng.get_prompt(
+                query,
+                thinking_template=TOOL_THINKING.xml,
+                thinking_response=tool_thinking_response,
+                pydantic_tool_dict=tool_handler.tool_dict,
+                answer_format_schema=True,
+                leading_prompt=(
+                    f"{fall_back_prompt}\n"
+                    'Now i will convert my answer above into "functions_calling" format.\n'
+                    "My answer is:\n"
+                ),
+            )
+            logger.info(prompt)
+
+            # generate
+            await self.generate(
+                prompt,
+                gen_queue=gen_queue,
+                gen_type=GenStart(gen_type="tool"),
+                temperature=query.temperature,
+                # stop_words=TOOL_THINKING.root_key_stop_words,
+                prefix_string=["{", " {", "\n{"],
+                lm_enforcer_parser=lm_enforcer_parser,  # no longer enforce format
+                max_tokens=query.max_tokens,
+            )
+
+        # NOT USE TOOL
+        if not use_tool_bool:
+            prompt = prompt_eng.get_prompt(
+                query,
+            )
+
+            if query.tool_choice == "auto":
+                # Normal generation
+                await self.generate(
+                    prompt,
+                    gen_queue=gen_queue,
+                    gen_type=GenStart(gen_type="text"),
+                    temperature=query.temperature,
+                    max_tokens=query.max_tokens,
+                )
+            else:
+                # tool choice is forced -> return empty tool calling
+                gen_queue.put_nowait(GenStart(gen_type="tool"))
+                gen_queue.put_nowait(GenText(content='{"functions_calling":[]}'))
+                gen_queue.put_nowait(GenerationStats())
+                gen_queue.put_nowait(GenEnd())
+
+    class ExllamaV2Pipeline:
+        """ class to hold objects required for Exllama V2 text generation"""
+
+        def __init__(
+                self,
+                cache: Union[ExLlamaV2Cache, ExLlamaV2Cache_Q4],
+                generator: ExLlamaV2DynamicGeneratorAsync,
+                lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
+        ):
+            self.cache = cache
+            self.generator = generator
+            self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
+
+    async def _get_pipeline_async(self):
+        # if not self.cache:
+        #     logger.info("Custom Cache size: " + str(self.cache_size))
+        #     self.cache = ExLlamaV2Cache_Q4(self.model, max_seq_len=self.cache_size, lazy=not self.model.loaded)
+
+            # Test VRAM allocation with a full-length forward pass
+            # input_ids = torch.zeros((1, self.max_seq_len), dtype=torch.long)
+            # model.forward(input_ids, cache=cache, preprocess_only=True)
+
+        lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
+
+        generator = ExLlamaV2DynamicGeneratorAsync(
+            model=self.model,
+            cache=self.cache,
+            tokenizer=self.tokenizer,
+            max_seq_len=self.max_seq_len,
+            draft_model=self.draft_model,
+            draft_cache=self.draft_cache,
+            num_draft_tokens=5,
+        )
+
+        return self.ExllamaV2Pipeline(
+            cache=self.cache,
+            generator=generator,
+            lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
+        )
+
+    def _get_exllama_gen_settings(
+            self,
+            temperature: float = 0.01,
+            **kwargs,
+    ):
+        # settings
+        settings = ExLlamaV2Sampler.Settings()
+        settings.temperature = temperature
+        settings.min_temp = 0.15
+        settings.top_k = 50
+        settings.top_p = 0.8
+        settings.min_p = 0.05
+        settings.token_repetition_penalty = 1.1
+        settings.token_frequency_penalty = 0.05
+        settings.token_repetition_range: int = 1024
+        #settings.token_repetition_decay: int = 0.98
+        settings.temperature_last = False
+
+        return settings
+
+    @staticmethod
+    def starts_with_stop_word(text, stop_words):
+        text = text.lstrip()  # Remove leading whitespace
+        for word in stop_words:
+            if text.startswith(word):
+                return True
+        return False
+
+
+    async def generate(
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue,QueueContext, List[QueueContext]],   # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        temperature: float = 0.01,
+        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_string: List[str] = None,
+        max_tokens: int = None,
+        **kwargs,
+    ) -> (str, GenerationStats):
+
+
+        # ensure that generator is initialized
+        if self.pipeline is None:
+            self.pipeline = await self._get_pipeline_async()
+
+        # make gen_queue to List[QueueContext] for standardize downstream handline
+        gen_queue_list = None
+        if isinstance(gen_queue, QueueContext):
+            gen_queue_list = [gen_queue]
+        elif isinstance(gen_queue, GenQueue):
+            gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+        elif isinstance(gen_queue, list):
+            gen_queue_list = gen_queue
+            # TODO add validation
+            # if any(not isinstance(g_queue, QueueContext) for g_queue in gen_queue_list):
+            #     raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+        else:
+            raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+
+
+        logger.info("----------------------Prompt---------------\n" + prompt)
+        logger.debug("----------------------temperature---------\n" + str(temperature))
+
+        # for async generator, create it as part of the generate job
+
+        # get generation setting
+        settings = self._get_exllama_gen_settings(temperature)
+
+        # convert prompt to token id
+        input_ids = self.tokenizer.encode(prompt)
+        self.validate_token_length(len(input_ids[0]))
+
+        # format enforcer
+        filters = None
+        if lm_enforcer_parser:
+            filters = [ExLlamaV2TokenEnforcerFilter(lm_enforcer_parser, self.pipeline.lm_enforcer_tokenizer_data)]
+
+        if prefix_string:
+            assert isinstance(prefix_string, list) and len(prefix_string) > 0
+            filters.append(ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_string))
+
+        # find stop conditions
+        if stop_words:
+            if isinstance(stop_words, str):
+                stop_words = [stop_words]
+
+            if not self.eos_token_str:
+                raise Exception("EOS token not set in model_config")
+            stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
+            logger.debug("stop_words: " + str(stop_conditions))
+        else:
+            stop_conditions = self.eos_token_str
+
+        job_id = uuid.uuid4().hex
+
+        #logger.info("pending_jobs and active_jobs lists in the ExLlamaV2DynamicGenerator")
+        #logger.info(f"job_id: {self.pipeline.generator.jobs}")
+
+        job = ExLlamaV2DynamicJobAsync(
+            generator=self.pipeline.generator,
+            input_ids=input_ids,
+            max_new_tokens=min(self.max_seq_len - len(input_ids[0]),
+                               max_tokens) if max_tokens else self.max_seq_len - len(input_ids[0]),
+            gen_settings=settings,
+            stop_conditions=stop_conditions,  #self.eos_token_id if self.eos_token_id else None,
+            decode_special_tokens=True,
+            filters=filters,
+            token_healing=True,
+            identifier=job_id,
+        )
+
+        # break the pipeline if it takes longer than 1s for 1 iteration
+        # async def run_job():
+
+        generate_text = ""
+        gen_stats = None
+        eos = False
+
+        # kick start the generationa and let down stream know gen type
+        if isinstance(gen_type, str):
+            gen_type = GenStart(gen_type=gen_type)
+
+        for g_queue in gen_queue_list:
+            g_queue.get_queue().put_nowait(gen_type)
+
+        # start the generation
+        async for result in job:
+            if eos:
+                await job.cancel()
+            #print(result.get("text", ""))
+            # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
+            # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
+            # outputs pertaining to the single job started above, and it will all go straight to the console.
+            # assert result["job"] == job
+
+            # Prefilling/ingesting the prompt may happen over multiple iterations, during which the result will have
+            # a "stage" value of "prefill". We can ignore those results and only use the "streaming" results that will
+            # contain the actual output.
+            # if result["stage"] == "streaming":
+
+            # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
+            # grab the output text stream.
+            #generate_text += result.get("text", "")
+            # logger.info(f'{datetime.now()} {result.get("text", "")}')
+
+            chunk = GenText(content=result.get("text", ""))
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk)
+
+            #logger.info(result.get("text", ""))
+            #logger.info(self.tokenizer.encode(result.get("text", "")))
+            # The "streaming" stage also emits the EOS signal when it occurs. If present, it will accompany a
+            # summary of the job. Print the last packet here to illustrate.
+            if result["eos"]:
+                eos = True
+
+                # if the stop word occurred is from the stop_words and not model result token -> include in result
+                if stop_words and result.get("held") and result.get("held").get("text"):
+                    ending_string = result["held"]["text"].rstrip()
+
+                    if ending_string and self.starts_with_stop_word(ending_string, stop_words):
+                        # end_string is custom token -> return
+                        chunk = GenText(content=ending_string)
+                        for g_queue in gen_queue_list:
+                            g_queue.get_queue().put_nowait(chunk)
+                    else:
+                        # ending token is model eos token
+                        pass
+
+                gen_stats = GenerationStats(
+                    input_tokens_count=result["prompt_tokens"],
+                    output_tokens_count=result["new_tokens"],
+                    time_to_first_token=result["time_prefill"],
+                    time_generate=result["time_generate"],
+                )
+
+                for g_queue in gen_queue_list:
+                    if g_queue.include_GenStats:
+                        g_queue.get_queue().put_nowait(gen_stats)
+
+                # this to signal the end of generation
+                for g_queue in gen_queue_list:
+                    if g_queue.include_GenEnd:
+                        g_queue.get_queue().put_nowait(GenEnd())
+
+
+
+
+class ChatGeneratorLlamaCpp(ChatGenerator):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.pipeline = self._get_pipeline()
+
+    class LLamaCppPipeline:
+        """ class to hold objects required for Exllama V2 text generation"""
+
+        def __init__(
+                self,
+                generator,
+                lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
+        ):
+            self.generator = generator
+            self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
+
+    def _get_pipeline(self):
+        lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+
+        return self.LLamaCppPipeline(
+            generator=self.model,
+            lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
+        )
+
+    async def generate(
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        temperature: float = 0.01,
+        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        max_tokens: int = None,
+        **kwargs,
+    ):
+
+        logger.info("----------------------Prompt---------------\n" + prompt)
+        logger.debug("----------------------temperature---------\n" + str(temperature))
+
+        # ensure that generator is initialized
+        # if self.pipeline is None:
+        #     self.pipeline = await self._get_pipeline_async()
+
+        # make gen_queue to List[QueueContext] for standardize downstream handline
+        gen_queue_list = None
+        if isinstance(gen_queue, QueueContext):
+            gen_queue_list = [gen_queue]
+        elif isinstance(gen_queue, GenQueue):
+            gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+        elif isinstance(gen_queue, list):
+            gen_queue_list = gen_queue
+            # TODO add validation
+            # if any(not isinstance(g_queue, QueueContext) for g_queue in gen_queue_list):
+            #     raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+        else:
+            raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+
+
+        # convert prompt to token id
+        input_ids = self.tokenizer.tokenize(prompt.encode("utf-8"), add_bos=False)
+        self.validate_token_length(len(input_ids))
+
+        # format enforcer
+        logits_processors = None
+        if lm_enforcer_parser:
+            logits_processors = LogitsProcessorList([
+                build_llamacpp_logits_processor(
+                    llm=self.pipeline.lm_enforcer_tokenizer_data,
+                    character_level_parser=lm_enforcer_parser,
+                )
+            ])
+
+        start_time = time.time()
+        max_tokens_to_use = min(max_tokens, self.max_seq_len - len(input_ids)) if max_tokens else self.max_seq_len - len(
+            input_ids)
+
+        # # find stop conditions
+        # if stop_words:
+        #     if not self.eos_token_str:
+        #         raise Exception("EOS token not set in model_config")
+        #     stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
+        #     logger.debug("stop_words: " + str(stop_conditions))
+        # else:
+        #     stop_conditions = self.eos_token_str
+
+        stop_conditions = stop_words
+
+        # kickstart the generation and let down stream know gen type
+        if isinstance(gen_type, str):
+            gen_type = GenStart(gen_type=gen_type)
+        for g_queue in gen_queue_list:
+            g_queue.get_queue().put_nowait(gen_type)
+
+        result = self.pipeline.generator(
+            prompt=prompt,
+            logits_processor=logits_processors,
+            max_tokens=max_tokens_to_use,
+            temperature=temperature,
+            top_p=0.95,
+            min_p=0.05,
+            stop=stop_conditions,
+            repeat_penalty=1.1,
+            stream=True,
+        )
+
+        # this method to convert generator to async generator
+        def async_generator(sync_generator):
+            async def wrapper():
+                for item in sync_generator:
+                    yield item
+
+            return wrapper()
+
+        generate_text = ""
+        async for chunk in async_generator(result):
+            # logger.info(chunk)
+            chunk_text = GenText(content=chunk['choices'][0]['text'])
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk_text)
+
+            generate_text += chunk_text.content
+
+        duration = time.time() - start_time
+
+        gen_stats = GenerationStats()
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenStats:
+                g_queue.get_queue().put_nowait(gen_stats)
+
+        # this to signal the end of generation
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenEnd:
+                g_queue.get_queue().put_nowait(GenEnd())
+
+        logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)
+

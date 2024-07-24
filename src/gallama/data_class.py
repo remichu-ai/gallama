@@ -1,0 +1,681 @@
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr
+from typing import Optional, Literal, List, Dict, Union, Any, Type
+import asyncio
+import uuid
+import time
+import torch
+import ast
+import re
+from .logger import logger
+
+
+DEFAULT_THINKING = """
+<meta_thought_process>
+  <request_analysis>
+    <interpretation>Summarize understanding of the user's request</interpretation>
+    <key_elements>List crucial components of the request</key_elements>
+    <implicit_needs>Identify any unstated but implied requirements</implicit_needs>
+    <response_constraints>
+      <explicit_requirements>Identify any specific format, style, or language requirements</explicit_requirements>
+      <implicit_patterns>
+        <detection>Analyze the structure and format of the user's input</detection>
+        <continuation>Plan to maintain consistent patterns in the response</continuation>
+      </implicit_patterns>
+    </response_constraints>
+  </request_analysis>
+
+  <context_consideration>
+    <previous_interaction>Recall relevant points from earlier in the conversation</previous_interaction>
+    <background_knowledge>Identify pertinent information from general knowledge</background_knowledge>
+    <user_perspective>Consider the user's likely viewpoint or needs</user_perspective>
+  </context_consideration>
+
+  <response_planning>
+    <main_components>List key elements to include in the response</main_components>
+    <structure_choice>Decide on the overall structure and format of the response</structure_choice>
+    <priority_order>Determine the sequence of information presentation</priority_order>
+    <pattern_application>Plan how to apply detected patterns throughout the response</pattern_application>
+  </response_planning>
+
+  <content_generation>
+    <for_each_component>
+      <ideation>Brainstorm relevant ideas or information</ideation>
+      <selection>Choose the most appropriate content</selection>
+      <elaboration>Develop and refine the chosen content</elaboration>
+      <pattern_adherence>Ensure content follows identified patterns</pattern_adherence>
+    </for_each_component>
+    <coherence_check>Ensure logical flow and connections between components</coherence_check>
+    <constraint_compliance>Verify adherence to all response constraints and patterns</constraint_compliance>
+  </content_generation>
+</meta_thought_process>
+"""
+
+DEFAULT_THINKING_SIMPLE = """
+<meta_thought_process>
+  <request_analysis>
+    <interpretation>Briefly identify the type and intent of the user's input</interpretation>
+    <key_elements>Note any specific requests or information provided</key_elements>
+    <response_type>Determine if a brief or detailed response is appropriate</response_type>
+  </request_analysis>
+
+  <context_consideration>
+    <conversation_stage>Identify whether this is a greeting, ongoing discussion, or conclusion</conversation_stage>
+    <user_needs>Consider the likely expectation based on the input</user_needs>
+  </context_consideration>
+
+  <response_planning>
+    <main_points>List key elements to include (if any)</main_points>
+    <tone>Choose appropriate tone (e.g., friendly, formal, casual)</tone>
+    <length>Decide on response length (brief vs. detailed)</length>
+  </response_planning>
+
+  <content_generation>
+    <create_response>Generate appropriate content based on the plan</create_response>
+    <review>Ensure the response matches the user's needs and conversation stage</review>
+  </content_generation>
+</meta_thought_process>
+"""
+
+DEFAULT_THINKING_DUAL = """
+<meta_thought_process>
+  <request_analysis>
+    <perspective_1>
+      <interpretation>Initial understanding of the user's request</interpretation>
+      <key_elements>Important aspects of the request</key_elements>
+      <assumptions>Any assumptions made based on the request</assumptions>
+    </perspective_1>
+    <perspective_2>
+      <critique>Critical examination of the initial interpretation</critique>
+      <alternative_views>Possible alternative interpretations</alternative_views>
+      <potential_issues>Potential misunderstandings or pitfalls</potential_issues>
+    </perspective_2>
+  </request_analysis>
+
+  <context_consideration>
+    <conversation_history>Relevant points from previous exchanges</conversation_history>
+    <user_background>Any known information about the user's knowledge or intent</user_background>
+    <topic_relevance>How the current request relates to the overall conversation</topic_relevance>
+  </context_consideration>
+
+  <response_formulation>
+    <key_points>Main ideas to convey in the response</key_points>
+    <tone_and_style>Appropriate tone and level of detail for the response</tone_and_style>
+    <final_review>Ensure response addresses both perspectives and context</final_review>
+  </response_formulation>
+</meta_thought_process>
+"""
+
+DEFAULT_THINKING_DUAL_FORMAT = """
+<meta_thought_process>
+  <request_analysis>
+    <perspective_1>
+      <interpretation>Initial understanding of the user's request</interpretation>
+      <key_elements>Important aspects of the request</key_elements>
+      <assumptions>Any assumptions made based on the request</assumptions>
+    </perspective_1>
+    <perspective_2>
+      <critique>Critical examination of the initial interpretation</critique>
+      <alternative_views>Possible alternative interpretations</alternative_views>
+      <potential_issues>Potential misunderstandings or pitfalls</potential_issues>
+    </perspective_2>
+  </request_analysis>
+
+  <context_consideration>
+    <conversation_history>Relevant points from previous exchanges</conversation_history>
+    <user_background>Any known information about the user's knowledge or intent</user_background>
+    <topic_relevance>How the current request relates to the overall conversation</topic_relevance>
+  </context_consideration>
+
+  <content_formulation>
+    <key_points>Main ideas to convey in the response</key_points>
+    <calculations>Any necessary calculations or logical steps</calculations>
+    <draft_response>Initial formulation of the response</draft_response>
+  </content_formulation>
+
+  <response_optimization>
+    <formatting_requirements>
+      <identification>Identify specific formatting instructions or implicit expectations</identification>
+      <interpretation>Interpret how these requirements should be applied</interpretation>
+    </formatting_requirements>
+    <content_adaptation>
+      <restructure>How to restructure the draft response to meet formatting requirements</restructure>
+      <emphasize>Key elements to emphasize based on formatting requirements</emphasize>
+    </content_adaptation>
+    <final_check>
+      <completeness>Ensure all aspects of the user's request are addressed</completeness>
+      <compliance>Verify that all formatting requirements are met</compliance>
+      <clarity>Assess overall clarity and effectiveness of the response</clarity>
+    </final_check>
+  </response_optimization>
+</meta_thought_process>
+"""
+
+class Query(BaseModel):
+    prompt: str
+    temperature: Optional[float] = 0.1
+    stream: Optional[bool] = False
+
+
+class ToolCall(BaseModel):
+    class FunctionCall(BaseModel):
+        arguments: str
+        name: str
+
+    id: str
+    function: FunctionCall
+    type: str = "function"
+    index: Optional[int] = None
+
+
+class BaseMessage(BaseModel):
+    role: Literal['system', 'user', 'assistant', 'tool']
+    content: Optional[str] = ""
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_call_id: Optional[str] = None
+
+    @validator('content', pre=True)
+    def convert_null_to_empty(cls, value):
+        if value is None:
+            return ""
+        return value
+
+
+class ParameterProperties(BaseModel):
+    type: str = "object"
+    description: Optional[str] = None
+    enum: Optional[List[str]] = None
+    items: Optional[dict] = None   # for array
+
+
+class ParameterSpec(BaseModel):
+    type: str = "object"
+    properties: Optional[Dict[str, Any]] = None
+    required: List[str] = []
+
+
+class FunctionSpec(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parameters: ParameterSpec = None
+
+
+class ToolSpec(BaseModel):
+    type: str = "function"
+    function: FunctionSpec
+
+
+class SingleFunctionDict(BaseModel):
+    name: str
+
+
+class ToolForce(BaseModel):
+    type: str = "function"
+    function: SingleFunctionDict
+
+    class Config:
+        extra = "forbid"  # This will prevent extra keys in the dictionary
+
+
+class ChatMLQuery(BaseModel):
+    class ResponseFormat(BaseModel):
+        type: Literal["text", "json_object"]
+
+    class StreamOption(BaseModel):
+        include_usage: bool = False
+
+    model: Optional[str] = "Mixtral-8x7B"
+    messages: List[BaseMessage]
+    temperature: Optional[float] = 0.01
+    stream: Optional[bool] = False
+    tools: Optional[List[ToolSpec]] = None
+    tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
+    tool_call_id: Optional[str] = None
+
+    # not part of openai api
+    leading_prompt: Optional[str] = ""
+    regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
+    regex_prefix_pattern: Optional[constr(min_length=1)] = None  # regex to enforce in the beginning of the generation
+    stop_words: Optional[List[str]] = None
+    thinking_template: Optional[str] = None
+    #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
+    #thinking_template: Optional[str] = DEFAULT_THINKING_DUAL_FORMAT  # the xml template for thinking
+
+    # not yet supported options from here
+    max_tokens: Optional[int] = None
+    frequency_penalty: Optional[float] = None
+    logit_bias: Optional[Dict[int, float]] = {}
+    top_logprob: int = None
+    n: int = 1
+    presence_penalty: float = 0
+    response_format: Optional[ResponseFormat] = None
+    seed: Optional[int] = None
+    stream_options: Optional[StreamOption] = None
+    top_p: float = 1
+    user: str = None
+
+    @validator('regex_pattern', 'regex_prefix_pattern')
+    def validate_regex(cls, v):
+        """ this function is to handle special regex patterns """
+        if v is not None:
+            try:
+                re.compile(v)
+            except re.error as e:
+                raise ValueError(f'Invalid regex pattern: {e}')
+        return v
+
+
+# from here on is answer model for response to api request
+class OneTool(BaseModel):
+    """The format to use to call one tool"""
+    name: str = Field(description='name of the function to use')
+    arguments: str
+
+
+class ToolCallResponse(BaseModel):
+    index: Optional[int] = None
+    id: Optional[str] = None
+    function: OneTool
+    type: Optional[str] = "function"
+
+
+class ToolCalling(BaseModel):
+    """ The format to call one or multiple tools """
+    functions_calling: List[OneTool] = Field(description='the list of functions to call in chronological order',
+                                             default=[])
+
+
+class ChatResponse(BaseModel):
+    role: Literal['system', 'user', 'assistant'] = None
+    tool_call_id: Optional[str] = None
+    content: Optional[str] = None
+    # name: Optional[str] = None
+    # function_call: Optional[ToolCalling] = None   # depreciated
+    tool_calls: Optional[List[ToolCallResponse]] = None
+
+
+class ChatMessage(BaseModel):
+    role: Literal['system', 'user', 'assistant'] = None
+    tool_call_id: Optional[str] = None
+    content: Optional[str] = None
+    name: Optional[str] = None
+    # function_call: Optional[ToolCalling] = None   # depreciated
+    tool_calls: Optional[List[ToolCallResponse]] = None
+
+    def __str__(self) -> str:
+        if self.role == "system":
+            return f"system:\n{self.content}\n"
+
+        elif self.role == "function":
+            return f"function name={self.name}:\n{self.content}\n"
+
+        elif self.role == "user":
+            if self.content is None:
+                return "user:\n</s>"
+            else:
+                return f"user:\n</s>{self.content}\n"
+
+        elif self.role == "assistant":
+            if self.content is not None and self.function_call is not None:
+                return f"assistant:\n{self.content}\nassistant to={self.function_call.name}:\n{self.function_call.arguments}</s>"
+
+            elif self.function_call is not None:
+                return f"assistant to={self.function_call.name}:\n{self.function_call.arguments}</s>"
+
+            elif self.content is None:
+                return "assistant"
+
+            else:
+                return f"assistant:\n{self.content}\n"
+        else:
+            raise ValueError(f"Unsupported role: {self.role}")
+
+
+class UsageResponse(BaseModel):
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+class Choice(BaseModel):
+    index: int = 0
+    message: ChatMessage
+    logprobs: Union[float, None] = None
+    finish_reason: Optional[
+        Literal["stop", "length", "tool_calls", "content_filter"]
+    ] = "stop"
+
+    @classmethod
+    def from_message(cls, message: ChatMessage, finish_reason: str):
+        return cls(message=message, finish_reason=finish_reason)
+
+
+class StreamChoice(BaseModel):
+    index: int
+    delta: ChatMessage = None
+    finish_reason: Optional[Literal["stop", "length", "function_call", "tool_calls"]] = None
+
+
+class ChatCompletionResponse(BaseModel):
+    id: str = Field(description='id of the response', default_factory=lambda: "cmpl-" + str(uuid.uuid4().hex))
+    object: Literal["chat.completion", "chat.completion.chunk"] = Field(default="chat.completion")
+    created: int = Field(description='timestamp when object was created', default_factory=lambda: int(time.time()))
+    model: str = Field(description='name of the model')
+    choices: List[Union[Choice, StreamChoice]]
+    usage: UsageResponse = None
+
+
+# embedding dataclass from here
+class EmbeddingRequest(BaseModel):
+    """ Request to embedding some text in the input"""
+    input: Union[str, List[str], List[List[int]]] = Field(description="text to embed, a str or list of str")
+    model: str
+    dimension: Optional[int] = None
+    encoding_format: Optional[Literal["float", "base64"]] = "float"
+
+
+class EmbeddingObject(BaseModel):
+    index: int = Field(description='index of the embedding', default=0)
+    object: str = 'embedding'
+    embedding: Union[List[float], str] = Field(description='list of float for embedding vector and str for base64')
+
+
+class EmbeddingResponse(BaseModel):
+    class Usage(BaseModel):
+        prompt_tokens: int = Field(description='number of tokens in the prompt')
+        total_tokens: int = Field(description='total number of tokens')
+
+    object: str = 'list'
+    model: str = Field(description='name of the model')
+    usage: Usage
+    data: List[EmbeddingObject]
+
+
+class GenerateQuery(BaseModel):
+    prompt: str = Field(description='prompt')
+    model: Optional[str] = Field(description='name of the model', default=None)
+    stream: Optional[bool] = False
+    max_tokens: Optional[int] = Field(description='max number of tokens', default=None)
+
+
+class GenerationStats(BaseModel):
+    input_tokens_count: int = Field(description='input tokens count', default=0)
+    output_tokens_count: int = Field(description='output tokens count', default=0)
+    time_to_first_token: float = Field(description='time to first token', default=0)
+    time_generate: float = Field(description='time to generate tokens', default=0)
+
+    @property
+    def generation_speed(self) -> float:
+        if self.time_generate > 0:
+            return round(self.output_tokens_count / self.time_generate, ndigits=1)
+        else:
+            return 0
+
+    @property
+    def total_time(self) -> float:
+        return round(self.time_to_first_token + self.time_generate, ndigits=1)
+
+    @property
+    def prefill_speed(self) -> float:
+        if self.time_to_first_token > 0:
+            return round(self.input_tokens_count / self.time_to_first_token, ndigits=1)
+        else:
+            return 0
+
+    @property
+    def total_tokens_count(self) -> float:
+        return self.input_tokens_count + self.output_tokens_count
+
+
+class ModelObject(BaseModel):
+    id: str = Field(description='id of the model')
+    object: str = Field(description='object type', default="model")
+    owned_by: str = Field(description='object owner', default="remichu")
+    created_by: int = Field(description='model creation time', default=1686935002)
+
+
+class ModelObjectResponse(BaseModel):
+    object: str = Field(description='object type', default="list")
+    data: List[ModelObject] = []
+
+class GenStart(BaseModel):
+    """ this item signal start of generation"""
+    gen_type: Literal["text", "tool"]  = Field(description='True to signal end of generation', default="text")
+
+class GenEnd(BaseModel):
+    """ this item signal end of generation"""
+    generation_end: bool = Field(description='True to signal end of generation', default=True)
+
+
+class GenText(BaseModel):
+    text_type: Literal["text"] = "text"
+    content: str = Field(description='text of text')
+    @classmethod
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, cls)
+
+class GenQueue(asyncio.Queue):
+    def __init__(self, maxsize=0, allowed_types: List[str] = [GenText, GenerationStats, GenStart, GenEnd]):
+        super().__init__(maxsize)
+        self.allowed_types = allowed_types
+
+    def _check_item(self, item):
+        if self.allowed_types:
+            if not any(isinstance(item, allowed_type) for allowed_type in self.allowed_types):
+                raise TypeError(f"Item {item} is not an instance of any allowed types: {self.allowed_types}")
+        return item
+
+    def _raise_type_error(self):
+        raise TypeError(f"Items must be instances of: {', '.join(self.allowed_types)}")
+
+    async def put(self, item):
+        self._check_item(item)
+        await super().put(item)
+
+    def put_nowait(self, item):
+        self._check_item(item)
+        super().put_nowait(item)
+
+
+class Thinking(BaseModel):
+    xml: str = Field(description='xml string')
+    regex: str = Field(description='regex string to enforce any value', default=None)
+
+
+
+class ModelParser(BaseModel):
+    model_id: str = Field(description='id of the model from the yml file')
+    model_name: Optional[str] = Field(description='name of the model', default=None)
+    gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+    cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
+    cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
+    model_type: Optional[Literal["exllama", "embedding"]] = Field(description="model type either exllama or embedding", default="exllama")
+    max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
+    backend: Optional[Literal["exllama", "llama_cpp"]] = Field(description="model quantization backend", default=None)
+
+    # speculative decoding
+    draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
+    draft_model_name: Optional[str] = Field(description='name of the draft model', default=None)
+    draft_gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+    draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
+    draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
+    # model_type is assumed to be the same as main model
+
+
+
+    # dont allow non recognizable option
+    model_config = ConfigDict(extra="ignore", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+
+    @validator('model_name', pre=True, always=True)
+    def set_model_name(cls, v, values):
+        if v is None and 'model_id' in values:
+            return values['model_id'].split('/')[-1]
+        return v
+
+    @validator('gpus', pre=True, always=True)
+    def validate_gpus(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            # Convert the dict to a list based on GPU IDs
+            return [v.get(i, 0.0) for i in range(torch.cuda.device_count())]
+        return v
+
+    @validator('gpus')
+    def check_gpus(cls, gpus):
+        if gpus is None:
+            return None
+        num_gpus = torch.cuda.device_count()
+        for gpu_id, vram in enumerate(gpus):
+            if gpu_id < 0 or gpu_id >= num_gpus:
+                raise ValueError(f"Invalid GPU ID {gpu_id}. Must be between 0 and {num_gpus - 1}")
+
+            if vram < 0:
+                raise ValueError(f"VRAM usage for GPU {gpu_id} must be a non-negative number")
+
+            if vram > 0:
+                device = torch.cuda.get_device_properties(gpu_id)
+                total_vram = device.total_memory / (1024 ** 3)  # Convert bytes to GB
+                if vram > total_vram:
+                    raise ValueError(
+                        f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
+
+        return gpus
+
+    @classmethod
+    def from_dict(cls, input_data: Union[str, Dict[str, str]]):
+        if isinstance(input_data, str):
+            # If input is a string, split it into a dictionary
+            params = input_data.split()
+            input_dict = {}
+            for param in params:
+                key, value = param.split('=')
+                input_dict[key] = value.strip("'")  # Strip single quotes here as well
+        else:
+            # If input is already a dictionary, use it as is
+            input_dict = input_data
+
+        model_id = input_dict.get('model_id')
+        if model_id:
+            model_id = input_dict.get('model_id').strip("'")  # Remove single quotes if present
+        #model_name = input_dict.get('model_name')
+        max_seq_len = input_dict.get('max_seq_len', None)
+        gpus = input_dict.get('gpus')
+        cache_size = input_dict.get('cache_size')
+        model_type = input_dict.get('model_type', 'exllama')  # Default to 'exllama' if not provided
+        cache_quant = input_dict.get('cache_quant', None)
+
+        if gpus:
+            gpus = [float(x) for x in gpus.split(',')]
+
+        if cache_size:
+            cache_size = int(cache_size)
+
+        # speculative decoding
+        draft_model_id = input_dict.get('draft_model_id')
+        if draft_model_id:
+            draft_model_id = draft_model_id.strip("'")  # Remove single quotes if present
+        draft_model_name = input_dict.get('draft_model_name')
+        if not draft_model_name and draft_model_id:
+            draft_model_name = draft_model_id.split('/')[-1]
+        else:
+            draft_model_name = None
+
+        draft_gpus = input_dict.get('draft_gpus')
+        draft_cache_size = input_dict.get('draft_cache_size')
+        draft_cache_quant = input_dict.get('draft_cache_quant', None)
+
+        if draft_gpus:
+            draft_gpus = [float(x) for x in draft_gpus.split(',')]
+
+        if draft_cache_size:
+            draft_cache_size = int(draft_cache_size)
+
+        # Note: We don't need to set model_name here, as the validator will handle it
+        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, model_type=model_type,cache_quant=cache_quant,
+                   max_seq_len=max_seq_len,
+                   draft_model_id=draft_model_id, draft_model_name=draft_model_name,
+                   draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
+
+    def to_arg_string(self) -> str:
+        """
+        Generate a command-line argument string based on the instance's attributes.
+
+        Returns:
+            str: A string representation of the command-line arguments.
+        """
+        args = [f"model_id={self.model_id}"]
+
+        if self.model_name != self.model_id.split('/')[-1]:
+            args.append(f"model_name={self.model_name}")
+
+        if self.gpus is not None:
+            args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
+
+        if self.max_seq_len is not None:
+            args.append(f"cache_size={self.max_seq_len}")
+
+        if self.cache_size is not None:
+            args.append(f"cache_size={self.cache_size}")
+
+        if self.cache_quant is not None:
+            args.append(f"cache_quant={self.cache_quant}")
+
+        if self.model_type != "exllama":  # Only include if it's not the default value
+            args.append(f"model_type={self.model_type}")
+
+        # Add draft model parameters
+        if self.draft_model_id is not None:
+            args.append(f"draft_model_id={self.draft_model_id}")
+
+        if self.draft_model_name is not None and self.draft_model_name != self.draft_model_id.split('/')[-1]:
+            args.append(f"draft_model_name={self.draft_model_name}")
+
+        if self.draft_gpus is not None:
+            args.append(f"draft_gpus={','.join(str(vram) for vram in self.draft_gpus)}")
+
+        if self.draft_cache_size is not None:
+            args.append(f"draft_cache_size={self.draft_cache_size}")
+
+        if self.draft_cache_quant is not None:
+            args.append(f"draft_cache_quant={self.draft_cache_quant}")
+
+        return " ".join(args)
+
+
+    def get_visible_gpu_indices(self) -> str:
+        """
+        Generate a string of GPU indices based on allocated GPUs.
+
+        Returns:
+            str: A comma-separated string of GPU indices with allocated VRAM.
+        """
+        if self.gpus is None or all(vram == 0 for vram in self.gpus):
+            return ""  # No GPUs allocated
+
+        visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
+        return ','.join(visible_devices)
+
+class SpeculativeDecodingParser(BaseModel):
+    main_model: str = Field(description="main model name")
+    draft_model: str = Field(description="draft model name to use for speculatind decoding")
+    port: Optional[int] = Field(description="Port number for the children api, if multiple model found, will send to all", default=None)
+
+    @classmethod
+    def from_dict(cls, input_data: Union[str, Dict[str, str]]):
+        if isinstance(input_data, str):
+            # If input is a string, split it into a dictionary
+            params = input_data.split()
+            input_dict = {}
+            for param in params:
+                key, value = param.split('=')
+                input_dict[key] = value.strip("'")  # Strip single quotes here as well
+        else:
+            # If input is already a dictionary, use it as is
+            input_dict = input_data
+
+        main_model = input_dict.get('main_model')
+        draft_model = input_dict.get('draft_model')
+        port = input_dict.get('port')
+
+        # Note: We don't need to set model_name here, as the validator will handle it
+        return cls(main_model=main_model, draft_model=draft_model, port=port)

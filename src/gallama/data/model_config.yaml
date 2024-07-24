@@ -1,0 +1,19 @@
+### Format instruction:
+#model_name:                                # any no space string here which will be referred to for model loading and api call
+#  model_id:                                # the path to where the model is in the pc
+#  backend: 'exllama'                       # backend option are:  'exllama' or 'llama_cpp'
+#  gpus: "auto"                             # 'auto' -> model autosplit, or an array of gpus split e.g. [12,24,12] where each number is the VRAM to limit the load on that card
+#  cache_quant: 'Q4'                        # quantization for kv cache. Default is Q4. Options are: 'FP32', 'Q4', 'Q6', 'Q8'
+#  eos_token_list: ["<|eot_id|>"]           # the list of string to stop generation. It is good to include other model token on top of the model eos
+#  max_seq_len: 8192                        # maximum length the model can handle
+
+## Example:
+#llama3-70B:
+#  model_id: '/home/gallama/ML/model/turboderp/Llama-3-70B-Instruct-exl2-4.5bpw'
+#  backend: 'exllama'
+#  gpus: "auto"
+#  cache_quant: 'Q4'
+#  eos_token_list: ["<|eot_id|>", "<|end_of_text|>"]
+#  max_seq_len: 8192
+
+### End of Format instruction. ###

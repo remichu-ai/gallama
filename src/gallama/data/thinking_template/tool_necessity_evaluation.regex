@@ -1,0 +1,11 @@
+<tool_necessity_evaluation>
+  <analyze_query>.+</analyze_query>
+  <evaluate_perspectives>
+    <pro_tool_usage>.+</pro_tool_usage>
+    <contra_tool_usage>.+</contra_tool_usage>
+  </evaluate_perspectives>
+  <final_decision>
+    <is_tool_needed>(Yes|No)</is_tool_needed>
+    <justification>.+</justification>
+  </final_decision>
+</tool_necessity_evaluation>

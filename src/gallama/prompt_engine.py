@@ -1,0 +1,707 @@
+import json
+from typing import List, Dict
+from .data_class import BaseMessage, ChatMLQuery, ToolCall
+# from langchain.output_parsers import PydanticOutputParser
+from langchain_core.pydantic_v1 import BaseModel
+from .logger import logger
+from copy import deepcopy
+from gallama.utils import parse_xml_to_dict
+from fastapi import HTTPException
+
+
+# class ToolCalling(BaseModel):
+#     """The format to use to call tool"""
+#     name: str = Field(description='name of the function to use')
+#     arguments: Dict[str, object] = Field(description='the arguments to pass to the function')
+
+
+def get_engine(model_id: str):
+    print(model_id)
+    if 'llama-3' in model_id.lower():
+        logger.info("Chat template llama-3")
+        return Llama3()
+    elif 'llama3.1' in model_id.lower():
+        logger.info("Chat template llama-3.1")
+        return Llama3_1()
+    elif 'mixtral-8x22b' in model_id.lower() or "mistral-v0.3" in model_id.lower() or "wizard" in model_id.lower() or "codestral" in model_id.lower() :
+        logger.info("Chat template mixtral tool")
+        return Mixtral8x22B()
+    elif 'mixtral' in model_id.lower() or 'mistral' in model_id.lower():
+        logger.info("Chat template mixtral base")
+        return Mistral()
+    elif 'qwen2' in model_id.lower():
+        logger.info("Chat template Qwen")
+        return Qwen2()
+    elif 'phi' in model_id.lower():
+        logger.info("Chat template Phi")
+        return Phi()
+    elif 'yi' in model_id.lower():
+        logger.info("Chat template Yi")
+        return Yi()
+    elif 'gemma-2' in model_id.lower():
+        logger.info("Chat template Gemma2")
+        return Gemma2()
+    elif 'intern' in model_id.lower() or 'dbrx' in model_id.lower():
+        logger.info("Chat template DBRX")
+        return InternLM()
+
+class Engine:
+    def __init__(self):
+        self.system_msg_enabled = False
+        self.tool_enabled = False
+
+    def _get_role_token(self, role, token_type: str):
+        if token_type == "start":
+            if role == "system":
+                return self.get_sys_start_token()
+            elif role == "user":
+                return self.get_user_start_token()
+            elif role == "assistant":
+                return self.get_assistant_start_token()
+            elif role == "tool":
+                return self.get_tool_start_token()
+            elif role == "tool_result":
+                return self.get_tool_result_start_token()
+            elif role == "tool_call":
+                return self.get_tool_call_start_token()
+        elif token_type == "end":
+            if role == "system":
+                return self.get_sys_end_token()
+            elif role == "user":
+                return self.get_user_end_token()
+            elif role == "assistant":
+                return self.get_assistant_end_token()
+            elif role == "tool":
+                return self.get_tool_end_token()
+            elif role == "tool_result":
+                return self.get_tool_result_end_token()
+            elif role == "tool_call":
+                return self.get_tool_call_end_token()
+        else:
+            return ""
+
+
+    def _get_message_type(self, msg: BaseMessage) -> str:
+        if msg.tool_call_id:
+            return "tool_result"
+        elif msg.role == "tool":
+            return "tool_call"
+        elif msg.role == "assistant":
+            return "assistant"
+        elif msg.role == "system":
+            return "system"
+        elif msg.role == "user":
+            return "user"
+        else:
+            raise ValueError(f"Unknown message type {msg.role}")
+
+    def _format_tool_call(self, tool_call: ToolCall) -> str:
+        """
+            get string representation of tool call like normal python function calling
+            Example Output: get_current_weather(location='Boston', unit='Fahrenheit')
+        """
+
+        func_name = tool_call.function.name
+        args_str = tool_call.function.arguments.replace('"', '')
+        return f"{func_name}({args_str})"
+
+    def _format_tool_result(self, msg: BaseMessage) -> str:
+        content = msg.content if msg.content else ""
+
+        try:
+            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n\n"
+        except:
+            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n\n"
+
+        return content
+
+
+    def _format_tool_call_msg(self, msg: BaseMessage) -> str:
+        """one msg might have multiple tool calls"""
+        tool_call_str = f"Please help to call these tool:\n"
+
+        for tool_call in msg.tool_calls:
+            tool_call_str += f"Request for tool call with reference id {tool_call.id}:\n"
+            tool_call_str += self._format_tool_call(tool_call)
+            tool_call_str += "\n\n"
+
+        return tool_call_str
+
+    def _format_tool_msg(self, pydantic_tool_list: Dict[str, BaseModel]) -> str:
+        # append tools calling if it is a prompt
+        tools_json = ("\nBelow are the functions available to you to use.\n"
+                      "If you need to use multiple functions, please provide it in chronological order.\n"
+                      "If user or system prompt request certain restriction (examples: can only use one tool, "
+                      "must use a specific tool etc; then please respect the instruction.)\n\n")
+
+        if self.tool_enabled:
+            tools_json += self.get_tool_start_token()
+
+        for tool_name, tool in pydantic_tool_list.items():
+            tools_json = tools_json + tool_name + ":\n" + str(json.dumps(tool.schema(), indent=2)) + "\n---\n"
+
+        if self.tool_enabled:
+            tools_json += self.get_tool_end_token()
+
+        return tools_json
+
+    def _get_one_msg(self, msg: BaseMessage) -> str:
+        content = msg.content if msg.content else ""
+
+        prompt = ""
+        tool_call_str = ""
+
+        if self._get_message_type(msg) == "tool_result":
+            return self._format_tool_result(msg)
+        elif self._get_message_type(msg) == "tool_call":
+            return self._format_tool_call_msg(msg)
+        elif self._get_message_type(msg) in ["assistant", "system", "user"]:
+            return content
+
+    def _get_one_msg_grp(self, grp: List[BaseMessage]) -> str:
+        prompt = self._get_role_token(role=self._get_message_type(grp[0]), token_type="start")
+
+        for msg in grp:
+            prompt = prompt + self._get_one_msg(msg) + "\n\n"
+
+        prompt += self._get_role_token(role=self._get_message_type(grp[0]), token_type="end")
+        return prompt
+
+    def _regroup_msg(self, msg_List: List[BaseMessage]):
+        # group msg with same role into one array
+        regrouped_msg = []
+        temp_array = []
+
+        # first create a list of msg with the role converted
+        for idx, msg in enumerate(msg_List):
+            temp_msg = deepcopy(msg)
+            if temp_msg.role == "tool" and not self.tool_enabled:
+                temp_msg.role = "user"      # convert to user as this LLM model does not have tool role
+            elif temp_msg.role == "system" and not self.system_msg_enabled:
+                temp_msg.role = "user"  # convert to user as this LLM model does not have system role
+
+            temp_array.append(temp_msg)
+
+        # now grouping message that was from the same role together
+        # this is cause model might have been trained with alternated role prompting
+        # and repeat of the same role will not give good response
+        previous_msg = msg_List[0]
+        grouped_array = []
+        for idx, msg in enumerate(temp_array):
+            if msg.role == previous_msg.role:
+                grouped_array.append(msg)
+            else:
+                if grouped_array:
+                    # create new array
+                    regrouped_msg.append(grouped_array.copy())
+                    grouped_array = [msg]     # reset temp array
+                else:
+                    grouped_array.append(msg)
+
+            previous_msg = msg
+
+        # add the last group
+        if temp_array:
+            regrouped_msg.append(grouped_array.copy())
+
+        # logger.debug("overall regroup:\n" + str(regrouped_msg))
+        return regrouped_msg
+
+    def get_prompt(
+        self,
+        query: ChatMLQuery,
+        pydantic_tool_dict: List[BaseModel] = None,
+        answer_format_schema: bool = True,  # whether to add the instruction for tool calling answer schema
+        leading_prompt: str = None,
+        use_thinking: bool = True,
+        thinking_template: str = None,
+        thinking_response: str = None,
+        #prompt_mode: Literal["auto"]
+    ) -> str:
+
+        def _create_leading_prompt(original_prompt, query_leading_prompt, model_leading_prompt):
+            # add leading prompt from user or model
+            # this is usually the role e.g. assistant:, Tom to Jerry:
+            _leading_prompt = ""
+            if query_leading_prompt:
+                _leading_prompt = model_leading_prompt + query_leading_prompt
+            elif model_leading_prompt:
+                _leading_prompt = model_leading_prompt
+
+            if not _leading_prompt.endswith("\n"):
+                _leading_prompt += "\n"
+
+            return _leading_prompt
+
+
+        prompt = self.get_conversation_start_token()     # use arrange to story prompt
+        msg_groups = self._regroup_msg(query.messages)
+
+        # concat all msg
+        for idx, msg_group in enumerate(msg_groups):
+            prompt = prompt + self._get_one_msg_grp(msg_group)
+
+        # if there is tool, return the prompt with tool
+        if pydantic_tool_dict and query.tool_choice != "none":
+            prompt = prompt + self._format_tool_msg(pydantic_tool_dict)
+
+            if answer_format_schema:
+                prompt += """
+IMPORTANT: If you use tool/ functions, please answer using the following schema using json format.
+Each item in the array under "functions_calling" is the "name" of the function to call and its "arguments".
+
+{
+  "functions_calling": [
+    {
+      "name": the name of function/ tool to call,
+      "arguments": {argument_name: argument_value}
+    }
+}
+
+
+If no functions_calling/ tool needed, the response can be:
+{
+  "functions_calling": []
+}
+End of Example of answer with Tool/ Function_calling usage.
+
+"""
+        # TODO move the thinking_template check to request receiver
+        # initialize thinking_template_dict
+        thinking_template_dict = {}
+        root_key = None
+        if thinking_template:
+            try:
+                thinking_template_dict = parse_xml_to_dict(thinking_template)
+                if len(list(thinking_template_dict.keys())) > 1:
+                    raise HTTPException(status_code=400, detail=f"thinking_template must be a XML with only 1 root key")
+
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
+
+            # find the XML root key
+            root_key = list(thinking_template_dict.keys())[0]
+
+        # prompt creation with thinking_template
+        if use_thinking and thinking_template and not thinking_response:
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+
+            prompt += "\nNow, before answering the question, I am required to apply format to guide my internal thinking process:\n" + \
+                      thinking_template + "\n" + \
+                      f"My thinking using the XML template as follow:\n```xml"    #\n<{root_key}>"       # do take note that we use the xml root key here to prompt LLM to answer
+            # add ending token
+            # prompt += self.get_conversation_end_token()
+
+        elif use_thinking and thinking_template and thinking_response:
+            # the thinking result is ready here
+            # root key need to be added as we use it for leading prompt in the prompt creation above so it is not part of the response
+            prompt += "\nNow, before answering the question, I am required to apply format to guide my internal thinking process. The internal thinking below is INVISIBLE to user:\n" + \
+                      thinking_template + "\n" + \
+                      f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
+                      "Now answer the question. Remember that the thinking above is INVISIBLE to user."
+
+
+            # prompt += f"```xml\n<assistant_internal_thinking_invisible_to_user>\n" + \
+            #           thinking_response.strip() + \
+            #           f"\n</assistant_internal_thinking_invisible_to_user>\n```" + \
+            #           f"\n\nRemember assistant's internal thought is invisible to user. Now provide the answer: \n"
+
+            # add ending token
+            prompt += self.get_conversation_end_token()
+
+            # for thinking response, we put it before the leading prompt
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+
+        else:
+            # add ending token
+            prompt += self.get_conversation_end_token()
+
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+
+
+        # add leading_prompt from code which is usually tool related
+        # e.g. ```json
+        if leading_prompt:      # leading prompt that passed to this function take highest priority
+            prompt += leading_prompt + "\n"
+
+        return prompt
+
+        # match tool call result #TODO
+
+    def get_conversation_start_token(self, **kwargs):
+        return ""
+
+    def get_conversation_end_token(self, **kwargs):
+        return ""
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return ""
+
+    def get_user_start_token(self, **kwargs):
+        return "\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "\n"
+
+    def get_tool_result_start_token(self, **kwargs):
+        return ""
+
+    def get_tool_result_end_token(self, **kwargs):
+        return ""
+
+    def get_tool_call_start_token(self, **kwargs):
+        return "\n"
+
+    def get_tool_call_end_token(self, **kwargs):
+        return "\n"
+
+
+class Mistral(Engine):
+
+    def get_conversation_start_token(self, **kwargs):
+        return "<s>"
+
+    def get_conversation_end_token(self, **kwargs):
+        return "</s>\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "assistant:\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "\n[INST]user:\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "[/INST]\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "\n[INST]user:\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "[/INST]\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "\nassistant:\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "\n[INST]user:\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "[/INST]\n"
+
+
+class Llama3(Engine):
+
+    def get_conversation_start_token(self, **kwargs):
+        return "<|begin_of_text|>"
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "\n<|start_header_id|>system<|end_header_id|>\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "\n<|start_header_id|>user<|end_header_id|>\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "\n<|start_header_id|>user<|end_header_id|>\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+
+class Phi(Engine):
+    def __init__(self):
+        super().__init__()
+        self.system_msg_enabled = True
+
+    def get_conversation_start_token(self, **kwargs):
+        return ""
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "<|assistant|>\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "<|system|>\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<|end|>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "<|user|>\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|end|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "<|assistant|>\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|end|>\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return ""
+
+    def get_tool_end_token(self, **kwargs):
+        return "\n"
+
+
+class Mixtral8x22B(Engine):
+    def __init__(self):
+        super().__init__()
+        self.tool_enabled = True
+
+    def get_conversation_start_token(self, **kwargs):
+        return "<s>"
+
+    def get_conversation_end_token(self, **kwargs):
+        return "</s>\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "assistant:\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "\n[INST]user:\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "[/INST]\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "\n[INST]user:\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "[/INST]\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "\nassistant:\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "\n[AVAILABLE_TOOLS]\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "\n[/AVAILABLE_TOOLS]\n"
+
+    def get_tool_result_start_token(self, **kwargs):
+        return "\n[TOOL_RESULTS]\n"
+
+    def get_tool_result_end_token(self, **kwargs):
+        return "\n[\TOOL_RESULTS]\n"
+
+
+class Qwen2(Engine):
+    def __init__(self):
+        super().__init__()
+        self.system_msg_enabled = True
+
+    def get_conversation_start_token(self, **kwargs):
+        return ""
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "<|im_start|>system\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "<|im_start|>user\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "<|im_start|>user\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+
+class Yi(Engine):
+    def __init__(self):
+        super().__init__()
+
+    def get_conversation_start_token(self, **kwargs):
+        return ""
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return ""
+
+    def get_sys_end_token(self, **kwargs):
+        return ""
+
+    def get_user_start_token(self, **kwargs):
+        return "<|im_start|>user\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+
+class Gemma2(Engine):
+    def __init__(self):
+        super().__init__()
+
+    def get_conversation_start_token(self, **kwargs):
+        return "<bos>"
+
+    def get_conversation_end_token(self, **kwargs):
+        return ""
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "<start_of_turn>model\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "<end_of_turn>\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<end_of_turn>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "<start_of_turn>user\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<end_of_turn>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "<start_of_turn>model\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<end_of_turn>\n"
+
+class InternLM(Engine):
+    def __init__(self):
+        super().__init__()
+
+    def get_conversation_start_token(self, **kwargs):
+        return ""
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "<|im_start|>system\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "<|im_start|>user\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "<|im_start|>assistant\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|im_end|>\n"
+
+
+class Llama3_1(Engine):
+    def __init__(self):
+        super().__init__()
+        self.system_msg_enabled = True
+        self.tool_enabled = True
+    def get_conversation_start_token(self, **kwargs):
+        return "<|begin_of_text|>"
+
+    def get_conversation_end_token(self, **kwargs):
+        return "\n"
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+
+    def get_sys_start_token(self, **kwargs):
+        return "\n<|start_header_id|>system<|end_header_id|>\n"
+
+    def get_sys_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_user_start_token(self, **kwargs):
+        return "\n<|start_header_id|>user<|end_header_id|>\n"
+
+    def get_user_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_assistant_start_token(self, **kwargs):
+        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+
+    def get_assistant_end_token(self, **kwargs):
+        return "<|eot_id|>\n"
+
+    def get_tool_start_token(self, **kwargs):
+        return "\n<|python_tag|>\n"
+
+    def get_tool_end_token(self, **kwargs):
+        return "<|eom_id|>\n"
