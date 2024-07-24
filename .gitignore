@@ -2,4 +2,4 @@
 /log
 /build
 **/__pycache__/
-**/.idea
+/.idea
