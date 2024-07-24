@@ -1,7 +1,7 @@
 /log
 /build
 **/__pycache__/
-/.idea
+/.idea/
 .idea/
 *.egg-info/
 /**/__pycache__/
