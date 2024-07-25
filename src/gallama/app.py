@@ -14,7 +14,7 @@ from gallama.data_class import (
 )
 import argparse
 from gallama.model import Model
-from gallama.prompt_engine import get_engine
+from gallama.prompt_engine import PromptEngine
 from gallama.chatgenerator import ChatGenerator, ChatGeneratorLlamaCpp
 import uvicorn
 from fastapi.exceptions import RequestValidationError
@@ -210,7 +210,7 @@ def load_model(model_spec: ModelParser):
     if model_spec.draft_model_id:
         draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
         if not draft_model_config:
-            raise Exception(f"Model config for '{draft_model_name}' not exist in ~/.gallama/model_config.yaml")
+            raise Exception(f"Model config for '{model_spec.draft_model_name}' not exist in ~/.gallama/model_config.yaml")
     else:
         draft_model_config = {}
 
@@ -229,8 +229,7 @@ def load_model(model_spec: ModelParser):
     ChatGenerator_touse = chat_generator_dict[llm_base.backend]
     llm = ChatGenerator_touse(llm_base)
 
-
-    prompt_eng = get_engine(model_name)
+    prompt_eng = PromptEngine(prompt_format= model_config["prompt_template"])
 
     logger.info("Loaded: " + llm_base.model_name)
 

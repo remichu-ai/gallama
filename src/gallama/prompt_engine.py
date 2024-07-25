@@ -1,4 +1,5 @@
 import json
+import yaml
 from typing import List, Dict
 from .data_class import BaseMessage, ChatMLQuery, ToolCall
 # from langchain.output_parsers import PydanticOutputParser
@@ -7,7 +8,7 @@ from .logger import logger
 from copy import deepcopy
 from gallama.utils import parse_xml_to_dict
 from fastapi import HTTPException
-
+from pathlib import Path
 
 # class ToolCalling(BaseModel):
 #     """The format to use to call tool"""
@@ -15,40 +16,102 @@ from fastapi import HTTPException
 #     arguments: Dict[str, object] = Field(description='the arguments to pass to the function')
 
 
-def get_engine(model_id: str):
-    print(model_id)
-    if 'llama-3' in model_id.lower():
-        logger.info("Chat template llama-3")
-        return Llama3()
-    elif 'llama3.1' in model_id.lower():
-        logger.info("Chat template llama-3.1")
-        return Llama3_1()
-    elif 'mixtral-8x22b' in model_id.lower() or "mistral-v0.3" in model_id.lower() or "wizard" in model_id.lower() or "codestral" in model_id.lower() :
-        logger.info("Chat template mixtral tool")
-        return Mixtral8x22B()
-    elif 'mixtral' in model_id.lower() or 'mistral' in model_id.lower():
-        logger.info("Chat template mixtral base")
-        return Mistral()
-    elif 'qwen2' in model_id.lower():
-        logger.info("Chat template Qwen")
-        return Qwen2()
-    elif 'phi' in model_id.lower():
-        logger.info("Chat template Phi")
-        return Phi()
-    elif 'yi' in model_id.lower():
-        logger.info("Chat template Yi")
-        return Yi()
-    elif 'gemma-2' in model_id.lower():
-        logger.info("Chat template Gemma2")
-        return Gemma2()
-    elif 'intern' in model_id.lower() or 'dbrx' in model_id.lower():
-        logger.info("Chat template DBRX")
-        return InternLM()
+# def get_engine(model_id: str):
+#     print(model_id)
+#     if 'llama-3' in model_id.lower():
+#         logger.info("Chat template llama-3")
+#         return Llama3()
+#     elif 'llama3.1' in model_id.lower():
+#         logger.info("Chat template llama-3.1")
+#         return Llama3_1()
+#     elif 'mixtral-8x22b' in model_id.lower() or "mistral-v0.3" in model_id.lower() or "wizard" in model_id.lower() or "codestral" in model_id.lower() :
+#         logger.info("Chat template mixtral tool")
+#         return Mixtral8x22B()
+#     elif 'mixtral' in model_id.lower() or 'mistral' in model_id.lower():
+#         logger.info("Chat template mixtral base")
+#         return Mistral()
+#     elif 'qwen2' in model_id.lower():
+#         logger.info("Chat template Qwen")
+#         return Qwen2()
+#     elif 'phi' in model_id.lower():
+#         logger.info("Chat template Phi")
+#         return Phi()
+#     elif 'yi' in model_id.lower():
+#         logger.info("Chat template Yi")
+#         return Yi()
+#     elif 'gemma-2' in model_id.lower():
+#         logger.info("Chat template Gemma2")
+#         return Gemma2()
+#     elif 'intern' in model_id.lower() or 'dbrx' in model_id.lower():
+#         logger.info("Chat template DBRX")
+#         return InternLM()
 
-class Engine:
-    def __init__(self):
+class PromptEngine:
+    def __init__(self, prompt_format: str):
         self.system_msg_enabled = False
         self.tool_enabled = False
+        self.model_prompt_all = self.get_prompt_token()
+        if not self.model_prompt_all.get(prompt_format):
+            raise ValueError(f'Prompt format {prompt_format} not found in data/model_token.yaml')
+
+        self.model_prompt = self.model_prompt_all.get(prompt_format)
+        self.system_msg_enabled = self.model_prompt.get("system_msg_enabled")
+        self.tool_enabled = self.model_prompt.get("tool_enabled")
+        self.eos_token_list = self.model_prompt.get("eos_token_list")
+
+    @staticmethod
+    def get_prompt_token() -> Dict:
+        """Get the absolute path to the data directory."""
+        yaml_file = Path(__file__).parent / 'data' / 'model_token.yaml'
+        with open(yaml_file, 'r') as file:
+            yaml_data = yaml.safe_load(file)
+        return yaml_data
+
+    def get_conversation_start_token(self, **kwargs):
+        return self.model_prompt.get("conversation_start", "")
+
+    def get_conversation_end_token(self, **kwargs):
+        return self.model_prompt.get("conversation_end", "")
+
+    @property
+    def leading_prompt_token(self, **kwargs):
+        return self.model_prompt.get("leading_prompt_token", "")
+
+    def get_user_start_token(self, **kwargs):
+        return self.model_prompt.get("user_start", "")
+
+    def get_user_end_token(self, **kwargs):
+        return self.model_prompt.get("user_end", "")
+
+    def get_sys_start_token(self, **kwargs):
+        return self.model_prompt.get("system_start", "")
+
+    def get_sys_end_token(self, **kwargs):
+        return self.model_prompt.get("system_end", "")
+
+    def get_assistant_start_token(self, **kwargs):
+        return self.model_prompt.get("assistant_start", "")
+
+    def get_assistant_end_token(self, **kwargs):
+        return self.model_prompt.get("assistant_end", "")
+
+    def get_tool_start_token(self, **kwargs):
+        return self.model_prompt.get("tool_start", "")
+
+    def get_tool_end_token(self, **kwargs):
+        return self.model_prompt.get("tool_end", "")
+
+    def get_tool_result_start_token(self, **kwargs):
+        return self.model_prompt.get("tool_result_start", "")
+
+    def get_tool_result_end_token(self, **kwargs):
+        return self.model_prompt.get("tool_result_end", "")
+
+    def get_tool_call_start_token(self, **kwargs):
+        return self.model_prompt.get("tool_call_start", "")
+
+    def get_tool_call_end_token(self, **kwargs):
+        return self.model_prompt.get("tool_call_start", "")
 
     def _get_role_token(self, role, token_type: str):
         if token_type == "start":
@@ -79,7 +142,6 @@ class Engine:
                 return self.get_tool_call_end_token()
         else:
             return ""
-
 
     def _get_message_type(self, msg: BaseMessage) -> str:
         if msg.tool_call_id:
@@ -300,12 +362,6 @@ End of Example of answer with Tool/ Function_calling usage.
                       f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
                       "Now answer the question. Remember that the thinking above is INVISIBLE to user."
 
-
-            # prompt += f"```xml\n<assistant_internal_thinking_invisible_to_user>\n" + \
-            #           thinking_response.strip() + \
-            #           f"\n</assistant_internal_thinking_invisible_to_user>\n```" + \
-            #           f"\n\nRemember assistant's internal thought is invisible to user. Now provide the answer: \n"
-
             # add ending token
             prompt += self.get_conversation_end_token()
 
@@ -328,380 +384,336 @@ End of Example of answer with Tool/ Function_calling usage.
 
         # match tool call result #TODO
 
-    def get_conversation_start_token(self, **kwargs):
-        return ""
 
-    def get_conversation_end_token(self, **kwargs):
-        return ""
 
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return ""
 
-    def get_user_start_token(self, **kwargs):
-        return "\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "\n"
-
-    def get_tool_result_start_token(self, **kwargs):
-        return ""
-
-    def get_tool_result_end_token(self, **kwargs):
-        return ""
-
-    def get_tool_call_start_token(self, **kwargs):
-        return "\n"
-
-    def get_tool_call_end_token(self, **kwargs):
-        return "\n"
-
-
-class Mistral(Engine):
-
-    def get_conversation_start_token(self, **kwargs):
-        return "<s>"
-
-    def get_conversation_end_token(self, **kwargs):
-        return "</s>\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "assistant:\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "\n[INST]user:\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "[/INST]\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "\n[INST]user:\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "[/INST]\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "\nassistant:\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "\n[INST]user:\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "[/INST]\n"
-
-
-class Llama3(Engine):
-
-    def get_conversation_start_token(self, **kwargs):
-        return "<|begin_of_text|>"
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "\n<|start_header_id|>system<|end_header_id|>\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "\n<|start_header_id|>user<|end_header_id|>\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "\n<|start_header_id|>user<|end_header_id|>\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-
-class Phi(Engine):
-    def __init__(self):
-        super().__init__()
-        self.system_msg_enabled = True
-
-    def get_conversation_start_token(self, **kwargs):
-        return ""
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "<|assistant|>\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "<|system|>\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<|end|>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "<|user|>\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|end|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "<|assistant|>\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|end|>\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return ""
-
-    def get_tool_end_token(self, **kwargs):
-        return "\n"
-
-
-class Mixtral8x22B(Engine):
-    def __init__(self):
-        super().__init__()
-        self.tool_enabled = True
-
-    def get_conversation_start_token(self, **kwargs):
-        return "<s>"
-
-    def get_conversation_end_token(self, **kwargs):
-        return "</s>\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "assistant:\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "\n[INST]user:\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "[/INST]\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "\n[INST]user:\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "[/INST]\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "\nassistant:\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "\n[AVAILABLE_TOOLS]\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "\n[/AVAILABLE_TOOLS]\n"
-
-    def get_tool_result_start_token(self, **kwargs):
-        return "\n[TOOL_RESULTS]\n"
-
-    def get_tool_result_end_token(self, **kwargs):
-        return "\n[\TOOL_RESULTS]\n"
-
-
-class Qwen2(Engine):
-    def __init__(self):
-        super().__init__()
-        self.system_msg_enabled = True
-
-    def get_conversation_start_token(self, **kwargs):
-        return ""
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "<|im_start|>system\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "<|im_start|>user\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "<|im_start|>user\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-
-class Yi(Engine):
-    def __init__(self):
-        super().__init__()
-
-    def get_conversation_start_token(self, **kwargs):
-        return ""
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return ""
-
-    def get_sys_end_token(self, **kwargs):
-        return ""
-
-    def get_user_start_token(self, **kwargs):
-        return "<|im_start|>user\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-
-class Gemma2(Engine):
-    def __init__(self):
-        super().__init__()
-
-    def get_conversation_start_token(self, **kwargs):
-        return "<bos>"
-
-    def get_conversation_end_token(self, **kwargs):
-        return ""
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "<start_of_turn>model\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "<end_of_turn>\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<end_of_turn>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "<start_of_turn>user\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<end_of_turn>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "<start_of_turn>model\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<end_of_turn>\n"
-
-class InternLM(Engine):
-    def __init__(self):
-        super().__init__()
-
-    def get_conversation_start_token(self, **kwargs):
-        return ""
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "<|im_start|>system\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "<|im_start|>user\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "<|im_start|>assistant\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|im_end|>\n"
-
-
-class Llama3_1(Engine):
-    def __init__(self):
-        super().__init__()
-        self.system_msg_enabled = True
-        self.tool_enabled = True
-    def get_conversation_start_token(self, **kwargs):
-        return "<|begin_of_text|>"
-
-    def get_conversation_end_token(self, **kwargs):
-        return "\n"
-
-    @property
-    def leading_prompt_token(self, **kwargs):
-        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
-
-    def get_sys_start_token(self, **kwargs):
-        return "\n<|start_header_id|>system<|end_header_id|>\n"
-
-    def get_sys_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_user_start_token(self, **kwargs):
-        return "\n<|start_header_id|>user<|end_header_id|>\n"
-
-    def get_user_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_assistant_start_token(self, **kwargs):
-        return "\n<|start_header_id|>assistant<|end_header_id|>\n"
-
-    def get_assistant_end_token(self, **kwargs):
-        return "<|eot_id|>\n"
-
-    def get_tool_start_token(self, **kwargs):
-        return "\n<|python_tag|>\n"
-
-    def get_tool_end_token(self, **kwargs):
-        return "<|eom_id|>\n"
+# class Mistral(Engine):
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return "<s>"
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "</s>\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "assistant:\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "\n[INST]user:\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "[/INST]\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "\n[INST]user:\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "[/INST]\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "\nassistant:\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return "\n[INST]user:\n"
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "[/INST]\n"
+#
+#
+# class Llama3(Engine):
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return "<|begin_of_text|>"
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>system<|end_header_id|>\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>user<|end_header_id|>\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>user<|end_header_id|>\n"
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#
+# class Phi(Engine):
+#     def __init__(self):
+#         super().__init__()
+#         self.system_msg_enabled = True
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "<|assistant|>\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "<|system|>\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "<|end|>\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "<|user|>\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|end|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "<|assistant|>\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|end|>\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "\n"
+#
+#
+# class Mixtral8x22B(Engine):
+#     def __init__(self):
+#         super().__init__()
+#         self.tool_enabled = True
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return "<s>"
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "</s>\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "assistant:\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "\n[INST]user:\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "[/INST]\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "\n[INST]user:\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "[/INST]\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "\nassistant:\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return "\n[AVAILABLE_TOOLS]\n"
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "\n[/AVAILABLE_TOOLS]\n"
+#
+#     def get_tool_result_start_token(self, **kwargs):
+#         return "\n[TOOL_RESULTS]\n"
+#
+#     def get_tool_result_end_token(self, **kwargs):
+#         return "\n[\TOOL_RESULTS]\n"
+#
+#
+# class Qwen2(Engine):
+#     def __init__(self):
+#         super().__init__()
+#         self.system_msg_enabled = True
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "<|im_start|>system\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "<|im_start|>user\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return "<|im_start|>user\n"
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#
+# class Yi(Engine):
+#     def __init__(self):
+#         super().__init__()
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return ""
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "<|im_start|>user\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#
+# class Gemma2(Engine):
+#     def __init__(self):
+#         super().__init__()
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return "<bos>"
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return ""
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "<start_of_turn>model\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return ""
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "<start_of_turn>user\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<end_of_turn>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "<start_of_turn>model\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<end_of_turn>\n"
+#
+# class InternLM(Engine):
+#     def __init__(self):
+#         super().__init__()
+#
+#     def get_conversation_start_token(self, **kwargs):
+#         return ""
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "<|im_start|>system\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "<|im_start|>user\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "<|im_start|>assistant\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|im_end|>\n"
+#
+#
+# class Llama3_1(Engine):
+#     def __init__(self):
+#         super().__init__()
+#         self.system_msg_enabled = True
+#         self.tool_enabled = True
+#     def get_conversation_start_token(self, **kwargs):
+#         return "<|begin_of_text|>"
+#
+#     def get_conversation_end_token(self, **kwargs):
+#         return "\n"
+#
+#     @property
+#     def leading_prompt_token(self, **kwargs):
+#         return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+#
+#     def get_sys_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>system<|end_header_id|>\n"
+#
+#     def get_sys_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_user_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>user<|end_header_id|>\n"
+#
+#     def get_user_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_assistant_start_token(self, **kwargs):
+#         return "\n<|start_header_id|>assistant<|end_header_id|>\n"
+#
+#     def get_assistant_end_token(self, **kwargs):
+#         return "<|eot_id|>\n"
+#
+#     def get_tool_start_token(self, **kwargs):
+#         return "\n<|python_tag|>\n"
+#
+#     def get_tool_end_token(self, **kwargs):
+#         return "<|eom_id|>\n"

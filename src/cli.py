@@ -15,12 +15,14 @@ def get_data_dir_dev() -> Path:
     """Get the absolute path to the data directory."""
     return Path(__file__).parent / 'gallama' / 'data'
 
+
 def find_config_file(config_dir, filename):
     """Find the configuration file with either .yml or .yaml extension."""
     yml_file = config_dir / f"{filename}.yml"
     yaml_file = config_dir / f"{filename}.yaml"
     logger.debug(f"Searching for config files: {yml_file}, {yaml_file}")
     return yml_file if yml_file.exists() else yaml_file if yaml_file.exists() else None
+
 
 def ensure_config_file():
     """Ensure the user-specific configuration file exists."""
@@ -30,7 +32,6 @@ def ensure_config_file():
 
     config_dir_default = get_data_dir()
     config_dir_default_dev = get_data_dir_dev()     # dev mode file path is different
-
 
     try:
         if not config_dir.exists():
@@ -53,7 +54,6 @@ def ensure_config_file():
                 logger.info(f"Created default configuration file: {default_config_dev}")
             else:
                 raise FileNotFoundError(f"Default configuration file not found in: {data_dir}")
-
 
         return config_file
     except Exception as e:

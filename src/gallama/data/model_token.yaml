@@ -1,0 +1,142 @@
+Mistral:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: '<s>'
+  conversation_end: '</s>\n'
+  system_start: '\n[INST]user:\n'
+  system_end: ''
+  user_start: '\n[INST]user:\n'
+  user_end: '[/INST]'
+  assistant_start: 'assistant:\n'
+  assistant_end: '\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: 'assistant:\n'
+  eos_token_list: ["</s>", "[INST]", "<s>", "[/INST]"]
+
+Mistral_large:
+  system_msg_enabled: false
+  tool_enabled: true
+  conversation_start: '<s>'
+  conversation_end: '</s>\n'
+  system_start: '\n[INST]user:\n'
+  system_end: ''
+  user_start: '\n[INST]user:\n'
+  user_end: '[/INST]'
+  assistant_start: 'assistant:\n'
+  assistant_end: '\n'
+  tool_start: '\n[AVAILABLE_TOOLS]\n'
+  tool_end: '\n[/AVAILABLE_TOOLS]\n'
+  tool_result_start: '\n[TOOL_RESULTS]\n'
+  tool_result_end: '\n[\TOOL_RESULTS]\n'
+  leading_prompt_token: 'assistant:\n'
+  eos_token_list: ["</s>", "[INST]", "<s>", "[/INST]"]
+
+Llama3:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: '<|begin_of_text|>'
+  conversation_end: '\n'
+  system_start: '\n<|start_header_id|>system<|end_header_id|>\n'
+  system_end: '<|eot_id|>\n'
+  user_start: '\n<|start_header_id|>user<|end_header_id|>\n'
+  user_end: '<|eot_id|>\n'
+  assistant_start: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  assistant_end: '<|eot_id|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  eos_token_list: ["<|eot_id|>", "<|end_of_text|>", "<|start_header_id|>", "<|im_end|>"]
+
+Llama3.1:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: '<|begin_of_text|>'
+  conversation_end: '\n'
+  system_start: '\n<|start_header_id|>system<|end_header_id|>\n'
+  system_end: '<|eot_id|>\n'
+  user_start: '\n<|start_header_id|>user<|end_header_id|>\n'
+  user_end: '<|eot_id|>\n'
+  assistant_start: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  assistant_end: '<|eot_id|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: '\n<|python_tag|>\n'
+  tool_result_end: '<|eom_id|>\n'
+  leading_prompt_token: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  eos_token_list: ["<|begin_of_text|>","<|end_of_text|>", "<|start_header_id|>", "<|end_header_id|>", "<|eom_id|>", "<|eot_id|>"]
+
+Qwen2:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: ''
+  conversation_end: '\n'
+  system_start: '<|im_start|>system\n'
+  system_end: '<|im_end|>\n'
+  user_start: '<|im_start|>user\n'
+  user_end: '<|im_end|>\n'
+  assistant_start: '<|im_start|>assistant\n'
+  assistant_end: '<|im_end|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: '<|im_start|>assistant\n'
+
+Yi1.5:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: ''
+  conversation_end: '\n'
+  system_start: ''
+  system_end: ''
+  user_start: '<|im_start|>user\n'
+  user_end: '<|im_end|>\n'
+  assistant_start: '<|im_start|>assistant\n'
+  assistant_end: '<|im_end|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: '<|im_start|>assistant\n'
+  eos_token_list: ["<|im_start|>", "<|im_end|>", "<|endoftext|>"]
+
+Gemma2:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: '<bos>'
+  conversation_end: ''
+  system_start: ''
+  system_end: ''
+  user_start: '<start_of_turn>user\n'
+  user_end: '<end_of_turn>\n'
+  assistant_start: '<start_of_turn>model\n'
+  assistant_end: '<end_of_turn>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: '<start_of_turn>model\n'
+  eos_token_list: ["<bos>", "<eos>", "<start_of_turn>", "<end_of_turn>"]
+
+Phi3:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: '<|system|>\'
+  conversation_end: '<|end|>\n'
+  system_start: ''
+  system_end: ''
+  user_start: '<|user|>\n'
+  user_end: '<|end|>\n'
+  assistant_start: '<|assistant|>\n'
+  assistant_end: '<|end|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  leading_prompt_token: '<|assistant|>\n'
+  eos_token_list: ["<bos>", "<eos>", "<start_of_turn>", "<end_of_turn>"]
