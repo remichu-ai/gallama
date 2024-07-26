@@ -15,6 +15,10 @@ class Tools:
         self.json_parser = None
         self.tool_choice = tool_choice
 
+    @property
+    def tool_name_list(self):
+        return ", ".join(self.tool_dict.keys())
+
     # def set_answer_format(self, answer_format):
     #     self.answer_format = answer_format
     #     #self.json_parser = JsonOutputParser(pydantic_object=answer_format)

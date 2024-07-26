@@ -84,6 +84,8 @@ def main_cli():
 
     # Add 'serve' subcommand
     serve_parser = subparsers.add_parser("serve", help="Run the FastAPI server")
+    serve_parser.add_argument("--strict_mode", action="store_true", default=False,
+                              help="Enable strict mode for routing non-embedding requests to matching model names")
     serve_parser.add_argument("-id", "--model_id", action='append', type=parse_dict, default=None,
                               help="Model configuration. Can be used multiple times for different models. "
                                    "Format: -id model_id=<model_name> [gpu=<vram1>,<vram2>,...] [gpu<n>=<vram>] [cache=<size>] [model_type=exllama|embedding]"
@@ -99,8 +101,7 @@ def main_cli():
                                    "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
-    serve_parser.add_argument("--strict_mode", action="store_true", default=False,
-                              help="Enable strict mode for routing non-embedding requests to matching model names")
+
 
     # Add 'cli' subcommand (you can add more CLI-specific options here)
     cli_parser = subparsers.add_parser("cli", help="Run in CLI mode")

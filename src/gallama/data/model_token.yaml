@@ -2,7 +2,7 @@ Mistral:
   system_msg_enabled: false
   tool_enabled: false
   conversation_start: '<s>'
-  conversation_end: '</s>\n'
+  conversation_end: '\n'
   system_start: '\n[INST]user:\n'
   system_end: ''
   user_start: '\n[INST]user:\n'
@@ -20,7 +20,7 @@ Mistral_large:
   system_msg_enabled: false
   tool_enabled: true
   conversation_start: '<s>'
-  conversation_end: '</s>\n'
+  conversation_end: '\n'
   system_start: '\n[INST]user:\n'
   system_end: ''
   user_start: '\n[INST]user:\n'

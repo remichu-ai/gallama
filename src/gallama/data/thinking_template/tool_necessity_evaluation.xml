@@ -1,13 +1,12 @@
 <tool_necessity_evaluation>
+  <predefined_tools>{fstring_available_tools}</predefined_tools>
   <analyze_query>Summarize the user's request</analyze_query>
-
   <evaluate_perspectives>
     <pro_tool_usage>Reasons why a tool might be needed</pro_tool_usage>
     <contra_tool_usage>Reasons why a tool might not be needed</contra_tool_usage>
   </evaluate_perspectives>
-
   <final_decision>
-    <justification>Brief explanation for the final decision whether tool usage is needed or not</justification>
+    <justification>Super brief explanation for the final decision whether tool usage is needed or not</justification>
     <is_tool_needed>Yes/No</is_tool_needed>
   </final_decision>
 </tool_necessity_evaluation>

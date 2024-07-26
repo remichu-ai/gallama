@@ -203,7 +203,6 @@ class ChatGenerator(Model):
             }
         )
 
-
     async def chat_with_tool(self, query, prompt_eng, gen_queue):
         # use_tool marker
         use_tool_bool = False       # this will be set to True if tool is used
@@ -216,12 +215,17 @@ class ChatGenerator(Model):
             tool_choice=query.tool_choice,
         )
 
-        # perform generation with tool thinking to evaluate if it is neccessity
+        # substitute the actual list of tool to the thinking template
         tool_thinking_queue = GenQueue()
+        tool_thinking_formatted = TOOL_THINKING.xml.format_map(
+            {"fstring_available_tools": tool_handler.tool_name_list}
+        )
+
+        # perform generation with tool thinking to evaluate if it is necessity
         prompt = prompt_eng.get_prompt(
             query,
             pydantic_tool_dict=tool_handler.tool_dict,
-            thinking_template=TOOL_THINKING.xml,
+            thinking_template=tool_thinking_formatted,
             answer_format_schema=False,
             #leading_prompt=leading_prompt,
         )
@@ -263,12 +267,12 @@ class ChatGenerator(Model):
         if fall_back_bool:
             # generate fall back response with regex enforcement:
             fall_back_prompt = "\n Assistant's answer (Yes or No) to the question whether is_tool_needed is:\nis_tool_needed: "
-            prompt += fall_back_prompt
+            prompt += tool_thinking_response + fall_back_prompt
 
             # perform generation with tool thinking to evaluate if it is neccessity
             tool_thinking_queue_fallback = GenQueue()
 
-            lm_enforcer_parser_regex = RegexParser(r'(Yes|No|YES|NO)')
+            lm_enforcer_parser_regex = RegexParser('(Yes|No|YES|NO)')
             await self.generate(
                 prompt,
                 gen_queue=tool_thinking_queue_fallback,

@@ -9,6 +9,7 @@ from copy import deepcopy
 from gallama.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
+from textwrap import dedent
 
 # class ToolCalling(BaseModel):
 #     """The format to use to call tool"""
@@ -295,6 +296,18 @@ class PromptEngine:
 
             return _leading_prompt
 
+        thinking_example = dedent("""
+        ### Thinking example:
+        Question: Is dog or cat faster? Answer in Capital letter
+        Apply thinking template:
+        <format_restriction>Any specific format requirement from user</format_restriction>
+        My thought process using the thinking template:
+        <format_restriction>User request for answer in capital letter</format_restriction>
+        Final answer:
+        CAT
+        End of Thinking Example.
+        """).strip()
+
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
         msg_groups = self._regroup_msg(query.messages)
@@ -348,16 +361,20 @@ End of Example of answer with Tool/ Function_calling usage.
         if use_thinking and thinking_template and not thinking_response:
             prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
 
-            prompt += "\nNow, before answering the question, I am required to apply format to guide my internal thinking process:\n" + \
+            prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
+                      f"{thinking_example}\n" + \
+                      "Now, the thinking template i need to apply to answer this question is:\n" + \
                       thinking_template + "\n" + \
-                      f"My thinking using the XML template as follow:\n```xml"    #\n<{root_key}>"       # do take note that we use the xml root key here to prompt LLM to answer
+                      f"My thinking using the above XML template as follow:\n```xml"
             # add ending token
             # prompt += self.get_conversation_end_token()
 
         elif use_thinking and thinking_template and thinking_response:
             # the thinking result is ready here
             # root key need to be added as we use it for leading prompt in the prompt creation above so it is not part of the response
-            prompt += "\nNow, before answering the question, I am required to apply format to guide my internal thinking process. The internal thinking below is INVISIBLE to user:\n" + \
+            prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
+                      f"{thinking_example}\n" + \
+                      "Now, the thinking template i need to apply to answer this question is:\n" + \
                       thinking_template + "\n" + \
                       f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
                       "Now answer the question. Remember that the thinking above is INVISIBLE to user."
