@@ -1,115 +1,72 @@
 # gallama - Guided Agentic Llama
 
-Gallama is a Python library that provides a Llama backend optimized for local agentic tasks. It serves as a middleware layer, bridging the gap between base inference engines (such as ExllamaV2 and LLama CPP) and agentic work (e.g., function calling, formatting constraints).
+gallama is a Python library that provides a Llama backend optimized for local agentic tasks. It serves as a middleware layer, bridging the gap between base inference engines (such as ExLlamaV2 and Llama.cpp) and agentic work (e.g., function calling, formatting constraints).
 
 ## Features
 
-- **OpenAI Compatible Server**: Fully compatible with OpenAI client, tested extensively with the OpenAI client.
+### OpenAI Compatible Server
+Fully compatible with the OpenAI client, extensively tested for seamless integration.
+
 ```python
 import os
 from openai import OpenAI
-os.environ['OPENAI_API_KEY'] = 'test'
-client = OpenAI(base_url = 'http://127.0.0.1:8000/v1')
 
-messages = [{"role": "user", "content": "Cat or Dog is faster, in term of reaction speed?"}]
+os.environ['OPENAI_API_KEY'] = 'test'
+client = OpenAI(base_url='http://127.0.0.1:8000/v1')
+
+messages = [{"role": "user", "content": "Which is faster in terms of reaction speed: a cat or a dog?"}]
 
 completion = client.chat.completions.create(
-  model="mistral",
-  messages=messages,
-  tool_choice="auto"
+    model="mistral",
+    messages=messages,
+    tool_choice="auto"
 )
 
 print(completion)
 ```
 
-- **Function Calling**: Supported function calling for all models.
+### Function Calling
+Supports function calling for all models, mimicking OpenAI's behavior.
+
 ```python
 tools = [
-  {
-    "type": "function",
-    "function": {
-      "name": "get_current_weather",
-      "description": "Get the current weather in a given location",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "location": {
-            "type": "string",
-            "description": "The city and state, e.g. San Francisco, CA",
-          },
-          "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-        },
-        "required": ["location"],
-      },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
     }
-  }
 ]
+
 messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
 
 completion = client.chat.completions.create(
-  model="mistral",
-  messages=messages,
-  tools=tools,
-  tool_choice="auto"
+    model="mistral",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto"
 )
 
 print(completion.choices[0].message.tool_calls[0].function)
 ```
-Result:
-```
-Function(arguments='{"location": "Boston, MA"}', name='get_current_weather')
-```
 
-Tool option mimics OpenAI behavior, returning tool calling or normal response as needed.
+### Thinking Method
+A novel approach to guide LLM's thinking with XML templates (e.g., chain of thought) without modifying the prompt.
+
 ```python
-messages = [{"role": "user", "content": "Cat or Dog is faster, in term of reaction speed?"}]
-
-completion = client.chat.completions.create(
-  #model="llama3.1-8B",
-  model="mistral",
-  messages=messages,
-  tools=tools,
-  tool_choice="auto"      # Mimic OpenAI "auto" mode
-)
-
-print(completion.choices[0].message.content)
-```
-Response is normal generation and do not use tool:
-```
-In terms of reaction speed, a cat is generally faster than a dog. Cats have a faster visual processing system and can react more quickly to stimuli.
-This is due to the structure of their eyes and brain, which are optimized for quick movements and changes in light.
-However, it's important to note that individual animals may vary in their reactions based on factors such as age, health, and training.
-```
-
-- **Thinking Method**: A novel approach to guide LLM's thinking with XML template (e.g., chain of thought) without modifying the prompt.
-```python
-Following chat was using Mistral v0.3 at 4.0bpw
-messages = [
-    {"role": "user","content": """
-I went to the market and bought 10 apples. I gave 2 apples to the neighbor and 2 to the repairman. I then went and bought 5 more apples and ate 1. How many apples did I remain with?
-"""}                    
-]
-
-
-completion = client.chat.completions.create(
-  model="mistral",
-  messages=messages,
-  temperature=0.1,
-  max_tokens= 200,
-)
-print(completion.choices[0].message.content)
-```
-Answer (wrong, correct answer is 10 apples)
-```
-You started with 10 apples. You gave away 4 (2 to the neighbor and 2 to the repairman), so you had 6 left. 
-Then, you bought 5 more apples, making a total of 11 apples. 
-After eating 1 apple, you were left with 10 - 6 (the initial apples) + 5 (the new apples) - 1 (the eaten apple) = 9 apples. 
-So, you remained with 9 apples.
-```
-
-Now, using thinking for chain of thought, the correct answer is obtained without all the thinink step:
-```python
-thinking_template ="""
+thinking_template = """
 <chain_of_thought>
   <problem>{problem_statement}</problem>
   <initial_state>{initial_state}</initial_state>
@@ -122,88 +79,34 @@ thinking_template ="""
   <final_answer>Only the final answer, no need to provide the step by step problem solving</final_answer>
 </chain_of_thought>
 """
+
 messages = [
-    {"role": "user","content": """
-I went to the market and bought 10 apples. I gave 2 apples to the neighbor and 2 to the repairman. I then went and bought 5 more apples and ate 1. How many apples did I remain with?
-"""}                    
+    {"role": "user", "content": "I went to the market and bought 10 apples. I gave 2 apples to the neighbor and 2 to the repairman. I then went and bought 5 more apples and ate 1. How many apples did I remain with?"}
 ]
 
 completion = client.chat.completions.create(
-  model="mistral",
-  messages=messages,
-  temperature=0.1,
-  max_tokens= 200,
-  extra_body={
-    "thinking_template": thinking_template,
-  },
+    model="mistral",
+    messages=messages,
+    temperature=0.1,
+    max_tokens=200,
+    extra_body={
+        "thinking_template": thinking_template,
+    },
 )
 
 print(completion.choices[0].message.content)
 ```
-Answer:
-```
-The user has 10 APPLES LEFT.
-```
-Thinking that the model generated behind the scene:
-```xml
-Now, the thinking template i need to apply to answer this question is:                                                                                                                                                                                       
-<chain_of_thought>                                                                                                                                                                                                                                           
-  <problem>{problem_statement}</problem>                                                                                                                                                                                                                     
-  <initial_state>{initial_state}</initial_state>                                                                                                                                                                                                             
-  <steps>                                                                                                                                                                                                                                                    
-    <step>{action1}</step>                                                                                                                                                                                                                                   
-    <step>{action2}</step>                                                                                                                                                                                                                                   
-    <!-- Add more steps as needed -->                                                                                                                                                                                                                        
-  </steps>                                                                                                                                                                                                                                                   
-  <answer>Provide the answer</answer>                                                                                                                                                                                                                        
-  <final_answer>Only the final answer, no need to provide the step by step problem solving</final_answer>                                                                                                                                                    
-</chain_of_thought>                                                                                                                                                                                                                                          
-My thinking using the XML template as follow:                                                                                                                                                                                                                
-```xml                                                                                                                                                                                                                                                       
-<chain_of_thought>                                                                                                                                                                                                                                           
-  <problem>How many apples does the user have left after giving some away and buying more?</problem>                                                                                                                                                         
-  <initial_state>The user started with 10 apples.</initial_state>                                                                                                                                                                                            
-  <steps>                                                                                                                                                                                                                                                    
-    <step>The user gave away 2 apples to the neighbor and 2 to the repairman (total = 4).</step>                                                                                                                                                             
-    <step>The user bought 5 more apples, making a total of 10 + 5 - 4 = 11 apples.</step>                                                                                                                                                                    
-    <step>The user ate 1 apple, leaving him with 11 - 1 = 10 apples.</step>                                                                                                                                                                                  
-  </steps>                                                                                                                                                                                                                                                   
-  <answer>The user has 10 apples left.</answer>                                                                                                                                                                                                              
-  <final_answer>The user has 10 APPLES LEFT.</final_answer>                                                                                                                                                                                                  
-</chain_of_thought>  
-```
 
-- **Multiple Concurrent Models**: Run multiple models (different or same) with automatic load balancing and request routing.
-Load multiple models and customize which gpu it use. In following example, i specify which out of my 4 GPUs it uses, and cap by what VRAM per gpu 
+### Multiple Concurrent Models
+Run multiple models (different or same) with automatic load balancing and request routing.
+
 ```shell
-gallama serve -id "model_id=mistral gpus=20,0,0,0" -id "model_id=llama3.1-8B gpus=0,20,0,0"
+gallama serve -id "model_id=mistral gpus=20,0,0,0" -id "model_id=Llama3.1-8B gpus=0,20,0,0"
 ```
 
-```
-INFO     | ```python                                                                                                                                                                                                                                                  | server.py
-           +------------------------------------------------------------------------------+                                                                                                                                                             
-           | Current Status: 2 model(s) loaded with 2 total instance(s)                                                                                                                                 
-           +------------------------------------------------------------------------------+                                                                                                                                                             
-           | Model Name           | # | Ports                                                                                                                                                                                           
-           +----------------------+---+---------------------------------------------------+                                                                                                                                                             
-           | mistral              |  1 | 8001                                                                                                                                                                           
-           | llama3.1-8B          |  1 | 8002                                                                                                                                           
-           +------------------------------------------------------------------------------+                                                                                                                                                             
-           | GPU Memory Information                                                                                                                                                                                                                     
-           +-------+-------------+-------------+------------------------------------------+                                                                                                                                                             
-           | GPU   | Used        | Free        | Total                                                                                                                                                                                                  
-           +-------+-------------+-------------+------------------------------------------+                                                                                                                                                             
-           | GPU 0: Used:  13.7GB, Free:  10.0GB, Total:  24.0GB                                                                                                                        
-           | GPU 1: Used:  5.9GB, Free:  17.8GB, Total:  24.0GB                                                                                                                         
-           | GPU 2: Used:  0.0GB, Free:  11.8GB, Total:  12.0GB                                                                                                                         
-           | GPU 3: Used:  0.0GB, Free:  23.7GB, Total:  24.0GB                                                                                                                         
-           | ------+-------------+-------------+------------------------------------------+                                                                                                                                                             
-           | Total: Used: 19.6GB, Free: 63.1GB, Total: 84.0GB                                                                                                                                           
-           +-------+-------------+-------------+------------------------------------------+                                                                                                                                                             
-           ```                                                                         
-```
+### OpenAI Embedding Endpoint
+Utilize Infinity Embedding for both inference and embedding via a single URL.
 
-- **OpenAI Embedding Endpoint**: Utilize Infinity Embedding for both inference and embedding via a single URL.
 ```python
 response = client.embeddings.create(
     input="Your text string for embedding goes here",
@@ -213,21 +116,26 @@ response = client.embeddings.create(
 print(response.data[0].embedding)
 ```
 
-- **Legacy OpenAI Completion Endpoint**: Supported for Completion Endpoint.
+### Legacy OpenAI Completion Endpoint
+Support for the Completion Endpoint is maintained.
+
 ```python
 client.completions.create(
-  model="mistral",
-  prompt="Tell me a story about Llama in 200 words",
-  max_tokens=1000,
-  temperature=0
+    model="mistral",
+    prompt="Tell me a story about a Llama in 200 words",
+    max_tokens=1000,
+    temperature=0
 )
 ```
 
-- **Remote Model Management**: Load and unload models via API calls.
-```
+### Remote Model Management
+Load and unload models via API calls.
+
+```python
+import requests
+
 api_url = "http://127.0.0.1:8000/add_model"
 
-# Define the payload
 payload = [
     {
         "model_id": "qwen2-72B",
@@ -246,98 +154,160 @@ payload = [
     },
 ]
 
-# Make the POST request
 response = requests.post(api_url, json=payload)
 ```
-- **Regex Enforcement**: Ensure output conforms to specified patterns.
+
+### Regex Enforcement
+Ensure output conforms to specified patterns.
+
 ```python
 completion = client.chat.completions.create(
-  model="mistral",
-  messages="Smoking is bad for health? Answer with Yes or No",
-  temperature=0.1,
-  max_tokens= 200,
-  extra_body={
-    # "leading_prompt": leading_prompt,         # prefix the generation with some string
-    # "regex_pattern": regex_pattern,           # define the regex for the whole generation
-    # "regex_prefix_pattern": '(Yes|No)\.',     # define the regex to match the starting words
-    # "stop_words": stop_words,                 # define the word to stop generation
-  },
+    model="mistral",
+    messages=[{"role": "user", "content": "Is smoking bad for health? Answer with Yes or No"}],
+    temperature=0.1,
+    max_tokens=200,
+    extra_body={
+        # "leading_prompt": leading_prompt,         # prefix the generation with some string
+        # "regex_pattern": regex_pattern,           # define the regex for the whole generation
+        # "regex_prefix_pattern": '(Yes|No)\.',     # define the regex to match the starting words
+        # "stop_words": stop_words,                 # define the word to stop generation
+    },
 )
 ```
 
-- **Streaming**: Support for streaming responses using OpenAI client.
-```ipython
-messages = [{"role": "user","content": """tell me a 200 words story on llama"""}]
+### Streaming
+Support for streaming responses using the OpenAI client.
+
+```python
+messages = [{"role": "user", "content": "Tell me a 200-word story about a Llama"}]
 
 completion = client.chat.completions.create(
-  model="mistral",
-  messages=messages,
-  stream=True,
-  temperature=0.1,
+    model="mistral",
+    messages=messages,
+    stream=True,
+    temperature=0.1,
 )
 
 for chunk in completion:
-  #print(chunk)
-  print(chunk.choices[0].delta.content, end='')
+    print(chunk.choices[0].delta.content, end='')
 ```
-
 
 ## Installation
 
-Gallama requires certain components to be installed and functioning. 
+gallama requires certain components to be installed and functioning. 
 
-If you already have ExllamaV2 (and optionally Flash Attention) running, then you can install gallama by:
-```
-pip install gallama
-```
-Or, install from source:
-```
-git clone https://github.com/waterangel91/gallama.git cd gallama pip install .
-```
-
-If you start from scratch and doesnt have these dependency yet, follow these steps:
-
-1. Create a virtual environment (recommended):
-```
-conda create --name genv python=3.11 conda activate genv
-```
-2. Install and verify ExllamaV2:
-- Follow instructions at [ExllamaV2 GitHub](https://github.com/turboderp/exllamav2)
-- Test with examples from [ExllamaV2 Examples](https://github.com/turboderp/exllamav2/tree/master/examples)
-
-3. (Optional) Install Flash Attention for improved performance:
-- Follow instructions at [Flash Attention GitHub](https://github.com/Dao-AILab/flash-attention)
-
-4. (Optional) Install Llama CPP:
-- Follow instructions at [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
-- Note: ExllamaV2 is currently recommended. Llama CPP support is under development.
-
-5. Install gallama:
-```
-pip install gallama
-```
-Or, install from source:
-```
-git clone https://github.com/waterangel91/gallama.git cd gallama pip install .
-```
-## Usage
+If you already have ExLlamaV2 (and optionally Flash Attention) running, you can install gallama by:
 
 ```shell
-gallama serve -id "model_id=mistral"
+pip install gallama
 ```
 
-## Documentation
+Or, install from source:
 
-[Add link to full documentation or additional usage information]
+```shell
+git clone https://github.com/waterangel91/gallama.git
+cd gallama
+pip install .
+```
 
-## Contributing
+If you're starting from scratch and don't have these dependencies yet, follow these steps:
 
-[Add information about how to contribute to the project]
+1. Create a virtual environment (recommended):
+   ```shell
+   conda create --name genv python=3.11
+   conda activate genv
+   ```
 
-## License
+2. Install and verify ExLlamaV2:
+   - Follow instructions at [ExLlamaV2 GitHub](https://github.com/turboderp/exLlamav2)
+   - Test with examples from [ExLlamaV2 Examples](https://github.com/turboderp/exLlamav2/tree/master/examples)
 
-[Specify the license under which gallama is distributed]
+3. (Optional) Install Flash Attention for improved performance:
+   - Follow instructions at [Flash Attention GitHub](https://github.com/Dao-AILab/flash-attention)
 
-## Support
+4. (Optional) Install Llama.cpp:
+   - Follow instructions at [Llama-cpp-python](https://github.com/abetlen/Llama-cpp-python)
+   - Note: ExLlamaV2 is currently recommended. Llama.cpp support is under development.
 
-[Provide information on how users can get support or report issues]
+5. Install gallama:
+   ```shell
+   pip install gallama
+   ```
+   Or, install from source:
+   ```shell
+   git clone https://github.com/remichu-ai/gallama.git
+   cd gallama
+   pip install .
+   ```
+
+## Usage
+
+Follow these steps to use the model. We aim to make this process more convenient in future releases.
+
+### Setup
+
+1. Download the ExLlama model. A Jupyter notebook to assist with the download is included in `examples/Model_download.ipynb`.
+
+2. Initialize gallama:
+   ```shell
+   gallama serve
+   ```
+   This creates a `model_config.yaml` file in `~/.gallama`.
+
+3. Update `~/.gallama/model_config.yaml` with your model configurations.
+
+4. Launch the model:
+   ```shell
+   gallama serve -id "model_id=mistral"
+   ```
+
+### Advanced Usage
+
+Customize the model launch using various parameters. Available parameters for the `-id` option include:
+
+- `model_id`: ID of the model from the yml file (required)
+- `model_name`: Name of the model (optional, defaults to the last part of `model_id`)
+- `gpus`: VRAM usage for each GPU, comma-separated list of floats (optional)
+- `cache_size`: Context length for cache text in integers (optional)
+- `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional, defaults to Q4)
+- `max_seq_len`: Maximum sequence length (optional)
+- `backend`: Model engine backend, options are "exLlama", "Llama_cpp", "embedding" (optional, defaults to "exLlama")
+
+#### Speculative Decoding Parameters
+- `draft_model_id`: ID of the draft model (optional)
+- `draft_model_name`: Name of the draft model (optional)
+- `draft_gpus`: VRAM usage for each GPU for the draft model, comma-separated list of floats (optional)
+- `draft_cache_size`: Context length for cache text in integers for the draft model (optional)
+- `draft_cache_quant`: Quantization to use for cache for the draft model, options are "FP16", "Q4", "Q6", "Q8" (optional)
+
+### Examples
+
+1. Launch two models simultaneously:
+   ```shell
+   gallama serve -id "model_id=mistral" -id "model_id=Llama3"
+   ```
+
+2. Launch a model with specific VRAM limits per GPU:
+   ```shell
+   gallama serve -id "model_id=qwen2-72B gpus=22,22,10,0"
+   ```
+   This limits memory usage to 22GB for GPU0 and GPU1, 10GB for GPU2, and 0GB for GPU3.
+
+3. Launch a model with custom cache size and quantization:
+   ```shell
+   gallama serve -id "model_id=mistral cache_size=4096 cache_quant=Q8"
+   ```
+
+4. Launch a model with a specific backend:
+   ```shell
+   gallama serve -id "model_id=mistral backend=Llama_cpp"
+   ```
+
+5. Launch a model with speculative decoding:
+   ```shell
+   gallama serve -id "model_id=mistral draft_model_id=mistral-small draft_gpus=10,10"
+   ```
+
+Ensure your GPU settings can accommodate the model requirements. Adjust parameters as needed for your specific use case.
+
+Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.

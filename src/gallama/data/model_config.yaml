@@ -1,19 +1,42 @@
 ### Format instruction:
+# We will probably make the model_config setup more convenient in the future release
+
+# you can refer the list of prompt_template available on github src/gallama/data/model_token.yaml
+# prompt_template value can be one of:
+# Mistral:              -> all mistral model except mistral v0.3 and mistral large
+# Mistral_large:        -> mistral v0.3 and mistral large
+# Llama3                -> llama 3 family
+# Llama3.1              -> llama 3.1 family
+# Qwen2
+# Yi1.5
+# Gemma2
+# Phi3
+
+
 #model_name:                                # any no space string here which will be referred to for model loading and api call
 #  model_id:                                # the path to where the model is in the pc
 #  backend: 'exllama'                       # backend option are:  'exllama' or 'llama_cpp'
 #  gpus: "auto"                             # 'auto' -> model autosplit, or an array of gpus split e.g. [12,24,12] where each number is the VRAM to limit the load on that card
 #  cache_quant: 'Q4'                        # quantization for kv cache. Default is Q4. Options are: 'FP32', 'Q4', 'Q6', 'Q8'
-#  eos_token_list: ["<|eot_id|>"]           # the list of string to stop generation. It is good to include other model token on top of the model eos
+#  prompt_template: Llama3                  # please refer prompt_template mapping above
+#  eos_token_list: ["<|eot_id|>"]           # (Optional) the list of string to stop generation. It is good to include other model token on top of the model eos
 #  max_seq_len: 8192                        # maximum length the model can handle
 
 ## Example:
-#llama3-70B:
-#  model_id: '/home/gallama/ML/model/turboderp/Llama-3-70B-Instruct-exl2-4.5bpw'
+#llama3-70B:       # model name is up to you to define
+#  model_id: '/home/gallama/model/turboderp/Llama-3-70B-Instruct-exl2-4.5bpw'
 #  backend: 'exllama'
 #  gpus: "auto"
 #  cache_quant: 'Q4'
-#  eos_token_list: ["<|eot_id|>", "<|end_of_text|>"]
+#  prompt_template: Llama3
 #  max_seq_len: 8192
+
+#mistral-v0.3:
+#  model_id: '/home/gallama/model/turboderp/mistral-v0.3-exl2-4.5bpw'
+#  backend: 'exllama'
+#  gpus: "auto"
+#  cache_quant: 'Q4'
+#  prompt_template: Mistral
+#  max_seq_len: 32768
 
 ### End of Format instruction. ###

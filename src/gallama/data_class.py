@@ -541,6 +541,7 @@ class ModelParser(BaseModel):
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
 
+
 class SpeculativeDecodingParser(BaseModel):
     main_model: str = Field(description="main model name")
     draft_model: str = Field(description="draft model name to use for speculatind decoding")
