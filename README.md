@@ -5,7 +5,7 @@ gallama is a Python library that provides a Llama backend optimized for local ag
 ## Features
 
 ### OpenAI Compatible Server
-Fully compatible with the OpenAI client, extensively tested for seamless integration.
+Fully compatible with the OpenAI client.
 
 ```python
 import os
@@ -26,7 +26,7 @@ print(completion)
 ```
 
 ### Function Calling
-Supports function calling for all models, mimicking OpenAI's behavior.
+Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto".
 
 ```python
 tools = [
@@ -284,7 +284,7 @@ Customize the model launch using various parameters. Available parameters for th
 
 1. Launch two models simultaneously:
    ```shell
-   gallama serve -id "model_id=mistral" -id "model_id=Llama3"
+   gallama serve -id "model_id=mistral" -id "model_id=llama3"
    ```
 
 2. Launch a model with specific VRAM limits per GPU:
@@ -294,18 +294,31 @@ Customize the model launch using various parameters. Available parameters for th
    This limits memory usage to 22GB for GPU0 and GPU1, 10GB for GPU2, and 0GB for GPU3.
 
 3. Launch a model with custom cache size and quantization:
+   By default cache_size is initialized to max sequence length of the model.
+   However, if there is VRAM to spare, increase cache_size will have model to perform better for concurrent and batched request.
+   By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesnt work well with Q4 cache, please use Q6 or Q8.
    ```shell
-   gallama serve -id "model_id=mistral cache_size=4096 cache_quant=Q8"
+   gallama serve -id "model_id=mistral cache_size=102400 cache_quant=Q8"
+   ```
+   
+4. Launch a model with reduced cache size and quantization:
+   For model with high context, lower the sequence length can significantly reduce VRAM usage.
+   e.g. Mistral Large 2 can handle 128K content, however, it will require significant vram for the cache
+   ```shell
+   gallama serve -id "model_id=mistral_large max_seq_len=32768"
    ```
 
-4. Launch a model with a specific backend:
+5. Launch a model for embedding:
    ```shell
-   gallama serve -id "model_id=mistral backend=Llama_cpp"
+   gallama serve -id "model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
    ```
 
-5. Launch a model with speculative decoding:
+6. Launch a model with speculative decoding:
+   Only model with same vocabulary should be used for speculative decoding.
+   For reference, by enabling speculative decoding, qwen2-72B generation speed improve from 20tok/s to 25-35tok/s on my 4090s.
+   Highly recommend speculative decoding if you have VRAM to spare.
    ```shell
-   gallama serve -id "model_id=mistral draft_model_id=mistral-small draft_gpus=10,10"
+   gallama serve -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
    ```
 
 Ensure your GPU settings can accommodate the model requirements. Adjust parameters as needed for your specific use case.
