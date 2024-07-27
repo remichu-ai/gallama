@@ -363,6 +363,29 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Union[Choice, StreamChoice]]
     usage: UsageResponse = None
 
+class CompletionChoice(BaseModel):
+    text: str
+    index: int
+    logprobs: Optional[dict] = None
+    finish_reason: Optional[str] = None
+
+class CompletionResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"cmpl-{uuid.uuid4().hex}")
+    object: Literal["text_completion"] = "text_completion"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    system_fingerprint: str = Field(default="fp_44709d6fcb")
+    choices: List[CompletionChoice]
+    usage: Optional[UsageResponse] = None
+
+class CompletionStreamResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"cmpl-{uuid.uuid4().hex}")
+    object: Literal["text_completion"] = "text_completion"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    system_fingerprint: str = Field(default="fp_44709d6fcb")
+    choices: List[CompletionChoice]
+
 
 # embedding dataclass from here
 class EmbeddingRequest(BaseModel):
@@ -488,9 +511,8 @@ class ModelParser(BaseModel):
     gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
-    model_type: Optional[Literal["exllama", "embedding"]] = Field(description="model type either exllama or embedding", default="exllama")
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
-    backend: Optional[Literal["exllama", "llama_cpp"]] = Field(description="model quantization backend", default=None)
+    backend: Optional[Literal["exllama", "llama_cpp", "embedding"]] = Field(description="model engine backend", default="exllama")
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -498,12 +520,12 @@ class ModelParser(BaseModel):
     draft_gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
     draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
-    # model_type is assumed to be the same as main model
+    # backend is assumed to be the same as main model
 
 
 
     # dont allow non recognizable option
-    model_config = ConfigDict(extra="ignore", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
     @validator('model_name', pre=True, always=True)
     def set_model_name(cls, v, values):
@@ -561,7 +583,7 @@ class ModelParser(BaseModel):
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
-        model_type = input_dict.get('model_type', 'exllama')  # Default to 'exllama' if not provided
+        backend = input_dict.get('backend', 'exllama')  # Default to 'exllama' if not provided
         cache_quant = input_dict.get('cache_quant', None)
 
         if gpus:
@@ -591,7 +613,7 @@ class ModelParser(BaseModel):
             draft_cache_size = int(draft_cache_size)
 
         # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, model_type=model_type,cache_quant=cache_quant,
+        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend,cache_quant=cache_quant,
                    max_seq_len=max_seq_len,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
@@ -620,8 +642,8 @@ class ModelParser(BaseModel):
         if self.cache_quant is not None:
             args.append(f"cache_quant={self.cache_quant}")
 
-        if self.model_type != "exllama":  # Only include if it's not the default value
-            args.append(f"model_type={self.model_type}")
+        if self.backend != "exllama":  # Only include if it's not the default value
+            args.append(f"backend={self.backend}")
 
         # Add draft model parameters
         if self.draft_model_id is not None:
@@ -641,15 +663,20 @@ class ModelParser(BaseModel):
 
         return " ".join(args)
 
-
     def get_visible_gpu_indices(self) -> str:
         """
         Generate a string of GPU indices based on allocated GPUs.
+        If no GPUs are specified, return all available GPU indices.
 
         Returns:
-            str: A comma-separated string of GPU indices with allocated VRAM.
+            str: A comma-separated string of GPU indices with allocated VRAM,
+                 or all available GPU indices if none are specified.
         """
-        if self.gpus is None or all(vram == 0 for vram in self.gpus):
+        if self.gpus is None:
+            import torch
+            return ','.join(str(i) for i in range(torch.cuda.device_count()))
+
+        if all(vram == 0 for vram in self.gpus):
             return ""  # No GPUs allocated
 
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]

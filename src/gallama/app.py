@@ -158,9 +158,9 @@ async def generate(request: Request, query: GenerateQuery):
 
     if query.stream:
         # EventSourceResponse take iterator so need to handle at here
-        return EventSourceResponse(completion_response_stream(request, gen_queue))
+        return EventSourceResponse(completion_response_stream(request, gen_queue, model_name=model_name_to_use))
     else:
-        return await completion_response(gen_queue)
+        return await completion_response(gen_queue, model_name=model_name_to_use)
 
 
 
@@ -204,6 +204,8 @@ def load_model(model_spec: ModelParser):
     model_name = model_spec.model_id
     model_config = config_manager.get_model_config(model_name)
 
+    prompt_eng = PromptEngine(prompt_format= model_config["prompt_template"])
+
     if not model_config:
         raise Exception(f"Model config for '{model_name}' not exist in ~/.gallama/model_config.yaml")
 
@@ -219,6 +221,7 @@ def load_model(model_spec: ModelParser):
         model_spec=model_spec,
         model_config=model_config,
         draft_model_config=draft_model_config,
+        eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
     )
 
     chat_generator_dict = {
@@ -228,8 +231,6 @@ def load_model(model_spec: ModelParser):
 
     ChatGenerator_touse = chat_generator_dict[llm_base.backend]
     llm = ChatGenerator_touse(llm_base)
-
-    prompt_eng = PromptEngine(prompt_format= model_config["prompt_template"])
 
     logger.info("Loaded: " + llm_base.model_name)
 

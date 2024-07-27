@@ -12,7 +12,10 @@ from .data_class import (
     GenQueue,
     GenText,
     GenEnd,
-    GenStart
+    GenStart,
+    CompletionResponse,
+    CompletionStreamResponse,
+    CompletionChoice,
 )
 from typing import AsyncIterator, Iterator, Literal, TypeVar, Generic
 from .utils import get_response_uid, get_response_tool_uid
@@ -273,81 +276,85 @@ async def chat_completion_response(
     return response_obj
 
 
-async def completion_response_stream(
-    request: Request,     # TODO add request cancellation
-    gen_queue: GenQueue,
-) -> AsyncIterator:
+async def completion_response(gen_queue: GenQueue, model_name: str) -> CompletionResponse:
+    response, gen_stats = await get_response_from_queue(gen_queue)
 
+    completion_response = CompletionResponse(
+        model=model_name,
+        choices=[
+            CompletionChoice(
+                text=response.strip(),
+                index=0,
+                logprobs=None,
+                finish_reason="stop"  # You may want to determine this based on actual finish reason
+            )
+        ],
+        usage=UsageResponse(
+            prompt_tokens=gen_stats.input_tokens_count if gen_stats else 0,
+            completion_tokens=gen_stats.output_tokens_count if gen_stats else 0,
+            total_tokens=gen_stats.total_tokens_count if gen_stats else 0
+        )
+    )
+
+    # Use model_dump() and json.dumps() instead of json() method
+    logger.info(
+        f"----------------------LLM API Response---------------\n{json.dumps(completion_response.model_dump(), indent=2)}")
+    return completion_response
+
+
+async def completion_response_stream(request: Request, gen_queue: GenQueue, model_name: str) -> AsyncIterator:
+    unique_id = get_response_uid()
     full_response = ""
     eos = False
-
     while not eos:
         accumulated_text = ""
         try:
-            # Process all available items in the queue
             while True:
                 result = gen_queue.get_nowait()
-
                 if isinstance(result, GenText):
                     accumulated_text += result.content
                 elif isinstance(result, GenEnd):
                     eos = True
                     gen_queue.task_done()
                     break
-                # Ignore GenStart and GenerationStats for completion endpoint
                 elif isinstance(result, (GenStart, GenerationStats)):
                     pass
-
         except asyncio.QueueEmpty:
             pass
-
         if accumulated_text:
             full_response += accumulated_text
-            yield {"data": accumulated_text}
-
+            chunk_data = CompletionStreamResponse(
+                id=unique_id,
+                object="text_completion",
+                created=int(time.time()),
+                model=model_name,
+                system_fingerprint="fp_44709d6fcb",
+                choices=[
+                    CompletionChoice(
+                        text=accumulated_text,
+                        index=0,
+                        logprobs=None,
+                        finish_reason=None
+                    )
+                ]
+            )
+            json_data = json.dumps(chunk_data.model_dump())
+            if json_data.strip():
+                logger.debug(f"Yielding: {json_data!r}")
+                yield json_data
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
-            yield {"data": "[DONE]"}
+            yield "[DONE]"
+            break
         else:
             try:
-                # Check for client disconnection
                 if await asyncio.wait_for(request.is_disconnected(), timeout=0.1):
                     logger.info("Client disconnected, stopping stream")
                     break
             except asyncio.TimeoutError:
-                # Client is still connected, continue processing
                 pass
-
-    # If we've broken out of the loop due to client disconnection, log it
     if not eos:
         logger.info("Stream ended before receiving GenEnd")
-
-async def completion_response(
-    # request: Request,     # TODO add request cancellation
-    gen_queue: GenQueue,
-):
-    response = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
-
-    eos = False
-    while not eos:
-        try:
-            result = gen_queue.get_nowait()
-
-            if isinstance(result, GenText):
-                response += result.content
-            elif isinstance(result, GenerationStats):
-                pass        # Not applicable for completion endpoint
-            elif isinstance(result, GenEnd):
-                eos = True
-                gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response.strip())
-
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
-
-    return {"response": response}
 
 async def get_response_from_queue(
     # request: Request,     # TODO add request cancellation

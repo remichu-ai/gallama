@@ -21,7 +21,12 @@ from .data_class import ModelParser
 
 class Model:
     """A model class that contain the llm and tokenizer"""
-    def __init__(self, model_spec:ModelParser, model_config: Dict, draft_model_config: Dict = {}):
+    def __init__(self,
+        model_spec:ModelParser,
+        model_config: Dict,
+        draft_model_config: Dict = {},
+        eos_token_list_from_prompt_template: List[str] = []
+    ):
         # model_spec capture cli argument
         # model_config is from yml file
         self.model_id = model_config["model_id"]
@@ -68,8 +73,8 @@ class Model:
             self.draft_cache = None
 
         # TODO, to auto detect
-        # get the eos_token_str
-        self.eos_token_str = model_config.get("eos_token_list", [])
+        # get the eos_token_str by merging the default config with anything set by user
+        self.eos_token_str = list(set(model_config.get("eos_token_list", []) + eos_token_list_from_prompt_template))
         self.eos_token_ids = self.generate_eos_tokens_id()
 
 

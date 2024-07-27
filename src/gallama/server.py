@@ -295,7 +295,7 @@ async def run_model(model: ModelParser):
             # Use the function
             app_path = get_package_file_path('app.py')
 
-            if model.model_type == "exllama":
+            if model.backend in ["exllama", "llama_cpp"]:
                 model_cli_args = model.to_arg_string()
                 logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
@@ -303,7 +303,7 @@ async def run_model(model: ModelParser):
                     stdout=asyncio.subprocess.DEVNULL,
                     # stderr=asyncio.subprocess.DEVNULL
                 )
-            elif model.model_type == "embedding":
+            elif model.backend in ["embedding"]:
                 # Create a copy of the current environment
                 env = os.environ.copy()
 
@@ -320,7 +320,7 @@ async def run_model(model: ModelParser):
                     env=env  # Pass the modified environment to the subprocess
                 )
             else:
-                raise ValueError(f"Unsupported model type: {model.model_type}")
+                raise ValueError(f"Unsupported model type: {model.backend}")
 
         except Exception as e:
             logger.error(f"Failed to create subprocess for model {model.model_id} on port {port}: {str(e)}")
