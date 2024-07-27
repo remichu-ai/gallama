@@ -4,14 +4,32 @@ from typing import Dict, Optional, List
 import re
 
 import os
-
+import sys
 # Get the directory of the current script
-current_dir = os.path.dirname(os.path.abspath(__file__))
-
+# current_dir = os.path.dirname(os.path.abspath(__file__))
+from pathlib import Path
 from pydantic import BaseModel, Field, validator
 from lxml import etree
 from typing import Dict, Optional, List, Any
 import re
+from .logger import logger
+
+def get_package_root():
+    """
+    Get the root directory of the installed package or the current script directory.
+    """
+    if getattr(sys, 'frozen', False):
+        # If the application is frozen (e.g., PyInstaller executable)
+        return Path(sys.executable).parent
+    elif __package__:
+        # If it's an installed package
+        return Path(__file__).parent
+    else:
+        # If it's a standalone script
+        return Path(__file__).resolve().parent
+
+# Use the function to get the package root
+current_dir = get_package_root()
 
 class Thinking:
     def __init__(self, xml: str, regex: Optional[str] = None, xml_is_file: bool = False, regex_is_file: bool = False):
@@ -115,6 +133,5 @@ def find_xml_regex_pairs(directory:str = f"{current_dir}/data/thinking_template/
 
     return thinking_dict
 
-THINKING_TEMPLATE = find_xml_regex_pairs()
-
+THINKING_TEMPLATE = find_xml_regex_pairs(f"{current_dir}/data/thinking_template/")
 

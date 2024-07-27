@@ -1,12 +1,22 @@
 import uuid
 from exllamav2 import ExLlamaV2Tokenizer
-from llama_cpp import Llama
 import yaml
 import base64
 import struct
 from lxml import etree
 from pathlib import Path
 
+# Lazy import for llama_cpp
+llama_cpp = None
+
+def import_llama_cpp():
+    global llama_cpp
+    if llama_cpp is None:
+        try:
+            import llama_cpp
+        except ImportError:
+            raise ImportError("llama_cpp is not installed. Please install it to use Llama models.")
+    return llama_cpp
 
 def get_response_uid():
     return "cmpl-" + str(uuid.uuid4().hex)
@@ -23,8 +33,13 @@ def get_token_length(tokenizer, text):
 
     if isinstance(tokenizer, ExLlamaV2Tokenizer):
         return tokenizer.num_tokens(str_text)
-    elif isinstance(tokenizer, Llama):
-        return len(tokenizer.tokenize(str_text.encode("utf-8"), add_bos=False))
+    elif type(tokenizer).__name__ == 'Llama':  # Check the type name instead of using isinstance
+        # this is because llama_cpp is optional dependency
+        try:
+            return len(tokenizer.tokenize(str_text.encode("utf-8"), add_bos=False))
+        except AttributeError:
+            # If tokenize method is not available, fallback to a general method
+            return len(tokenizer.encode(str_text))
     else:
         return len(tokenizer.encode(str_text))
 

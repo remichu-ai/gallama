@@ -1,8 +1,5 @@
-#from langchain_core.pydantic_v1 import BaseModel, Field, ValidationError
 from pydantic import BaseModel, Field, ValidationError, create_model
 from typing import Literal, Type, Union, Optional, List, Any, Dict
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.exceptions import OutputParserException
 
 
 class Tools:
@@ -18,65 +15,6 @@ class Tools:
     @property
     def tool_name_list(self):
         return ", ".join(self.tool_dict.keys())
-
-    # def set_answer_format(self, answer_format):
-    #     self.answer_format = answer_format
-    #     #self.json_parser = JsonOutputParser(pydantic_object=answer_format)
-
-    # @staticmethod
-    # def _validate_model(model: Type[BaseModel], input_dict: dict) -> str:
-    #     try:
-    #         # Create an instance of the model using the provided dictionary
-    #         model_object = model(**input_dict)
-    #         # If no errors, return an empty string
-    #         return ""
-    #     except ValidationError as e:
-    #         # If there are validation errors, return a string representation of these errors
-    #         return str(e)
-    #
-    # def parse_tools(self, full_text, tool_choice: Union[str, BaseModel]):
-    #
-    #     # test if tools response is valid JSON
-    #     try:
-    #         tool_parsed_response = self.json_parser.invoke(full_text)
-    #     except OutputParserException as e:
-    #         return full_text    # if fail to parse, return the answer as text
-    #
-    #     if tool_choice == "auto":
-    #         tool_parsed = tool_parsed_response['response']
-    #
-    #         if tool_parsed.get('answer'):
-    #             return tool_parsed['answer']
-    #     else:   # if the mode is not auto, there wont be a layer of answer but straight away fn calling
-    #         tool_parsed = tool_parsed_response
-    #
-    #     # if fulltext is valid JSON, continue to validate at individual tool level
-    #     # validation_starter = """
-    #     # The function in your response doesnt not follow the function schema correctly.
-    #     # Among the function calling in your answer, the following have validation error:\n"""
-    #     overall_validation_error = ""
-    #     for fn in tool_parsed['functions_calling']:
-    #         tool_used = self.tool_dict[fn['name']]
-    #         validation_error = self._validate_model(tool_used, fn['arguments'])
-    #         if validation_error != "":
-    #             # there is error when trying to parse this object
-    #             overall_validation_error = f"""{overall_validation_error}
-    #             parse the following function:
-    #             {str(fn['arguments'])}
-    #             into the function arguments schema:
-    #             {tool_used.schema()}
-    #             get following Validation error:
-    #             f{validation_error}\n\n
-    #             """
-    #
-    #     if overall_validation_error != "":
-    #         print("validation error for tool calling:")
-    #         print(overall_validation_error)
-    #         return full_text
-    #     else:
-    #         return tool_parsed
-
-
 
     @staticmethod
     def type_from_json_schema(schema: dict):

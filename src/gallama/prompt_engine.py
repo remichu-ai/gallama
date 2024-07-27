@@ -2,8 +2,7 @@ import json
 import yaml
 from typing import List, Dict
 from .data_class import BaseMessage, ChatMLQuery, ToolCall
-# from langchain.output_parsers import PydanticOutputParser
-from langchain_core.pydantic_v1 import BaseModel
+from pydantic import BaseModel
 from .logger import logger
 from copy import deepcopy
 from gallama.utils import parse_xml_to_dict
@@ -11,41 +10,7 @@ from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
 
-# class ToolCalling(BaseModel):
-#     """The format to use to call tool"""
-#     name: str = Field(description='name of the function to use')
-#     arguments: Dict[str, object] = Field(description='the arguments to pass to the function')
 
-
-# def get_engine(model_id: str):
-#     print(model_id)
-#     if 'llama-3' in model_id.lower():
-#         logger.info("Chat template llama-3")
-#         return Llama3()
-#     elif 'llama3.1' in model_id.lower():
-#         logger.info("Chat template llama-3.1")
-#         return Llama3_1()
-#     elif 'mixtral-8x22b' in model_id.lower() or "mistral-v0.3" in model_id.lower() or "wizard" in model_id.lower() or "codestral" in model_id.lower() :
-#         logger.info("Chat template mixtral tool")
-#         return Mixtral8x22B()
-#     elif 'mixtral' in model_id.lower() or 'mistral' in model_id.lower():
-#         logger.info("Chat template mixtral base")
-#         return Mistral()
-#     elif 'qwen2' in model_id.lower():
-#         logger.info("Chat template Qwen")
-#         return Qwen2()
-#     elif 'phi' in model_id.lower():
-#         logger.info("Chat template Phi")
-#         return Phi()
-#     elif 'yi' in model_id.lower():
-#         logger.info("Chat template Yi")
-#         return Yi()
-#     elif 'gemma-2' in model_id.lower():
-#         logger.info("Chat template Gemma2")
-#         return Gemma2()
-#     elif 'intern' in model_id.lower() or 'dbrx' in model_id.lower():
-#         logger.info("Chat template DBRX")
-#         return InternLM()
 
 class PromptEngine:
     def __init__(self, prompt_format: str):

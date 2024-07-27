@@ -2,7 +2,7 @@ import argparse
 import os
 import shutil
 from pathlib import Path
-import gallama
+# import gallama
 from gallama.logger import logger
 from gallama.server import run_from_script
 
@@ -73,7 +73,7 @@ def parse_dict(arg):
 
 def run_server(host, port):
     import uvicorn
-    from app import app
+    from .app import app
     uvicorn.run(app, host=host, port=port)
 
 def main_cli():

@@ -1,3 +1,4 @@
+# using absolute import here as this file will be run alone
 import torch
 import gc
 from fastapi import FastAPI, Request, APIRouter
@@ -15,7 +16,7 @@ from gallama.data_class import (
 import argparse
 from gallama.model import Model
 from gallama.prompt_engine import PromptEngine
-from gallama.chatgenerator import ChatGenerator, ChatGeneratorLlamaCpp
+from gallama.chatgenerator import ChatGenerator
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -30,6 +31,13 @@ from gallama.logger import get_logger
 import os
 import asyncio
 from contextlib import asynccontextmanager
+
+try:
+    from gallama.chatgenerator import ChatGeneratorLlamaCpp
+except ImportError:
+    # llama cpp optional dependancy
+    ChatGeneratorLlamaCpp = None
+
 
 # Add this after your imports to clear logging from 3rd party module
 

@@ -1,6 +1,5 @@
 import os
 from torch import cuda
-from llama_cpp import Llama
 # import transformers
 import torch
 # from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
@@ -17,6 +16,12 @@ from typing import List, Optional, Dict
 from .logger import logger
 from .data_class import ModelParser
 # from sentence_transformers import SentenceTransformer
+
+try:
+    from llama_cpp import Llama
+except:
+    # optional dependency
+    Llama = None
 
 
 class Model:

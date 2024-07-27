@@ -294,7 +294,7 @@ async def run_model(model: ModelParser):
         try:
             # Use the function
             app_path = get_package_file_path('app.py')
-
+            logger.info(f"Using app path: {app_path}")
             if model.backend in ["exllama", "llama_cpp"]:
                 model_cli_args = model.to_arg_string()
                 logger.debug(f"model cli: {model_cli_args}")

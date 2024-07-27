@@ -5,18 +5,8 @@ from lmformatenforcer.integrations.exllamav2 import (
     ExLlamaV2TokenEnforcerFilter,
     build_token_enforcer_tokenizer_data
 )
-from lmformatenforcer.integrations.llamacpp import (
-    build_llamacpp_logits_processor,
-    build_token_enforcer_tokenizer_data as build_token_enforcer_tokenizer_data_llama_cpp
-)
-
-from llama_cpp import LogitsProcessorList
-from lmformatenforcer import JsonSchemaParser, RegexParser
-from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from pydantic import BaseModel, Field, create_model
 from fastapi import HTTPException
-#from chat_response import chat_completion_response
-#from typing import Iterator
 from .model import Model
 from .data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
 from .tools import Tools, create_function_models_v1, create_function_models_v2
@@ -34,13 +24,27 @@ from dataclasses import dataclass
 import time
 from datetime import datetime
 from copy import deepcopy
-from gallama.utils import get_token_length, parse_xml_to_dict
+from .utils import get_token_length, parse_xml_to_dict
 from .logger import logger
 from .thinking_template import THINKING_TEMPLATE, Thinking
 import asyncio
 from .chat_response import chat_completion_response, get_response_from_queue
 import uuid
 import weakref
+from lmformatenforcer import JsonSchemaParser, RegexParser
+from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+
+try:
+    from llama_cpp import LogitsProcessorList
+    from lmformatenforcer.integrations.llamacpp import (
+        build_llamacpp_logits_processor,
+        build_token_enforcer_tokenizer_data as build_token_enforcer_tokenizer_data_llama_cpp
+    )
+except:
+    # llama_cpp optional dependency
+    build_llamacpp_logits_processor = None
+    build_token_enforcer_tokenizer_data_llama_cpp = None
+    LogitsProcessorList = None
 
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
