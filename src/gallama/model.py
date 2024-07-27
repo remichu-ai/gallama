@@ -117,7 +117,7 @@ class Model:
                 model.load_autosplit(cache, reserve_vram=reserve_vram, progress = True)
             elif isinstance(gpus, list):      # user specify the gpus split
                 logger.info("Custom GPU Allocation in GB: " + str(gpus))
-                model.load(gpu_split=gpus, reserve_vram=reserve_vram, progress = True)
+                model.load(gpu_split=gpus, progress = True)
                 cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
             else:
                 raise ValueError("Device map should be either 'auto', 'gpu' or 'exllama'")
