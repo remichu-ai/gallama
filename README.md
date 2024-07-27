@@ -101,7 +101,7 @@ print(completion.choices[0].message.content)
 Run multiple models (different or same) with automatic load balancing and request routing.
 
 ```shell
-gallama serve -id "model_id=mistral gpus=20,0,0,0" -id "model_id=Llama3.1-8B gpus=0,20,0,0"
+gallama serve -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
 
 ### OpenAI Embedding Endpoint
@@ -148,7 +148,7 @@ payload = [
         "cache_size": 32768,
     },
     {
-        "model_id": "/home/remichu/work/ML/model/multilingual-e5-large-instruct",
+        "model_id": "/home/model/multilingual-e5-large-instruct",
         "gpus": [0,0,0,1],
         "model_type": "embedding",
     },
