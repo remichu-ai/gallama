@@ -105,7 +105,7 @@ gallama serve -id "model_id=mistral gpus=20,0,0,0" -id "model_id=Llama3.1-8B gpu
 ```
 
 ### OpenAI Embedding Endpoint
-Utilize Infinity Embedding for both inference and embedding via a single URL.
+Utilize Infinity Embedding library for both inference and embedding via a single URL for OpenAI client.
 
 ```python
 response = client.embeddings.create(
