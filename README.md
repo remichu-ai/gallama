@@ -26,7 +26,7 @@ print(completion)
 ```
 
 ### Function Calling
-Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto".
+Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.
 
 ```python
 tools = [
