@@ -41,6 +41,7 @@ conda create --name genv python=3.11 conda activate genv
 - Follow instructions at [Flash Attention GitHub](https://github.com/Dao-AILab/flash-attention)
 
 4. (Optional) Install Llama CPP:
+- Follow instructions at [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
 - Note: ExllamaV2 is currently recommended. Llama CPP support is under development.
 
 5. Install gallama:
