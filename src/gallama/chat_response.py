@@ -28,6 +28,39 @@ import json
 import asyncio
 
 
+async def get_response_from_queue(
+    # request: Request,     # TODO add request cancellation
+    gen_queue: GenQueue,
+):
+    """ function to get the text generated in queue to be used for other part of the library"""
+    response = ""
+    # global result_queue
+    # completed_event = asyncio.Event()
+
+    eos = False
+    genStats = None
+    while not eos:
+        try:
+            result = gen_queue.get_nowait()
+
+            if isinstance(result, GenText):
+                response += result.content
+            elif isinstance(result, GenerationStats):
+                genStats = result
+            elif isinstance(result, GenStart):
+                pass
+            elif isinstance(result, GenEnd):
+                eos = True
+                gen_queue.task_done()
+                logger.info("----------------------LLM Response---------------\n" + response.strip())
+
+        except asyncio.QueueEmpty:
+            await asyncio.sleep(0.1)    # short sleep before trying again
+
+    return response, genStats
+
+
+
 async def chat_completion_response_stream(
         query: ChatMLQuery,
         gen_queue: GenQueue,
@@ -357,37 +390,6 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                 pass
     if not eos:
         logger.info("Stream ended before receiving GenEnd")
-
-
-async def get_response_from_queue(
-    # request: Request,     # TODO add request cancellation
-    gen_queue: GenQueue,
-):
-    response = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
-
-    eos = False
-    genStats = None
-    while not eos:
-        try:
-            result = gen_queue.get_nowait()
-
-            if isinstance(result, GenText):
-                response += result.content
-            elif isinstance(result, GenerationStats):
-                genStats = result
-            elif isinstance(result, GenStart):
-                pass
-            elif isinstance(result, GenEnd):
-                eos = True
-                gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response.strip())
-
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
-
-    return response, genStats
 
 
 async def chat_completion_response_artifact_stream(
