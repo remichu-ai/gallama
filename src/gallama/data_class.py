@@ -96,11 +96,13 @@ class ChatMLQuery(BaseModel):
     regex_prefix_pattern: Optional[constr(min_length=1)] = None  # regex to enforce in the beginning of the generation
     stop_words: Optional[List[str]] = None
     thinking_template: Optional[str] = None
+    artifact: Optional[Literal["No", "Normal", "Strict"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
-    #thinking_template: Optional[str] = DEFAULT_THINKING_DUAL_FORMAT  # the xml template for thinking
 
-    # not yet supported options from here
+
+    # not yet supported options from here # TODO
     max_tokens: Optional[int] = None
+    top_p: float = 1
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[int, float]] = {}
     top_logprob: int = None
@@ -109,8 +111,7 @@ class ChatMLQuery(BaseModel):
     response_format: Optional[ResponseFormat] = None
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
-    top_p: float = 1
-    user: str = None
+
 
     @validator('regex_pattern', 'regex_prefix_pattern')
     def validate_regex(cls, v):
@@ -159,6 +160,7 @@ class ChatMessage(BaseModel):
     name: Optional[str] = None
     # function_call: Optional[ToolCalling] = None   # depreciated
     tool_calls: Optional[List[ToolCallResponse]] = None
+    artifact_type: str = None
 
     def __str__(self) -> str:
         if self.role == "system":
@@ -222,11 +224,13 @@ class ChatCompletionResponse(BaseModel):
     choices: List[Union[Choice, StreamChoice]]
     usage: UsageResponse = None
 
+
 class CompletionChoice(BaseModel):
     text: str
     index: int
     logprobs: Optional[dict] = None
     finish_reason: Optional[str] = None
+
 
 class CompletionResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"cmpl-{uuid.uuid4().hex}")
@@ -236,6 +240,7 @@ class CompletionResponse(BaseModel):
     system_fingerprint: str = Field(default="fp_44709d6fcb")
     choices: List[CompletionChoice]
     usage: Optional[UsageResponse] = None
+
 
 class CompletionStreamResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"cmpl-{uuid.uuid4().hex}")

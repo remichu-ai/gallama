@@ -23,8 +23,14 @@ from sse_starlette.sse import EventSourceResponse
 import json
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from gallama.chat_response import chat_completion_response_stream, completion_response_stream, completion_response, chat_completion_response
-# from embedding import EmbeddingModel
+from gallama.chat_response import (
+    chat_completion_response_stream,
+    completion_response_stream,
+    completion_response,
+    chat_completion_response,
+    chat_completion_response_artifact_stream,
+    chat_completion_response_artifact
+)
 from gallama.config_manager import ConfigManager
 from logging import DEBUG
 from gallama.logger import get_logger
@@ -107,6 +113,7 @@ async def result_generator(gen_queue):
     await completed_event.wait()
 
 
+# noinspection PyAsyncCall
 @router.post("/v1/chat/completions")
 async def chat_completion(request: Request, query: ChatMLQuery):
     # https://platform.openai.com/docs/api-reference/chat/create
@@ -133,12 +140,24 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             gen_queue = gen_queue,
         ))
 
+        # send the response to client
         if query.stream:
             # EventSourceResponse take iterator so need to handle at here
-            return EventSourceResponse(chat_completion_response_stream(query=query, gen_queue=gen_queue, model_name=model_name_to_use))
+            if query.artifact == "No":     # not using artefact
+                return EventSourceResponse(
+                    chat_completion_response_stream(
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                    ))
+            else:
+                return EventSourceResponse(
+                    chat_completion_response_artifact_stream(
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                    ))
         else:
-            return await chat_completion_response(gen_queue=gen_queue, model_name=model_name_to_use)
-
+            if query.artifact == "No":     # not using artefact
+                return await chat_completion_response(gen_queue=gen_queue, model_name=model_name_to_use)
+            else:
+                return await chat_completion_response_artifact(gen_queue=gen_queue, model_name=model_name_to_use)
     except HTTPException as e:
         logger.error(e)
         return e
