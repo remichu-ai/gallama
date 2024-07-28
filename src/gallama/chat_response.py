@@ -318,7 +318,7 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                     gen_queue.task_done()
                     break
                 elif isinstance(result, (GenStart, GenerationStats)):
-                    pass
+                    logger.info(f"{model_name} | LLM speed {result.generation_speed:.1f}/s tokens")
         except asyncio.QueueEmpty:
             pass
         if accumulated_text:
@@ -355,6 +355,7 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                 pass
     if not eos:
         logger.info("Stream ended before receiving GenEnd")
+
 
 async def get_response_from_queue(
     # request: Request,     # TODO add request cancellation

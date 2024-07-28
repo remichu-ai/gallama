@@ -36,7 +36,7 @@
 #  backend: 'exllama'
 #  gpus: "auto"
 #  cache_quant: 'Q4'
-#  prompt_template: Mistral
+#  prompt_template: Mistral_Large
 #  max_seq_len: 32768
 
 ### End of Format instruction. ###
