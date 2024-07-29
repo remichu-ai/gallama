@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator
 from typing import Optional, Literal, List, Dict, Union, Any, Type
 import asyncio
 import uuid
@@ -7,7 +7,7 @@ import torch
 import ast
 import re
 from .logger import logger
-
+from . stream_parser import TextTag, ArtifactTag
 
 class Query(BaseModel):
     prompt: str
@@ -91,9 +91,10 @@ class ChatMLQuery(BaseModel):
     tool_call_id: Optional[str] = None
 
     # not part of openai api
-    leading_prompt: Optional[str] = ""
+    leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the generated response")
+    prefix_strings: Optional[Union[str, List[str]]] = Field(default=None, description="String or list of strings to start the generation with. Can not be used together with regex_prefix_pattern")
     regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
-    regex_prefix_pattern: Optional[constr(min_length=1)] = None  # regex to enforce in the beginning of the generation
+    regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = None
     thinking_template: Optional[str] = None
     artifact: Optional[Literal["No", "Normal", "Strict"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
@@ -122,6 +123,7 @@ class ChatMLQuery(BaseModel):
             except re.error as e:
                 raise ValueError(f'Invalid regex pattern: {e}')
         return v
+
 
 
 # from here on is answer model for response to api request
@@ -160,7 +162,7 @@ class ChatMessage(BaseModel):
     name: Optional[str] = None
     # function_call: Optional[ToolCalling] = None   # depreciated
     tool_calls: Optional[List[ToolCallResponse]] = None
-    artifact_type: str = None
+    artifact_meta: Union[TextTag, ArtifactTag] = None
 
     def __str__(self) -> str:
         if self.role == "system":

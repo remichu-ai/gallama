@@ -1,5 +1,5 @@
 # generator.py
-from typing import List, Dict, Union, Literal, Type, AsyncIterator
+from typing import List, Dict, Union, Literal, Type, AsyncIterator, Optional
 import transformers
 from lmformatenforcer.integrations.exllamav2 import (
     ExLlamaV2TokenEnforcerFilter,
@@ -153,7 +153,6 @@ class ChatGenerator(Model):
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
 
-
             thinking_queue = GenQueue()
             queue_group = [
                 QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
@@ -189,11 +188,13 @@ class ChatGenerator(Model):
                 gen_queue=queue_group,
                 temperature=query.temperature,
                 lm_enforcer_parser=lm_enforcer_parser_prefix_regex,
+                prefix_strings=query.prefix_strings,
                 # stop_words=query.stop_words,
             )
 
             first_response, _ = await get_response_from_queue(prefix_queue)
 
+            # append generated content to the full prompt
             prompt = prompt.strip() + first_response.strip()
 
         await self.generate(
@@ -204,6 +205,7 @@ class ChatGenerator(Model):
                 'lm_enforcer_parser': lm_enforcer_parser_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
+                'prefix_strings': None if query.regex_prefix_pattern else query.prefix_strings,   # already generated as part of the prefix string
             }
         )
 
@@ -337,7 +339,7 @@ class ChatGenerator(Model):
                 gen_type=GenStart(gen_type="tool"),
                 temperature=query.temperature,
                 # stop_words=TOOL_THINKING.root_key_stop_words,
-                prefix_string=["{", " {", "\n{"],
+                prefix_strings=["{", " {", "\n{"],
                 lm_enforcer_parser=lm_enforcer_parser,  # no longer enforce format
                 max_tokens=query.max_tokens,
             )
@@ -355,6 +357,7 @@ class ChatGenerator(Model):
                     gen_queue=gen_queue,
                     gen_type=GenStart(gen_type="text"),
                     temperature=query.temperature,
+                    prefix_strings=query.prefix_strings,
                     max_tokens=query.max_tokens,
                 )
             else:
@@ -441,7 +444,7 @@ class ChatGenerator(Model):
         temperature: float = 0.01,
         lm_enforcer_parser: TokenEnforcerTokenizerData = None,
         stop_words: Union[List[str], str] = None,
-        prefix_string: List[str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
         max_tokens: int = None,
         **kwargs,
     ) -> (str, GenerationStats):
@@ -479,13 +482,13 @@ class ChatGenerator(Model):
         self.validate_token_length(len(input_ids[0]))
 
         # format enforcer
-        filters = None
+        filters = []
         if lm_enforcer_parser:
             filters = [ExLlamaV2TokenEnforcerFilter(lm_enforcer_parser, self.pipeline.lm_enforcer_tokenizer_data)]
 
-        if prefix_string:
-            assert isinstance(prefix_string, list) and len(prefix_string) > 0
-            filters.append(ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_string))
+        if prefix_strings:
+            assert isinstance(prefix_strings, str) or (isinstance(prefix_strings, list) and len(prefix_strings) > 0)
+            filters.append(ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_strings))
 
         # find stop conditions
         if stop_words:

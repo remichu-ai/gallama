@@ -94,6 +94,10 @@ def validate_api_request(query: ChatMLQuery):
     else:
         query.tool_choice = "none"
 
+    # validate that prefix_strings and regex_prefix_pattern  or regex_pattern can not be used together
+    if query.prefix_strings and (query.regex_pattern or query.regex_prefix_pattern):
+        raise HTTPException(status_code=400, detail="refix_strings and regex_pattern, regex_prefix_pattern can not be used together")
+
     return query
 
 
@@ -118,13 +122,14 @@ async def result_generator(gen_queue):
 async def chat_completion(request: Request, query: ChatMLQuery):
     # https://platform.openai.com/docs/api-reference/chat/create
 
-    # validate and fix query
-    query = validate_api_request(query)
 
     global llm_dict, default_model_name
     gen_queue = GenQueue()      # this queue will hold the result for this generation
 
     try:
+        # validate and fix query
+        query = validate_api_request(query)
+
         if llm_dict.get(query.model):
             model_name_to_use = query.model
         else:

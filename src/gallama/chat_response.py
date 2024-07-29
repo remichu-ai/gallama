@@ -157,7 +157,7 @@ async def chat_completion_response_stream(
                         )
                     ],
                 )
-                yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
 
         if eos:
             # Log the full response at the end
@@ -176,7 +176,7 @@ async def chat_completion_response_stream(
                         total_tokens=gen_stats.total_tokens_count,
                     ),
                 )
-                yield {"data": json.dumps(usage_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
 
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
@@ -303,7 +303,7 @@ async def chat_completion_response(
         )
 
     assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.dict(), indent=2))
+    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
     logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
     return response_obj
@@ -339,6 +339,7 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
     unique_id = get_response_uid()
     full_response = ""
     eos = False
+    gen_stats = None
     while not eos:
         accumulated_text = ""
         try:
@@ -353,7 +354,7 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                 elif isinstance(result, GenStart):
                     pass
                 elif isinstance(result, GenerationStats):
-                    logger.info(f"{model_name} | LLM speed {result.generation_speed:.1f}/s tokens")
+                    gen_stats = result
         except asyncio.QueueEmpty:
             pass
         if accumulated_text:
@@ -379,6 +380,8 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                 yield json_data
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
+            if gen_stats is not None:
+                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
             yield "[DONE]"
             break
         else:
@@ -413,15 +416,6 @@ async def chat_completion_response_artifact_stream(
     content_type = None    # either text or code
 
     while not eos:
-        # Logging to troubleshoot if queue build up
-        # current_time = time.time()
-        #
-        # # Log queue size every 5 seconds
-        # if current_time - last_log_time >= log_interval:
-        #     queue_size = gen_queue.qsize()
-        #     logger.info(f"Queue size: {queue_size}")
-        #     last_log_time = current_time
-
         accumulated_text = ""
         try:
             # Collect all available items from the queue
@@ -443,52 +437,28 @@ async def chat_completion_response_artifact_stream(
             full_response += accumulated_text
 
             if gen_type == "text":
+                parsed_chunks = artifact_parser.process_stream(accumulated_text)
 
-                if not malformed_data:
-                    parsed_chunks = artifact_parser.process_stream(accumulated_text)
+                for chunk_type, chunk_content in parsed_chunks:
+                    if chunk_content:
+                        chunk_data = ChatCompletionResponse(
+                            unique_id=unique_id,
+                            model=model_name,
+                            object="chat.completion.chunk",
+                            created=created,
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta=ChatMessage(
+                                        role="assistant",
+                                        content=chunk_content,
+                                        artifact_meta=chunk_type.model_dump()
 
-                    for chunk_type, chunk_content in parsed_chunks:
-                        if chunk_content:
-                            chunk_data = ChatCompletionResponse(
-                                unique_id=unique_id,
-                                model=model_name,
-                                object="chat.completion.chunk",
-                                created=created,
-                                choices=[
-                                    StreamChoice(
-                                        index=0,
-                                        delta=ChatMessage(
-                                            role="assistant",
-                                            content=chunk_content,
-                                            artifact_type=chunk_type
-                                        ),
                                     ),
-                                ],
-                            )
-                            yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
-
-                if not artifact_parser.current_content_type and len(artifact_parser.buffer) > MALFORMED_CHECK_LENGTH:
-                    malformed_data = True
-
-                if malformed_data:
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChatMessage(
-                                    role="assistant",
-                                    content=accumulated_text,
-                                    artifact_type="text",
                                 ),
-                            )
-                        ],
-                    )
-                    yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
-                    buffer = ""
+                            ],
+                        )
+                        yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
 
             elif gen_type == "tool":
                 # artifact do not affect tool usage
@@ -544,7 +514,7 @@ async def chat_completion_response_artifact_stream(
                         total_tokens=gen_stats.total_tokens_count,
                     ),
                 )
-                yield {"data": json.dumps(usage_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
 
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
@@ -627,6 +597,7 @@ async def chat_completion_response_artifact(
             ),
         )
 
+
     elif gen_type.gen_type == "tool":
         try:
             response_dict = json.loads(response)
@@ -688,7 +659,7 @@ async def chat_completion_response_artifact(
         )
 
     assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.dict(), indent=2))
+    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
     logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
     return response_obj

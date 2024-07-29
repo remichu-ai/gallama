@@ -452,11 +452,24 @@ async def forward_request(request: Request, instance: ModelInstanceInfo) -> Unio
                 logger.error(f"An error occurred while forwarding the request to instance at port {instance.port}: {exc}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
-async def stream_response(method: str, url: str, headers: dict, body: bytes):
-    async with httpx.AsyncClient() as client:
-        async with client.stream(method, url, headers=headers, content=body, timeout=None) as response:
-            async for chunk in response.aiter_bytes():
-                yield chunk
+
+async def stream_response(method: str, url: str, headers: dict, body: bytes):   # TODO currently error while streaming was not returned to client
+    try:
+        async with httpx.AsyncClient() as client:
+            async with client.stream(method, url, headers=headers, content=body, timeout=None) as response:
+                if response.status_code >= 400:
+                    error_message = json.dumps({"error": f"Server responded with status code: {response.status_code}"})
+                    yield error_message.encode('utf-8')
+                    return
+
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+    except httpx.RequestError as exc:
+        error_message = json.dumps({"error": f"An error occurred: {str(exc)}"})
+        yield error_message.encode('utf-8')
+    except Exception as exc:
+        error_message = json.dumps({"error": f"An unexpected error occurred: {str(exc)}"})
+        yield error_message.encode('utf-8')
 
 def create_options_response(headers: dict) -> Response:
     options_headers = {

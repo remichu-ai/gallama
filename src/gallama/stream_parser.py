@@ -1,105 +1,101 @@
 import re
-from typing import List, Tuple, Optional, Literal
+from typing import List, Tuple, Optional, Literal, Union
+from xml.etree import ElementTree as ET
+from pydantic import BaseModel
+
+
+class TextTag(BaseModel):
+    tag_type: Literal["text"] = "text"
+
+
+class ArtifactTag(BaseModel):
+    tag_type: Literal["artifact"] = "artifact"
+    artifact_type: Literal["code", "self_contained_text"]
+    identifier: str
+    title: str
+    language: Optional[str] = None
 
 
 class StreamParser:
-    """
-    A parser for processing streamed or full responses containing content blocks of different types.
-    """
-
-    def __init__(self, quote_type: Literal["'''", '"""'] = "'''"):
-        """
-        Initialize the StreamParser with a specific quote type.
-
-        :param quote_type: The type of quotes used to delimit content blocks.
-        """
-        self.quote_type = quote_type
-        # Regex to match the start of a content block
-        self.object_start_pattern = re.compile(r'\s*{\s*"content_type"\s*:\s*"(\w+)"\s*,\s*"content"\s*:\s*r' + quote_type)
-        # Regex to match the end of a content block
-        self.content_end_pattern = re.compile(quote_type + r'\s*}\s*,?\s*')
+    def __init__(self):
         self.buffer = ""
-        self.current_content_type = None
+        self.current_element = None
+        self.current_tag = None
         self.current_content = ""
+        self.MALFORMED_CHECK_LENGTH = 300
+        self.in_answer_tag = False
+        self.root_key = "<answer>"
+        self.tag_pattern = re.compile(r'(<artifact\s+(?:(?:identifier|type|title|language)="[^"]*"\s*)*>)|(<text>)')
 
-    def process_stream(self, new_data: str) -> List[Tuple[Optional[Literal['text', 'code']], str]]:
-        """
-        Process a chunk of streamed data, extracting content blocks.
-
-        :param new_data: New chunk of data to process.
-        :return: List of tuples containing content type and content.
-        """
+    def process_stream(self, new_data: str) -> List[Tuple[Union[TextTag, ArtifactTag], str]]:
         self.buffer += new_data
         results = []
-        last_processed_index = 0  # Track the end of the last processed content
 
         while True:
-            if self.current_content_type is None:
-                # Look for the start of a new content block
-                match = self.object_start_pattern.search(self.buffer, last_processed_index)
-                if match:
-                    self.current_content_type = match.group(1)
-                    content_start = self.buffer.index(self.quote_type, match.start()) + len(self.quote_type)
-                    last_processed_index = content_start
-                    self.current_content = ""
+            if not self.in_answer_tag:
+                start_index = self.buffer.find(self.root_key)
+                if start_index != -1:
+                    self.buffer = self.buffer[start_index + len(self.root_key):]
+                    self.in_answer_tag = True
+                elif len(self.buffer) >= self.MALFORMED_CHECK_LENGTH:
+                    results.append((TextTag(), self.buffer))
+                    self.buffer = ""
                 else:
-                    break
-            else:
-                # Look for the end of the current content block
-                end_match = self.content_end_pattern.search(self.buffer, last_processed_index)
-                if end_match:
-                    content_end = end_match.start()
-                    self.current_content += self.buffer[last_processed_index:content_end]
-                    results.append((self.current_content_type, self.current_content))
-                    last_processed_index = end_match.end()
-                    self.current_content_type = None
-                    self.current_content = ""
-                else:
-                    # Append incremental content to current_content
-                    self.current_content += self.buffer[last_processed_index:]
-                    results.append((self.current_content_type, self.buffer[last_processed_index:]))
-                    last_processed_index = len(self.buffer)
                     break
 
-        # Remove processed content from the buffer
-        self.buffer = self.buffer[last_processed_index:]
+            if self.current_element is None:
+                match = self.tag_pattern.search(self.buffer)
+                if match:
+                    element_type = "artifact" if match.group(1) else "text"
+                    start_index = match.start()
+                    tag_length = match.end() - match.start()
+
+                    self.current_element = element_type
+                    if element_type == "artifact":
+                        self.current_tag = self._parse_artifact_tag(self.buffer[start_index:match.end()])
+                    else:
+                        self.current_tag = TextTag()
+
+                    self.buffer = self.buffer[start_index + tag_length:]
+                    self.current_content = ""
+                elif len(self.buffer) >= self.MALFORMED_CHECK_LENGTH:
+                    results.append((TextTag(), self.buffer))
+                    self.buffer = ""
+                else:
+                    break
+            elif len(self.buffer) <= len(f'</{self.current_element}>'):
+                break
+            else:
+                end_tag = f'</{self.current_element}>'
+                end_index = self.buffer.find(end_tag)
+                if end_index != -1:
+                    content = self.buffer[:end_index]
+                    results.append((self.current_tag, content))
+                    self.buffer = self.buffer[end_index + len(end_tag):]
+                    self.current_element = None
+                    self.current_tag = None
+                    self.current_content = ""
+                else:
+                    if self.buffer:
+                        content_chunk = self.buffer[:len(self.buffer) - len(end_tag)]
+                        self.buffer = self.buffer[len(self.buffer) - len(end_tag):]
+                        results.append((self.current_tag, content_chunk))
+                    break
+
         return results
+
+    def _parse_artifact_tag(self, tag_content: str) -> ArtifactTag:
+        attributes = re.findall(r'(\w+)="([^"]*)"', tag_content)
+        attr_dict = dict(attributes)
+        return ArtifactTag(
+            artifact_type=attr_dict.get('type', 'code'),
+            identifier=attr_dict.get('identifier', ''),
+            title=attr_dict.get('title', ''),
+            language=attr_dict.get('language')
+        )
 
     def get_current_state(self) -> Tuple[Optional[str], str]:
-        """
-        Get the current state of parsing.
+        return self.current_element, self.current_content
 
-        :return: Tuple of current content type and current content.
-        """
-        return self.current_content_type, self.current_content
-
-    def parse_full_response(self, response: str) -> List[Tuple[Optional[Literal['text', 'code']], str]]:
-        """
-        Parse a complete response, extracting all content blocks.
-
-        :param response: The full response string to parse.
-        :return: List of tuples containing content type and content.
-        """
-        self.buffer = response
-        results = []
-        last_processed_index = 0
-
-        while last_processed_index < len(self.buffer):
-            # Look for the start of a content block
-            match = self.object_start_pattern.search(self.buffer, last_processed_index)
-            if match:
-                content_type = match.group(1)
-                content_start = self.buffer.index(self.quote_type, match.start()) + len(self.quote_type)
-                # Look for the end of the content block
-                end_match = self.content_end_pattern.search(self.buffer, content_start)
-                if end_match:
-                    content_end = end_match.start()
-                    content = self.buffer[content_start:content_end]
-                    results.append((content_type, content))
-                    last_processed_index = end_match.end()
-                else:
-                    break  # Incomplete content block, stop parsing
-            else:
-                break  # No more content blocks found
-
-        return results
+    def parse_full_response(self, response: str) -> List[Tuple[Union[TextTag, ArtifactTag], str]]:
+        return self.process_stream(response)
