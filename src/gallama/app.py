@@ -195,8 +195,6 @@ async def generate(request: Request, query: GenerateQuery):
         return await completion_response(gen_queue, model_name=model_name_to_use)
 
 
-
-
 @router.get("/v1/models")
 async def get_models(request: Request):
     data = []

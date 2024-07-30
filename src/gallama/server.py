@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from .data_class import ModelParser, SpeculativeDecodingParser
-from typing import List, Dict
+from typing import List, Dict, Optional
 import random
 import psutil
 import asyncio
@@ -48,6 +48,7 @@ class ModelInstanceInfo(BaseModel):
     port: int
     pid: int  # Changed from process to pid
     status: str
+    embedding: bool = False
 
     class Config:
         # Override protected namespaces to suppress warning
@@ -69,6 +70,8 @@ START_PORT = 8001
 
 # Increase the timeout for long-running tasks (adjust as needed)
 TIMEOUT = 300  # 5 minutes
+
+strict_mode = False
 
 # List of endpoints to exclude from API gateway redirection
 EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models"]
@@ -329,7 +332,13 @@ async def run_model(model: ModelParser):
         # Wait for the model to become ready
         if await wait_for_model_ready(port):
             logger.info(f"Model {model.model_name} on port {port} is ready")
-            instance_info = ModelInstanceInfo(port=port, pid=process.pid, status="running", model_id=model.model_id)
+            instance_info = ModelInstanceInfo(
+                port=port,
+                pid=process.pid,
+                status="running",
+                model_id=model.model_id,
+                embedding=model.backend == "embedding"
+            )
             models[model.model_name].instances.append(instance_info)
         else:
             logger.error(f"Timeout waiting for model {model.model_name} on port {port} to become ready")
@@ -471,6 +480,7 @@ async def stream_response(method: str, url: str, headers: dict, body: bytes):   
         error_message = json.dumps({"error": f"An unexpected error occurred: {str(exc)}"})
         yield error_message.encode('utf-8')
 
+
 def create_options_response(headers: dict) -> Response:
     options_headers = {
         "Access-Control-Allow-Origin": headers.get("Origin", "*"),
@@ -531,7 +541,6 @@ async def add_model(model_request: Union[ModelParser, List[ModelParser]]):
         return {"message": f"Model {model_request} instance queued for loading"}
 
 
-
 @manager_app.post("/remove_model")
 async def remove_model(model_request: ModelRequest):
     if model_request.model_id not in models:
@@ -569,34 +578,30 @@ async def load_balanced_router(request: Request, path: str):
     async with request_semaphore:
         is_embedding = any(subpath["original"] in path for subpath in EMBEDDING_SUBPATHS)
 
-        if not model or model not in models:
-            if len(models) > 0:
-                if is_embedding:
-                    # For embedding requests, select a random instance with a matching name
-                    matching_instances = [inst for model_info in models.values() for inst in model_info.instances
-                                          if inst.status == "running" and inst.model_id == model]
-                    if not matching_instances:
-                        raise HTTPException(status_code=503, detail="No running instances available for this model")
-                    instance = random.choice(matching_instances)
-                else:
-                    # For non-embedding requests, select the instance with the least active connections across all models
-                    all_instances = [inst for model_info in models.values() for inst in model_info.instances if inst.status == "running"]
-                    if not all_instances:
-                        raise HTTPException(status_code=503, detail="No running instances available")
-                    instance = min(all_instances, key=lambda inst: active_requests[inst.port])
-            else:
-                raise HTTPException(status_code=400, detail="Invalid or missing model in request body")
-        else:
-            running_instances = [inst for inst in models[model].instances if inst.status == "running"]
-            if not running_instances:
-                raise HTTPException(status_code=503, detail="No running instances available for this model")
+        if not model and strict_mode:
+            raise HTTPException(status_code=400, detail="Model must be specified in strict mode")
 
+        available_instances = []
+
+        if strict_mode:
+            if model not in models:
+                raise HTTPException(status_code=404, detail="Specified model not found")
+            available_instances = [inst for inst in models[model].instances if inst.status == "running"]
+        else:
             if is_embedding:
-                # For embedding requests, select a random instance with a matching name
-                instance = random.choice(running_instances)
+                # For embedding requests, select instances with matching model name
+                available_instances = [inst for model_info in models.values() for inst in model_info.instances
+                                       if inst.status == "running" and (not model or inst.model_id == model)]
             else:
-                # For other requests, select the instance with the least active requests
-                instance = min(running_instances, key=lambda inst: active_requests[inst.port])
+                # For non-embedding requests, select all non-embedding instances
+                available_instances = [inst for model_info in models.values() for inst in model_info.instances
+                                       if inst.status == "running" and not inst.embedding]
+
+        if not available_instances:
+            raise HTTPException(status_code=503, detail="No suitable running instances available")
+
+        # Select the instance with the least active requests
+        instance = min(available_instances, key=lambda inst: active_requests[inst.port])
 
         # Increment the active request count for the selected instance
         async with active_requests_lock:
@@ -604,7 +609,7 @@ async def load_balanced_router(request: Request, path: str):
 
         try:
             logger.info(f"active_requests: {str(active_requests)}")
-            logger.info(f"Request routed to model {model if model else 'unspecified'} instance at port {instance.port}")
+            logger.info(f"Request routed to model {instance.model_id} instance at port {instance.port}")
 
             # Forward the request
             response = await forward_request(request, instance)
@@ -613,7 +618,7 @@ async def load_balanced_router(request: Request, path: str):
         finally:
             # Decrement the active request count after the request is completed
             async with active_requests_lock:
-                active_requests[instance.port] += 1
+                active_requests[instance.port] -= 1
 
 
 @manager_app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
@@ -696,6 +701,11 @@ def run_from_script(args):
     # opening llama picture cause why not
     llama_picture()
 
+    global strict_mode
+
+    if args.strict_mode:
+        strict_mode = True
+
     # parse the cli input
     model_list = []
     if args.model_id:
@@ -713,6 +723,7 @@ def run_from_script(args):
     else:
         logger.setLevel(INFO)
 
+
     logger.info("Parsed Arguments:" + str(args))
 
     asyncio.run(
@@ -728,6 +739,8 @@ if __name__ == "__main__":
 
     logger.info("Script started")
     arg_parser = argparse.ArgumentParser(description="Launch multi model src instance")
+    arg_parser.add_argument("--strict_mode", action="store_true", default=False,
+                            help="Enable strict mode for routing non-embedding requests to matching model names")
     arg_parser.add_argument("-id", "--model_id", action='append', type=parse_dict, default=None,
                             help="Model configuration. Can be used multiple times for different models. "
                                  "Format: -id model_id=<model_name> [gpu=<vram1>,<vram2>,...] [gpu<n>=<vram>] [cache=<size>] [model_type=exllama|embedding]"
@@ -744,8 +757,7 @@ if __name__ == "__main__":
     arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
-    arg_parser.add_argument("--strict_mode", action="store_true", default=False,
-                            help="Enable strict mode for routing non-embedding requests to matching model names")
+
     # arg_parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
 
     args = arg_parser.parse_args()

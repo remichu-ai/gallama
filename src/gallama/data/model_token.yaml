@@ -86,6 +86,7 @@ Qwen2:
   tool_result_start: ''
   tool_result_end: ''
   leading_prompt_token: '<|im_start|>assistant\n'
+  eos_token_list: ["<|im_end|>", "<|endoftext|>", "<|im_start|>"]
 
 Yi1.5:
   system_msg_enabled: false

@@ -24,18 +24,23 @@ class StreamParser:
         self.current_content = ""
         self.MALFORMED_CHECK_LENGTH = 300
         self.in_answer_tag = False
+        self.xml_prefix = "```xml\n"
         self.root_key = "<answer>"
+        self.full_root_key = f"{self.xml_prefix}{self.root_key}"
         self.tag_pattern = re.compile(r'(<artifact\s+(?:(?:identifier|type|title|language)="[^"]*"\s*)*>)|(<text>)')
+        self.comment_pattern = re.compile(r'<!--.*?-->', re.DOTALL)
 
     def process_stream(self, new_data: str) -> List[Tuple[Union[TextTag, ArtifactTag], str]]:
         self.buffer += new_data
+        self.remove_comments()
+
         results = []
 
         while True:
             if not self.in_answer_tag:
-                start_index = self.buffer.find(self.root_key)
+                start_index = self.buffer.find(self.full_root_key)
                 if start_index != -1:
-                    self.buffer = self.buffer[start_index + len(self.root_key):]
+                    self.buffer = self.buffer[start_index + len(self.full_root_key):]
                     self.in_answer_tag = True
                 elif len(self.buffer) >= self.MALFORMED_CHECK_LENGTH:
                     results.append((TextTag(), self.buffer))
@@ -84,6 +89,10 @@ class StreamParser:
 
         return results
 
+    def remove_comments(self):
+        comment_pattern = re.compile(r'<!--.*?-->', re.DOTALL)
+        self.buffer = comment_pattern.sub('', self.buffer)
+
     def _parse_artifact_tag(self, tag_content: str) -> ArtifactTag:
         attributes = re.findall(r'(\w+)="([^"]*)"', tag_content)
         attr_dict = dict(attributes)
@@ -98,4 +107,7 @@ class StreamParser:
         return self.current_element, self.current_content
 
     def parse_full_response(self, response: str) -> List[Tuple[Union[TextTag, ArtifactTag], str]]:
+        if not response.startswith(self.xml_prefix):
+            response = f"{self.xml_prefix}{response}"
+        response = self.comment_pattern.sub('', response)
         return self.process_stream(response)

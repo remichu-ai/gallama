@@ -97,7 +97,7 @@ class ChatMLQuery(BaseModel):
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = None
     thinking_template: Optional[str] = None
-    artifact: Optional[Literal["No", "Normal", "Strict"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
+    artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
 
 

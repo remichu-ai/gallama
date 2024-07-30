@@ -530,6 +530,7 @@ async def chat_completion_response_artifact(
         model_name: str,
 ) -> ChatCompletionResponse:
     response = ""
+    response_obj = None
     gen_type = GenStart(gen_type="text")
     gen_stats = None
     eos = False
@@ -567,7 +568,7 @@ async def chat_completion_response_artifact(
                         message=ChatMessage(
                             role="assistant",
                             content=chunk_content,
-                            artifact_type=chunk_type
+                            artifact_meta=chunk_type.model_dump()
                         ),
                         finish_reason="stop"
                     )
@@ -580,7 +581,7 @@ async def chat_completion_response_artifact(
                     message=ChatMessage(
                         role="assistant",
                         content=response,
-                        artifact_type="text"
+                        artifact_meta=TextTag().model_dump()
                     ),
                     finish_reason="stop"
                 )
@@ -597,12 +598,11 @@ async def chat_completion_response_artifact(
             ),
         )
 
-
     elif gen_type.gen_type == "tool":
         try:
             response_dict = json.loads(response)
         except:
-            # since out put is not tool, return it as text instead #TODO find better solution
+            # since output is not tool, return it as text instead #TODO find better solution
             response_obj = ChatCompletionResponse(
                 unique_id=unique_id,
                 model=model_name,
@@ -612,6 +612,7 @@ async def chat_completion_response_artifact(
                         message=ChatMessage(
                             role="assistant",
                             content=response,
+                            artifact_meta=TextTag().model_dump()
                         ),
                         finish_reason="stop",
                     )
@@ -622,41 +623,41 @@ async def chat_completion_response_artifact(
                     total_tokens=gen_stats.total_tokens_count,
                 ),
             )
-
-        # successfully parse JSON, convert the tool used into response format
-        tools_list = []  # the list of tool to call
-        for index, tool in enumerate(response_dict['functions_calling']):
-            tool_id = get_response_tool_uid()
-            tools_list.append(
-                ToolCallResponse(
-                    id=tool_id,
-                    index=index,
-                    function=OneTool(
-                        name=tool['name'],
-                        arguments=json.dumps(tool['arguments']),
+        else:
+            # successfully parse JSON, convert the tool used into response format
+            tools_list = []  # the list of tool to call
+            for index, tool in enumerate(response_dict['functions_calling']):
+                tool_id = get_response_tool_uid()
+                tools_list.append(
+                    ToolCallResponse(
+                        id=tool_id,
+                        index=index,
+                        function=OneTool(
+                            name=tool['name'],
+                            arguments=json.dumps(tool['arguments']),
+                        )
                     )
                 )
-            )
 
-        response_obj = ChatCompletionResponse(
-            model=model_name,
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=None,
-                        tool_calls=tools_list,
-                    ),
-                    finish_reason="tool_calls",
-                )
-            ],
-            usage=UsageResponse(
-                prompt_tokens=gen_stats.input_tokens_count,
-                completion_tokens=gen_stats.output_tokens_count,
-                total_tokens=gen_stats.total_tokens_count,
-            ),
-        )
+            response_obj = ChatCompletionResponse(
+                model=model_name,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=None,
+                            tool_calls=tools_list,
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=UsageResponse(
+                    prompt_tokens=gen_stats.input_tokens_count,
+                    completion_tokens=gen_stats.output_tokens_count,
+                    total_tokens=gen_stats.total_tokens_count,
+                ),
+            )
 
     assert response_obj is not None
     logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))

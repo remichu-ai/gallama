@@ -84,42 +84,6 @@ class ChatGenerator(Model):
 
         # placeholder
         self.pipeline = None
-        
-        # self.model = model
-        # self.cache = cache  # for exllamav2
-        # if cache_size:
-        #     self.cache_size = cache_size
-        # else:
-        #     self.cache_size = max_seq_len
-        # self.tokenizer = tokenizer
-        # self.eos_token_id = eos_token_id
-        # self.eos_token_str = eos_token_str
-        # self.max_seq_len = max_seq_len
-        # self.model_name = model_name
-        # # logger.info(f"Max sequence length: {self.max_seq_len}")
-        #
-        # # setting for speculative decoding
-        # self.draft_model = None
-        # self.draft_cache = None
-
-        # without skip_prompt, the prompt repeated
-        # self.streamer = transformers.TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
-
-        # self.pipeline = None
-        #self.pipeline = await self._get_pipeline()
-        #self.pipeline = asyncio.run(self._get_pipeline())
-        # Create a new event loop
-        #loop = asyncio.new_event_loop()
-        #asyncio.set_event_loop(loop)
-        # Run the async task and get the result
-        #self.pipeline = loop.run_until_complete(self._get_pipeline())
-        # Close the loop
-        #loop.close()
-
-    # def add_speculative_decoding(self, draft_model, draft_cache):
-    #     self.draft_model = draft_model
-    #     self.draft_cache = draft_cache
-
 
     async def chat(self, query: ChatMLQuery, prompt_eng, gen_queue: GenQueue):
         chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
@@ -132,7 +96,7 @@ class ChatGenerator(Model):
         if token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
-    async def chat_no_tool(self, query, prompt_eng, gen_queue):
+    async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
 
         prompt = prompt_eng.get_prompt(
             query,
@@ -197,6 +161,15 @@ class ChatGenerator(Model):
             # append generated content to the full prompt
             prompt = prompt.strip() + first_response.strip()
 
+
+        # Final generation to retun to client
+        # set prefix string
+        prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
+
+        # overwrite prefix_strings if in artifact mode
+        if query.artifact and query.artifact == "Fast":
+            prefix_strings = "```xml\n<answer>\n <"
+
         await self.generate(
             prompt=prompt,
             gen_queue=gen_queue,
@@ -205,11 +178,11 @@ class ChatGenerator(Model):
                 'lm_enforcer_parser': lm_enforcer_parser_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
-                'prefix_strings': None if query.regex_prefix_pattern else query.prefix_strings,   # already generated as part of the prefix string
+                'prefix_strings': prefix_strings,   # already generated as part of the prefix string
             }
         )
 
-    async def chat_with_tool(self, query, prompt_eng, gen_queue):
+    async def chat_with_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
         # use_tool marker
         use_tool_bool = False       # this will be set to True if tool is used
         fall_back_bool = False      # this will decide if fallback generation with regex enforcement is required
@@ -275,7 +248,7 @@ class ChatGenerator(Model):
             fall_back_prompt = "\n Assistant's answer (Yes or No) to the question whether is_tool_needed is:\nis_tool_needed: "
             prompt += tool_thinking_response + fall_back_prompt
 
-            # perform generation with tool thinking to evaluate if it is neccessity
+            # perform generation with tool thinking to evaluate if it is necessity
             tool_thinking_queue_fallback = GenQueue()
 
             lm_enforcer_parser_regex = RegexParser('(Yes|No|YES|NO)')
@@ -287,13 +260,13 @@ class ChatGenerator(Model):
                 lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
             )
 
-            # evaluate tool usage neccessity
+            # evaluate tool usage necessity
             tool_thinking_decision_fallback, _ = await get_response_from_queue(tool_thinking_queue)
 
             # decide if tool call is required
-            if tool_thinking_decision_fallback.lower()=="yes":
+            if tool_thinking_decision_fallback.lower() == "yes":
                 use_tool_bool = True
-            elif tool_thinking_decision_fallback.lower()=="no":
+            elif tool_thinking_decision_fallback.lower() == "no":
                 use_tool_bool = False
 
         # USE TOOL
@@ -346,9 +319,7 @@ class ChatGenerator(Model):
 
         # NOT USE TOOL
         if not use_tool_bool:
-            prompt = prompt_eng.get_prompt(
-                query,
-            )
+            prompt = prompt_eng.get_prompt(query)
 
             if query.tool_choice == "auto":
                 # Normal generation
@@ -428,18 +399,23 @@ class ChatGenerator(Model):
         return settings
 
     @staticmethod
-    def starts_with_stop_word(text, stop_words):
-        text = text.lstrip()  # Remove leading whitespace
-        for word in stop_words:
-            if text.startswith(word):
-                return True
-        return False
+    def get_stop_word(text, stop_words) -> Union[str, None]:
+        """ this function will match the stop word used given the text that model ended generation with and a list of stop_words."""
 
+        # sort the list by length to find the longest first
+        sorted_stop_words = sorted(stop_words, key=len, reverse=True)
+
+        text = text.lstrip()  # Remove trailing whitespace
+        for stop_word in stop_words:
+            if stop_word in text:
+                return stop_word
+
+        return None
 
     async def generate(
         self,
         prompt: str,
-        gen_queue: Union[GenQueue,QueueContext, List[QueueContext]],   # the generated result will be store to this queue
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],   # the generated result will be store to this queue
         gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
         temperature: float = 0.01,
         lm_enforcer_parser: TokenEnforcerTokenizerData = None,
@@ -527,7 +503,7 @@ class ChatGenerator(Model):
         gen_stats = None
         eos = False
 
-        # kick start the generationa and let down stream know gen type
+        # kick-start the generation and let down stream know gen type
         if isinstance(gen_type, str):
             gen_type = GenStart(gen_type=gen_type)
 
@@ -569,14 +545,18 @@ class ChatGenerator(Model):
                 if stop_words and result.get("held") and result.get("held").get("text"):
                     ending_string = result["held"]["text"].rstrip()
 
-                    if ending_string and self.starts_with_stop_word(ending_string, stop_words):
-                        # end_string is custom token -> return
-                        chunk = GenText(content=ending_string)
-                        for g_queue in gen_queue_list:
-                            g_queue.get_queue().put_nowait(chunk)
-                    else:
-                        # ending token is model eos token
-                        pass
+                    if ending_string:
+                        # find the stop word that was used to end string
+                        stop_word_used = self.get_stop_word(ending_string, stop_words)
+
+                        if stop_word_used:
+                            # end_string is custom token -> return
+                            chunk = GenText(content=stop_word_used)
+                            for g_queue in gen_queue_list:
+                                g_queue.get_queue().put_nowait(chunk)
+                        else:
+                            # ending token is model eos token
+                            pass
 
                 gen_stats = GenerationStats(
                     input_tokens_count=result["prompt_tokens"],
