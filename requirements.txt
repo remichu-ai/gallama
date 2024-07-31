@@ -11,8 +11,7 @@ chardet
 sse_starlette
 fastapi
 lxml
-#prometheus-fastapi-instrumentator
-#infinity-emb[optimum]
+infinity-emb
 colorama
 zmq
 transformers

@@ -2,18 +2,7 @@ import re
 from typing import List, Tuple, Optional, Literal, Union
 from xml.etree import ElementTree as ET
 from pydantic import BaseModel
-
-
-class TextTag(BaseModel):
-    tag_type: Literal["text"] = "text"
-
-
-class ArtifactTag(BaseModel):
-    tag_type: Literal["artifact"] = "artifact"
-    artifact_type: Literal["code", "self_contained_text"]
-    identifier: str
-    title: str
-    language: Optional[str] = None
+from .data_class import TextTag, ArtifactTag
 
 
 class StreamParser:

@@ -4,10 +4,20 @@ import asyncio
 import uuid
 import time
 import torch
-import ast
 import re
-from .logger import logger
-from . stream_parser import TextTag, ArtifactTag
+
+
+class TextTag(BaseModel):
+    tag_type: Literal["text"] = "text"
+
+
+class ArtifactTag(BaseModel):
+    tag_type: Literal["artifact"] = "artifact"
+    artifact_type: Literal["code", "self_contained_text"]
+    identifier: str
+    title: str
+    language: Optional[str] = None
+
 
 class Query(BaseModel):
     prompt: str

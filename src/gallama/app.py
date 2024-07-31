@@ -11,12 +11,13 @@ from gallama.data_class import (
     ModelObject,
     ModelParser,
     GenQueue,
-    SpeculativeDecodingParser
+    EmbeddingRequest
 )
 import argparse
 from gallama.model import Model
 from gallama.prompt_engine import PromptEngine
 from gallama.chatgenerator import ChatGenerator
+from gallama.embedding import EmbeddingModel
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -195,6 +196,21 @@ async def generate(request: Request, query: GenerateQuery):
         return await completion_response(gen_queue, model_name=model_name_to_use)
 
 
+@router.post("/v1/embeddings")
+async def embeddings(request: Request, query: EmbeddingRequest):
+    global default_model_name
+    embedding_model = llm_dict[default_model_name]["model"]
+
+    # for embedding, hard enforcement of matching model name
+    if query.model != embedding_model.model_name:
+        raise HTTPException(status_code=400,
+                            detail=f"Embedding model {query.model} is not found. Current loaded model is {embedding_model.model_name}")
+
+    return await embedding_model.text_embeddings(
+        query=query,
+    )
+
+
 @router.get("/v1/models")
 async def get_models(request: Request):
     data = []
@@ -217,15 +233,6 @@ async def options_handler(request: Request):
     )
 
 
-@router.get("/v1/add_speculative_decoding")
-async def add_speculative_decoding(request: Request, draft_spec: SpeculativeDecodingParser):
-    global llm_dict
-
-    # get the base model
-    llm_dict[draft_spec.name].add_speculative_decoding(draft_spec)
-
-
-
 @router.post("/load_model")
 def load_model(model_spec: ModelParser):
     global config_manager, llm_dict
@@ -234,41 +241,57 @@ def load_model(model_spec: ModelParser):
     model_name = model_spec.model_id
     model_config = config_manager.get_model_config(model_name)
 
-    prompt_eng = PromptEngine(prompt_format= model_config["prompt_template"])
-
     if not model_config:
         raise Exception(f"Model config for '{model_name}' not exist in ~/.gallama/model_config.yaml")
 
-    if model_spec.draft_model_id:
-        draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
-        if not draft_model_config:
-            raise Exception(f"Model config for '{model_spec.draft_model_name}' not exist in ~/.gallama/model_config.yaml")
-    else:
-        draft_model_config = {}
-
     # load the model with config from the model_spec and yml. model_spec comes from cli
-    llm_base = Model(
-        model_spec=model_spec,
-        model_config=model_config,
-        draft_model_config=draft_model_config,
-        eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
-    )
+    if model_config["backend"] != "embedding":
+        prompt_eng = PromptEngine(prompt_format=model_config["prompt_template"])
 
-    chat_generator_dict = {
-        "exllama": ChatGenerator,
-        "llama_cpp": ChatGeneratorLlamaCpp
-    }
+        if model_spec.draft_model_id:
+            draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
+            if not draft_model_config:
+                raise Exception(
+                    f"Model config for '{model_spec.draft_model_name}' not exist in ~/.gallama/model_config.yaml")
+        else:
+            draft_model_config = {}
 
-    ChatGenerator_touse = chat_generator_dict[llm_base.backend]
-    llm = ChatGenerator_touse(llm_base)
+        # load LLM model
+        llm_base = Model(
+            model_spec=model_spec,
+            model_config=model_config,
+            draft_model_config=draft_model_config,
+            eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
+        )
 
-    logger.info("Loaded: " + llm_base.model_name)
+        chat_generator_dict = {
+            "exllama": ChatGenerator,
+            "llama_cpp": ChatGeneratorLlamaCpp,
+        }
 
-    # update dict
-    llm_dict[model_name] = {
-        "model": llm,
-        "prompt_engine": prompt_eng,
-    }
+        ChatGenerator_to_use = chat_generator_dict[llm_base.backend]
+        llm = ChatGenerator_to_use(llm_base)
+
+        # update dict
+        llm_dict[model_name] = {
+            "model": llm,
+            "prompt_engine": prompt_eng,
+        }
+    else:   # embedding model
+        llm = EmbeddingModel(
+            model_id=model_config["model_id"],
+            model_name=model_name
+        )
+
+        # update dict
+        llm_dict[model_name] = {
+            "model": llm,
+        }
+
+
+    logger.info("Loaded: " + model_name)
+
+
 
 
 @router.post("/delete_model")
@@ -301,15 +324,16 @@ async def health_check():
 
 async def startup_event():
     # run some dummy generation so that cache is initialized
-    gen_queue = GenQueue()
-    for model_name, model_info in llm_dict.items():
-        llm = model_info["model"]
-        await llm.chat_raw(
-            prompt="Gallama model initialization",
-            stream=False,
-            max_tokens=5,
-            gen_queue=gen_queue
-        )
+    if llm_dict.get("prompt_engine"):   # LLM isntead of embedding
+        gen_queue = GenQueue()
+        for model_name, model_info in llm_dict.items():
+            llm = model_info["model"]
+            await llm.chat_raw(
+                prompt="Gallama model initialization",
+                stream=False,
+                max_tokens=5,
+                gen_queue=gen_queue
+            )
 
 
 

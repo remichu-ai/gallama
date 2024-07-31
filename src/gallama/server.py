@@ -11,7 +11,6 @@ from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel
 from .data_class import ModelParser, SpeculativeDecodingParser
 from typing import List, Dict, Optional
-import random
 import psutil
 import asyncio
 import uvicorn
@@ -75,18 +74,19 @@ strict_mode = False
 
 # List of endpoints to exclude from API gateway redirection
 EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models"]
-EMBEDDING_SUBPATHS = [
-    {
-        "original": "/v1/embeddings",
-        "replacement": "/embeddings"
-    },
-    {
-        "original": "v1/embeddings",
-        "replacement": "embeddings"
-    }
-    # Add more paths here as needed, e.g.:
-    # {"original": "/v2/some_path", "replacement": "/new_path"}
-]
+EMBEDDING_SUBPATHS = []     # this list is to adjust endpoint redirection on the fly
+# EMBEDDING_SUBPATHS = [
+#     {
+#         "original": "/v1/embeddings",
+#         "replacement": "/embeddings"
+#     },
+#     {
+#         "original": "v1/embeddings",
+#         "replacement": "embeddings"
+#     }
+#     # Add more paths here as needed, e.g.:
+#     # {"original": "/v2/some_path", "replacement": "/new_path"}
+# ]
 
 # Dictionary to keep track of active requests per instance
 active_requests: Dict[int, int] = defaultdict(int)
