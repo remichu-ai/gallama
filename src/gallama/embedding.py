@@ -4,9 +4,14 @@ from .data_class import (
     EmbeddingObject,
 )
 from .utils import floats_to_base64
-import asyncio
+# import asyncio
+import logging
 from infinity_emb import AsyncEngineArray, EngineArgs, AsyncEmbeddingEngine
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)      # disable logging from infinity
 from .logger import logger
+
+
 
 
 class EmbeddingModel:

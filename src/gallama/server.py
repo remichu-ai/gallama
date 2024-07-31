@@ -74,19 +74,18 @@ strict_mode = False
 
 # List of endpoints to exclude from API gateway redirection
 EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models"]
-EMBEDDING_SUBPATHS = []     # this list is to adjust endpoint redirection on the fly
-# EMBEDDING_SUBPATHS = [
-#     {
-#         "original": "/v1/embeddings",
-#         "replacement": "/embeddings"
-#     },
-#     {
-#         "original": "v1/embeddings",
-#         "replacement": "embeddings"
-#     }
-#     # Add more paths here as needed, e.g.:
-#     # {"original": "/v2/some_path", "replacement": "/new_path"}
-# ]
+EMBEDDING_SUBPATHS = [
+    {
+        "original": "/v1/embeddings",
+        "replacement": "/v1/embeddings"
+    },
+    {
+        "original": "v1/embeddings",
+        "replacement": "v1/embeddings"
+    }
+    # Add more paths here as needed, e.g.:
+    # {"original": "/v2/some_path", "replacement": "/new_path"}
+]
 
 # Dictionary to keep track of active requests per instance
 active_requests: Dict[int, int] = defaultdict(int)
@@ -298,32 +297,22 @@ async def run_model(model: ModelParser):
             # Use the function
             app_path = get_package_file_path('app.py')
             logger.info(f"Using app path: {app_path}")
-            if model.backend in ["exllama", "llama_cpp"]:
-                model_cli_args = model.to_arg_string()
-                logger.debug(f"model cli: {model_cli_args}")
-                process = await asyncio.create_subprocess_exec(
-                    "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
-                    stdout=asyncio.subprocess.DEVNULL,
-                    # stderr=asyncio.subprocess.DEVNULL
-                )
-            elif model.backend in ["embedding"]:
-                # Create a copy of the current environment
-                env = os.environ.copy()
+            # Create a copy of the current environment
+            env = os.environ.copy()
 
-                # Set CUDA_VISIBLE_DEVICES
-                # this is because infinity embedding do not have gpu arguments
-                # hence set it via env parameter
-                env['CUDA_VISIBLE_DEVICES'] = model.get_visible_gpu_indices()
+            # Set CUDA_VISIBLE_DEVICES
+            # this is because infinity embedding do not have gpu arguments
+            # hence set it via env parameter
+            env['CUDA_VISIBLE_DEVICES'] = model.get_visible_gpu_indices()
 
-                process = await asyncio.create_subprocess_exec(
-                    "infinity_emb", "v2", "--model-id", model.model_id, "--port", str(port),
-                    # for embedding simply send the output to parent process
-                    #stdout=asyncio.subprocess.DEVNULL,
-                    #stderr=asyncio.subprocess.DEVNULL,
-                    env=env  # Pass the modified environment to the subprocess
-                )
-            else:
-                raise ValueError(f"Unsupported model type: {model.backend}")
+            model_cli_args = model.to_arg_string()
+            logger.debug(f"model cli: {model_cli_args}")
+            process = await asyncio.create_subprocess_exec(
+                "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
+                stdout=asyncio.subprocess.DEVNULL,
+                # stderr=asyncio.subprocess.DEVNULL,
+                env=env  # Pass the modified environment to the subprocess
+            )
 
         except Exception as e:
             logger.error(f"Failed to create subprocess for model {model.model_id} on port {port}: {str(e)}")
@@ -588,17 +577,22 @@ async def load_balanced_router(request: Request, path: str):
                 raise HTTPException(status_code=404, detail="Specified model not found")
             available_instances = [inst for inst in models[model].instances if inst.status == "running"]
         else:
-            if is_embedding:
-                # For embedding requests, select instances with matching model name
-                available_instances = [inst for model_info in models.values() for inst in model_info.instances
-                                       if inst.status == "running" and (not model or inst.model_id == model)]
-            else:
-                # For non-embedding requests, select all non-embedding instances
-                available_instances = [inst for model_info in models.values() for inst in model_info.instances
-                                       if inst.status == "running" and not inst.embedding]
+            available_instances = []
+
+            for model_info in models.values():
+                for inst in model_info.instances:
+                    if inst.status == "running":
+                        if is_embedding:
+                            # For embedding requests, select instances with matching model name
+                            if not model or inst.model_id == model:
+                                available_instances.append(inst)
+                        else:
+                            # For non-embedding requests, select all non-embedding instances
+                            if not inst.embedding:
+                                available_instances.append(inst)
 
         if not available_instances:
-            raise HTTPException(status_code=503, detail="No suitable running instances available")
+            raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
 
         # Select the instance with the least active requests
         instance = min(available_instances, key=lambda inst: active_requests[inst.port])
