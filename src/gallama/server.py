@@ -1,4 +1,5 @@
 import subprocess
+import textwrap
 import time
 import sys
 import httpx
@@ -8,8 +9,8 @@ from typing import Union, AsyncGenerator
 from fastapi.responses import Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
-from pydantic import BaseModel
-from .data_class import ModelParser, SpeculativeDecodingParser
+from pydantic import BaseModel, Field
+from gallama.data_class import ModelParser, ModelObjectResponse, ModelObject
 from typing import List, Dict, Optional
 import psutil
 import asyncio
@@ -24,7 +25,8 @@ import os
 import json
 import threading
 import traceback
-
+from gallama.data_class import ChatCompletionResponse, BaseMessage
+from copy import deepcopy
 
 # Try to import torch, but don't raise an error if it's not available
 try:
@@ -58,6 +60,15 @@ class ModelInfo(BaseModel):
     instances: List[ModelInstanceInfo]
 
 
+class AgentWithThinking(BaseModel):
+    model: str = Field(description="The name of the model")
+    thinking_template: Optional[str] = Field(default=None, description="The XML thinking for the agent")
+
+
+class MixtureOfAgents(BaseModel):
+    agent_list: List[Union[str, AgentWithThinking]]
+
+
 manager_app = FastAPI()
 models: Dict[str, ModelInfo] = {}
 model_load_queue = asyncio.Queue()
@@ -73,7 +84,7 @@ TIMEOUT = 300  # 5 minutes
 strict_mode = False
 
 # List of endpoints to exclude from API gateway redirection
-EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models"]
+EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models", "/v1/models"]
 EMBEDDING_SUBPATHS = [
     {
         "original": "/v1/embeddings",
@@ -311,7 +322,7 @@ async def run_model(model: ModelParser):
                 "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
                 stdout=asyncio.subprocess.DEVNULL,
                 # stderr=asyncio.subprocess.DEVNULL,
-                env=env  # Pass the modified environment to the subprocess
+                #env=env  # Pass the modified environment to the subprocess
             )
 
         except Exception as e:
@@ -400,7 +411,7 @@ async def stop_model_instance(model: str, port: int):
 
 
 # Optimize the forward_request function
-async def forward_request(request: Request, instance: ModelInstanceInfo) -> Union[Response, StreamingResponse]:
+async def forward_request(request: Request, instance: ModelInstanceInfo, modified_body: str = None, modified_headers: str = None) -> Union[Response, StreamingResponse]:
     original_path = request.url.path
     path = original_path
 
@@ -414,8 +425,8 @@ async def forward_request(request: Request, instance: ModelInstanceInfo) -> Unio
     url = f"http://localhost:{instance.port}{path}"
     logger.debug(f"Forwarding request to URL: {url}")
 
-    headers = dict(request.headers)
-    body = await request.body()
+    headers = modified_headers if modified_headers is not None else dict(request.headers)
+    body = modified_body if modified_body is not None else await request.body()
     body_json = json.loads(body)
 
     request.state.instance_port = instance.port
@@ -545,6 +556,15 @@ async def list_models():
             for name, model in models.items()}
 
 
+@manager_app.get("/v1/models")
+async def get_models(request: Request):
+    data = []
+    for name, model in models.items():
+        data.append(ModelObject(id=name))
+
+    return ModelObjectResponse(data=data)
+
+
 @manager_app.get("/loading_status")
 async def loading_status():
     return {
@@ -555,12 +575,135 @@ async def loading_status():
     }
 
 
+async def get_instance_for_model(model: str):
+    running_instances = [inst for inst in models[model].instances if inst.status == "running"]
+    if not running_instances:
+        raise HTTPException(status_code=503, detail=f"No running instances available for model: {model}")
+
+    return min(running_instances, key=lambda inst: active_requests[inst.port])
+
+
+async def forward_to_multiple_agents(request: Request, agent_list: List[Union[str, AgentWithThinking]], modified_body: str, modified_headers: str):
+    tasks = []
+    for agent in agent_list:
+        if isinstance(agent, str):
+            instance = await get_instance_for_model(agent)
+            tasks.append(forward_request(request, instance, modified_body, modified_headers))
+        elif isinstance(agent, AgentWithThinking):
+            instance = await get_instance_for_model(agent.model)
+            if agent.thinking_template:
+                # Modify the request to include the thinking in the thinking_template field
+                agent_body = json.loads(modified_body)
+                agent_body["thinking_template"] = agent.thinking_template
+                agent_modified_body = json.dumps(agent_body).encode()
+                agent_modified_headers = dict(modified_headers)
+                agent_modified_headers["content-length"] = str(len(agent_modified_body))
+                tasks.append(forward_request(request, instance, agent_modified_body, agent_modified_headers))
+            else:
+                tasks.append(forward_request(request, instance, modified_body, modified_headers))
+    return await asyncio.gather(*tasks)
+
+
+async def modify_request(request: Request, changes: Dict[str, any]):
+    body = await request.json()
+    body_copy = deepcopy(body)
+
+    # Apply the changes to the body
+    for key, value in changes.items():
+        if key in body_copy:
+            body_copy[key] = value
+
+    modified_body = json.dumps(body_copy).encode()
+
+    # Create a copy of the headers and update the Content-Length
+    modified_headers = dict(request.headers)
+    modified_headers["content-length"] = str(len(modified_body))
+
+    return modified_body, modified_headers
+
+
+async def consolidate_responses(original_request: Request, responses: List[Response]):
+    # This is a placeholder implementation. Replace with your actual consolidation logic.
+    consolidation_prompt = "\n---\n" + textwrap.dedent("""
+    Please synthesize the following reference answer into a single, high-quality response.
+    It is crucial to critically evaluate the information provided in these responses, recognizing that some of it may be biased or incorrect.
+    """).strip() + "\n---\n"
+
+    for index, response in enumerate(responses):
+        response_body = json.loads(response.body)
+        response_msg = response_body["choices"][0].get("message")
+
+        # add the answer to the prompt
+        consolidation_prompt += f"Reference answer {str(index+1)}\n"
+        if response_msg and response_msg.get("content"):
+            consolidation_prompt += response_msg["content"] + "\n"
+
+        if response_msg and response_msg.get("tool_calls"):
+            for tool_call in response_msg.get("tool_calls"):
+                consolidation_prompt += str(tool_call["function"]) + "\n"
+
+        consolidation_prompt += "---\n"
+
+    consolidation_prompt += "Now provide the final synthesized response:\n"
+
+    # Create a modified version of request with the answers from respective agents
+    original_body = await original_request.json()
+
+    modified_messages = original_body.get("messages", [])
+
+    # append the final synthesis prompt to the message list
+    modified_messages.append({
+        "role": "user",
+        "content": consolidation_prompt
+    })
+
+    modified_body, modified_headers = await modify_request(
+        original_request,
+        changes={"messages": modified_messages}
+    )
+
+    return modified_body, modified_headers
+
+
+async def handle_mixture_of_agent_request(request: Request, body_json: dict):
+    moa_config = MixtureOfAgents(**body_json.get("mixture_of_agents"))
+    agent_list = moa_config.agent_list
+    master_agent = body_json.get("model")
+
+    if not agent_list or not master_agent:
+        raise HTTPException(status_code=400, detail="Invalid request: missing agent_list or master_agent")
+
+    # Validate all models upfront
+    all_models = [agent.model if isinstance(agent, AgentWithThinking) else agent for agent in agent_list] + [master_agent]
+
+    # Create a modified request where streaming is turned off
+    changes = {"stream": False}
+    modified_body, modified_headers = await modify_request(request, changes)
+
+    # Forward the request to all models in the agent_list
+    responses = await forward_to_multiple_agents(request, agent_list, modified_body, modified_headers)
+
+    # Consolidate responses
+    consol_modified_body, consol_modified_headers = await consolidate_responses(request, responses)
+
+    # Forward consolidated response to master_agent
+    instance = await get_instance_for_model(master_agent)
+    final_response = await forward_request(request, instance, consol_modified_body, consol_modified_headers)
+    return final_response
+
+
 async def load_balanced_router(request: Request, path: str):
     if request.url.path in EXCLUDED_ENDPOINTS:
         return await request.app.router.get_route_handler()(request)
 
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
+
+    body = await request.body()
+    body_json = json.loads(body)
+
+    if body_json.get("mixture_of_agents", False):
+        return await handle_mixture_of_agent_request(request, body_json)
 
     model = await get_model_from_body(request)
 

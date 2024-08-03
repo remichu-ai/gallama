@@ -330,7 +330,7 @@ End of Example of answer with Tool/ Function_calling usage.
                       f"{thinking_example}\n" + \
                       "Now, the thinking template i need to apply to answer this question is:\n" + \
                       thinking_template + "\n" + \
-                      f"My thinking using the above XML template as follow:\n```xml"
+                      f"My thinking using the above XML template as follow:\n\n```xml"
             # add ending token
             # prompt += self.get_conversation_end_token()
 
@@ -342,7 +342,7 @@ End of Example of answer with Tool/ Function_calling usage.
                       "Now, the thinking template i need to apply to answer this question is:\n" + \
                       thinking_template + "\n" + \
                       f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
-                      "Now answer the question. Remember that the thinking above is INVISIBLE to user."
+                      "Now answer the question. Remember that the thinking above is INVISIBLE to user.\n"
 
             # add ending token
             prompt += self.get_conversation_end_token()

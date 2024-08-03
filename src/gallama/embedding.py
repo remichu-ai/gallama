@@ -12,8 +12,6 @@ for handler in logging.root.handlers[:]:
 from .logger import logger
 
 
-
-
 class EmbeddingModel:
     def __init__(self, model_id='', model_name=None, max_seq_len=None):
         self.model_id = model_id

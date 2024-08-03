@@ -5,6 +5,7 @@ from lmformatenforcer.integrations.exllamav2 import (
     ExLlamaV2TokenEnforcerFilter,
     build_token_enforcer_tokenizer_data
 )
+import re
 from pydantic import BaseModel, Field, create_model
 from fastapi import HTTPException
 from .model import Model
@@ -215,6 +216,7 @@ class ChatGenerator(Model):
             gen_queue=tool_thinking_queue,
             temperature=query.temperature,
             stop_words=TOOL_THINKING.root_key_stop_words,
+            prefix_strings=f"<{TOOL_THINKING.root_tag}>",
             #lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
         )
 
@@ -228,46 +230,61 @@ class ChatGenerator(Model):
             # parse the xml object
             tool_thinking_response_dict = Thinking.parse_xml_to_dict(tool_thinking_response)
             tool_decision = tool_thinking_response_dict[TOOL_THINKING.root_tag]["final_decision"]["is_tool_needed"]     # TODO implement a less hardcoding way
-            if tool_decision.lower()=="yes":
+            if tool_decision.lower().strip() == "yes":
                 use_tool_bool = True
-            elif tool_decision.lower()=="no":
+            elif tool_decision.lower().strip() == "no":
                 use_tool_bool = False
             else:
                 # the format was not enforce, to perform fall back check
                 fall_back_bool = True
+
         except Exception as e:
-            logger.error(e)
-            fall_back_bool = True
+            logger.error(f"XML parsing failed: {e}")
+            # Fallback: check for the presence of Yes/No in the raw XML
+            yes_pattern = r'<is_tool_needed>\s*Yes\s*</is_tool_needed>'
+            no_pattern = r'<is_tool_needed>\s*No\s*</is_tool_needed>'
+
+            if re.search(yes_pattern, tool_thinking_response, re.IGNORECASE):
+                use_tool_bool = True
+            elif re.search(no_pattern, tool_thinking_response, re.IGNORECASE):
+                use_tool_bool = False
+            else:
+                fall_back_bool = True
+
         logger.info(tool_thinking_response)
 
 
         # Fall back plan
         fall_back_prompt = ""
         if fall_back_bool:
+            logger.info("Tool Analysis fallback")
             # generate fall back response with regex enforcement:
-            fall_back_prompt = "\n Assistant's answer (Yes or No) to the question whether is_tool_needed is:\nis_tool_needed: "
+            fall_back_prompt = ("\n Fill in the blank in below sentence with either 'needed' or 'not needed'"
+                                "In summary, tool calling is {blank}\n"
+                                "Answer: blank=")
             prompt += tool_thinking_response + fall_back_prompt
 
             # perform generation with tool thinking to evaluate if it is necessity
             tool_thinking_queue_fallback = GenQueue()
 
-            lm_enforcer_parser_regex = RegexParser('(Yes|No|YES|NO)')
+            lm_enforcer_parser_regex = RegexParser('(needed|not needed)')
             await self.generate(
                 prompt,
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
+                #prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
             )
 
             # evaluate tool usage necessity
-            tool_thinking_decision_fallback, _ = await get_response_from_queue(tool_thinking_queue)
+            tool_thinking_decision_fallback, _ = await get_response_from_queue(tool_thinking_queue_fallback)
 
             # decide if tool call is required
-            if tool_thinking_decision_fallback.lower() == "yes":
-                use_tool_bool = True
-            elif tool_thinking_decision_fallback.lower() == "no":
+            if "not needed" in tool_thinking_decision_fallback.lower():
                 use_tool_bool = False
+            elif "needed" in tool_thinking_decision_fallback.lower():
+                use_tool_bool = True
 
         # USE TOOL
         if use_tool_bool:
@@ -290,6 +307,22 @@ class ChatGenerator(Model):
             # get format enforcer
             lm_enforcer_parser = JsonSchemaParser(answer_format_schema)
 
+            tool_as_code_prompt = """
+def run_function(arg_dict):
+    function_calls = arg_dict["functions_calling"]
+    
+    if function_calls == []:
+        print("No function/tool calling needed")
+        return
+
+    for call in function_calls:
+        function_name = call["name"]
+        arguments = call["arguments"]
+        globals()[function_name](**arguments)
+
+# Perform function calling if need to
+arg_dict = """
+
             # get final prompt
             prompt = prompt_eng.get_prompt(
                 query,
@@ -299,8 +332,8 @@ class ChatGenerator(Model):
                 answer_format_schema=True,
                 leading_prompt=(
                     f"{fall_back_prompt}\n"
-                    'Now i will convert my answer above into "functions_calling" format.\n'
-                    "My answer is:\n"
+                    'Now i will convert my answer above into "functions_calling" format by continuing this continue this code.\n'
+                    f"{tool_as_code_prompt}"
                 ),
             )
             logger.info(prompt)
@@ -312,7 +345,7 @@ class ChatGenerator(Model):
                 gen_type=GenStart(gen_type="tool"),
                 temperature=query.temperature,
                 # stop_words=TOOL_THINKING.root_key_stop_words,
-                prefix_strings=["{", " {", "\n{"],
+                prefix_strings=['{\n "functions_calling": ['],
                 lm_enforcer_parser=lm_enforcer_parser,  # no longer enforce format
                 max_tokens=query.max_tokens,
             )
