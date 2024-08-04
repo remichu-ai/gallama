@@ -3,3 +3,4 @@ from gallama.logger.logger import logger
 from gallama.backend.thinking_template import THINKING_TEMPLATE, Thinking
 from . import app
 from .backend import chatgenerator
+from .config import ConfigManager

@@ -4,6 +4,7 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, Any, List
+from collections import defaultdict
 
 
 class ConfigManager:
@@ -81,3 +82,41 @@ class ConfigManager:
         with open(yaml_path, 'r') as file:
             yaml_data = yaml.safe_load(file)
         return list(yaml_data.keys())
+
+    def generate_model_table(self, specific_backend=None):
+        # Parse the YAML data
+        data = self.default_model_list
+        # Start the table
+        table = "| Model | Backend | Available Quantizations (bpw) |\n|-------|---------|-------------------------------|\n"
+
+        # Iterate through the models
+        for model, info in data.items():
+            if 'repo' in info:
+                # Group quantizations by backend
+                backend_quants = defaultdict(set)
+                for repo in info['repo']:
+                    backend = repo.get('backend', 'unknown')
+                    quants = repo.get('quant', [])
+                    backend_quants[backend].update(quants)
+
+                # Filter by specific backend if provided
+                if specific_backend:
+                    if specific_backend in backend_quants:
+                        backend_quants = {specific_backend: backend_quants[specific_backend]}
+                    else:
+                        continue  # Skip this model if it doesn't have the specified backend
+
+                # Sort backends and their quantizations
+                sorted_backends = sorted(backend_quants.keys())
+                for i, backend in enumerate(sorted_backends):
+                    quants = backend_quants[backend]
+                    quants_formatted = [f"`{q}`" for q in sorted(quants)]
+
+                    # For the first backend, include the model name
+                    if i == 0:
+                        table += f"| {model} | {backend} | {', '.join(quants_formatted)} |\n"
+                    else:
+                        # For subsequent backends, leave the model name cell empty
+                        table += f"| | {backend} | {', '.join(quants_formatted)} |\n"
+
+        return table

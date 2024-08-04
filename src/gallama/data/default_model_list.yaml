@@ -1,4 +1,4 @@
-llama-8B:
+llama-3.1-8B:
   remark: "v3.1"
   default_quant: 4.0
   default_cache_quant: Q4
@@ -8,7 +8,7 @@ llama-8B:
       branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
       quant: [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
       backend: exllama
-llama-70B:
+llama-3.1-70B:
   remark: "v3.1"
   default_quant: 4.0
   default_cache_quant: Q4
@@ -80,7 +80,7 @@ codestral:
       branch: ['8_0']
       quant: [8.0]
       backend: exllama
-gemma-9B:
+gemma-2-9B:
   remark: "v2"
   default_quant: 4.0
   default_cache_quant: Q4
@@ -90,7 +90,7 @@ gemma-9B:
       branch: ['2.5bpw', '3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '5.5bpw', '6.0bpw', '8.0bpw']
       quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 8.0]
       backend: exllama
-gemma-27B:
+gemma-2-27B:
   remark: "v2"
   default_quant: 4.0
   default_cache_quant: Q4
@@ -191,3 +191,20 @@ qwen-2-72B:
       quant: [8.0]
       backend: exllama
 
+# embedding model from here
+multilingual-e5-large-instruct:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "intfloat/multilingual-e5-large-instruct"
+      branch: ['main']
+      quant: [16.0]
+      backend: embedding
+gte-large-en-v1.5:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Alibaba-NLP/gte-large-en-v1.5"
+      branch: ['main']
+      quant: [16.0]
+      backend: embedding
