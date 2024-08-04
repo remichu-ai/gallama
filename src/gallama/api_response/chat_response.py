@@ -16,11 +16,13 @@ from gallama.data_classes.data_class import (
     CompletionResponse,
     CompletionStreamResponse,
     CompletionChoice,
+    TextTag,
 )
 from .stream_parser import StreamParser
 from typing import AsyncIterator
 from gallama.utils.utils import get_response_uid, get_response_tool_uid
 from gallama.logger.logger import logger
+from pydantic.json import pydantic_encoder
 import time
 import json
 import asyncio
@@ -58,7 +60,6 @@ async def get_response_from_queue(
     return response, genStats
 
 
-
 async def chat_completion_response_stream(
         query: ChatMLQuery,
         gen_queue: GenQueue,
@@ -73,7 +74,6 @@ async def chat_completion_response_stream(
 
     # last_log_time = time.time()
     # log_interval = 1  # Log every 5 seconds
-
 
     while not eos:
         # Logging to troubleshoot if queue build up
@@ -120,7 +120,7 @@ async def chat_completion_response_stream(
                         )
                     ],
                 )
-                yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
             elif gen_type == "tool":
                 # Accumulate tool usage data
                 # Note: This assumes that tool data is complete in a single chunk
@@ -155,7 +155,10 @@ async def chat_completion_response_stream(
                         )
                     ],
                 )
-                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
+                yield {
+                    "event": "message",
+                    "data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)
+                }
 
         if eos:
             # Log the full response at the end
@@ -180,7 +183,10 @@ async def chat_completion_response_stream(
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
             # Send the ending DONE message
-            yield {"data": "[DONE]"}
+            yield {
+                "event": "done",
+                "data": "[DONE]"
+            }
         else:
             await asyncio.sleep(0.1)  # Short sleep before next iteration if not at end of stream
 
