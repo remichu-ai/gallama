@@ -129,10 +129,16 @@ def main_cli():
     if args.command == "serve" or args.command is None:
         run_from_script(args)  # Pass all arguments to run_from_script
     elif args.command == "download":
-        model_name, quant = args.model_spec.split(':')
+        if ":" in args.model_spec:
+            model_name, quant = args.model_spec.split(':')
+        else:
+            # default download mode
+            model_name = args.model_spec
+            quant = None
+
         download_model(ModelDownloadSpec(
             model_name=model_name,
-            quant=float(quant)
+            quant=float(quant) if quant else None
         ))
 
 if __name__ == "__main__":

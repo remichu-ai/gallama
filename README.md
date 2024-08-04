@@ -19,19 +19,28 @@ gallama serve -id "model_id=llama-3.1-8B"
 
 Here is the list of currently supported models for downloader:
 
-| Model | Available Quantizations (bpw) |
-|-------|-------------------------------|
-| llama-8B | 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
-| llama-70B | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0 |
-| mistral | 2.8, 3.0, 4.0, 4.5, 5.0, 6.0 |
-| mistral-large | 2.3, 2.5, 2.75, 3.0, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0, 6.0 |
-| mistral-nemo | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
-| codestral | 3.0, 3.5, 4.25, 5.0, 6.5, 8.0 |
-| gemma-9B | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 8.0 |
-| gemma-27B | 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
-| qwen-2-1.5B | 3.0, 4.0, 5.0, 6.0, 8.0 |
-| qwen-2-7B | 3.0, 4.0, 5.0, 6.0, 8.0 |
-| qwen-2-72B | 3.0, 3.5, 4.0, 4.25, 4.65, 5.0, 6.0, 8.0 |
+**LLM Models**
+
+| Model | Backend | Available Quantizations (bpw) |
+|-------|---------|-------------------------------|
+| llama-3.1-8B | exllama | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
+| llama-3.1-70B | exllama | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0` |
+| mistral | exllama | `2.8`, `3.0`, `4.0`, `4.5`, `5.0`, `6.0` |
+| mistral-large | exllama | `2.3`, `2.5`, `2.75`, `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `4.5`, `4.75`, `5.0`, `6.0` |
+| mistral-nemo | exllama | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
+| codestral | exllama | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0` |
+| gemma-2-9B | exllama | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `5.5`, `6.0`, `8.0` |
+| gemma-2-27B | exllama | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
+| qwen-2-1.5B | exllama | `3.0`, `4.0`, `5.0`, `6.0`, `8.0` |
+| qwen-2-7B | exllama | `3.0`, `4.0`, `5.0`, `6.0`, `8.0` |
+| qwen-2-72B | exllama | `3.0`, `3.5`, `4.0`, `4.25`, `4.65`, `5.0`, `6.0`, `8.0` |
+
+**Embedding Models:**
+
+| Model | Backend | Available Quantizations (bpw) |
+|-------|---------|-------------------------------|
+| multilingual-e5-large-instruct | embedding | `16.0` |
+| gte-large-en-v1.5 | embedding | `16.0` |
 
 The syntax to specify the model is model name follow by `:` then follow by quantization float number e.g. `qwen-2-72B:4.0`
 

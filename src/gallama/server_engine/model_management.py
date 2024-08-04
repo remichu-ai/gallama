@@ -57,8 +57,7 @@ def update_model_yaml(
 
 
 def download_model_from_hf(model_spec):         # TODO add type hint : ModelDownloadSpec
-
-    #Load config manager
+    # Load config manager
     config_manager: ConfigManager = ConfigManager()
 
     # Load the model configuration
@@ -107,7 +106,7 @@ def download_model_from_hf(model_spec):         # TODO add type hint : ModelDown
             model_name=model_name,
             model_path=str(download_dir),
             backend=repo_info['backend'],
-            prompt_template=model_config['prompt_template'],
+            prompt_template=model_config.get('prompt_template', None),
             quant=quant,
             cache_quant=model_config.get('default_cache_quant', "Q4"),
             config_manager=config_manager,
