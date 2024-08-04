@@ -1,5 +1,3 @@
-import os
-from torch import cuda
 # import transformers
 import torch
 # from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
@@ -12,9 +10,9 @@ from exllamav2 import (
     ExLlamaV2Cache_Q8,
     ExLlamaV2Config
 )
-from typing import List, Optional, Dict
-from .logger import logger
-from .data_class import ModelParser
+from typing import List, Dict
+from gallama.logger.logger import logger
+from gallama.data_classes.data_class import ModelParser
 # from sentence_transformers import SentenceTransformer
 
 try:
@@ -36,7 +34,7 @@ class Model:
         # model_config is from yml file
         self.model_id = model_config["model_id"]
         self.model_name = model_spec.model_name or model_config["model_name"]
-        self.max_seq_len = model_spec.max_seq_len or model_config["max_seq_len"]
+        self.max_seq_len = model_spec.max_seq_len or model_config.get("max_seq_len", None)
         self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
         self.cache_size = model_spec.cache_size or model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
         self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
@@ -82,10 +80,7 @@ class Model:
         self.eos_token_str = list(set(model_config.get("eos_token_list", []) + eos_token_list_from_prompt_template))
         self.eos_token_ids = self.generate_eos_tokens_id()
 
-
-
-    @staticmethod
-    def load_model(model_id, backend, max_seq_len, cache_size ,cache_quant, gpus, reserve_vram):
+    def load_model(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
 
@@ -94,7 +89,12 @@ class Model:
 
         if backend == "exllama":
             config = ExLlamaV2Config(model_id)
-            config.max_seq_len = max_seq_len
+            if max_seq_len is not None:
+                config.max_seq_len = max_seq_len
+            else:
+                # set the self.max_seq_len using model config file as it is None at the moment
+                self.max_seq_len = config.max_seq_len
+
             model = ExLlamaV2(config)
             tokenizer = ExLlamaV2Tokenizer(config)
 
@@ -106,18 +106,18 @@ class Model:
                 "Q8": ExLlamaV2Cache_Q8,
             }
 
-            cache_size_to_use = max_seq_len
+            cache_size_to_use = cache_size if cache_size else config.max_seq_len
             cache_quant_to_use = cache_quant_dict[cache_quant]
             logger.info("Cache Quantization: " + str(cache_quant))
 
             assert cache_quant_to_use is not None
 
-            if isinstance(gpus,str) and gpus == "auto":
+            if isinstance(gpus, str) and gpus == "auto":
                 cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
-                model.load_autosplit(cache, reserve_vram=reserve_vram, progress = True)
+                model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
             elif isinstance(gpus, list):      # user specify the gpus split
                 logger.info("Custom GPU Allocation in GB: " + str(gpus))
-                model.load(gpu_split=gpus, progress = True)
+                model.load(gpu_split=gpus, progress=True)
                 cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
             else:
                 raise ValueError("Device map should be either 'auto', 'gpu' or 'exllama'")

@@ -388,7 +388,7 @@ class ModelParser(BaseModel):
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
-    backend: Optional[Literal["exllama", "llama_cpp", "embedding"]] = Field(description="model engine backend", default="exllama")
+    backend: Optional[Union[Literal["exllama", "llama_cpp", "embedding"], None]] = Field(description="model engine backend", default=None)
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -418,29 +418,30 @@ class ModelParser(BaseModel):
             return [v.get(i, 0.0) for i in range(torch.cuda.device_count())]
         return v
 
-    @validator('gpus')
-    def check_gpus(cls, gpus):
-        if gpus is None:
-            return None
-        num_gpus = torch.cuda.device_count()
-        for gpu_id, vram in enumerate(gpus):
-            if gpu_id < 0 or gpu_id >= num_gpus:
-                raise ValueError(f"Invalid GPU ID {gpu_id}. Must be between 0 and {num_gpus - 1}")
-
-            if vram < 0:
-                raise ValueError(f"VRAM usage for GPU {gpu_id} must be a non-negative number")
-
-            if vram > 0:
-                device = torch.cuda.get_device_properties(gpu_id)
-                total_vram = device.total_memory / (1024 ** 3)  # Convert bytes to GB
-                if vram > total_vram:
-                    raise ValueError(
-                        f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
+    # TODO this is clasing with embedding cause embedding will set visiable GPU and hence it is not seen anymore in this validator
+    # @validator('gpus')
+    # def check_gpus(cls, gpus):
+    #     if gpus is None:
+    #         return None
+    #     num_gpus = torch.cuda.device_count()
+    #     for gpu_id, vram in enumerate(gpus):
+    #         if gpu_id < 0 or gpu_id >= num_gpus:
+    #             raise ValueError(f"Invalid GPU ID {gpu_id}. Must be between 0 and {num_gpus - 1}")
+    #
+    #         if vram < 0:
+    #             raise ValueError(f"VRAM usage for GPU {gpu_id} must be a non-negative number")
+    #
+    #         if vram > 0:
+    #             device = torch.cuda.get_device_properties(gpu_id)
+    #             total_vram = device.total_memory / (1024 ** 3)  # Convert bytes to GB
+    #             if vram > total_vram:
+    #                 raise ValueError(
+    #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
         return gpus
 
     @classmethod
-    def from_dict(cls, input_data: Union[str, Dict[str, str]]):
+    def from_dict(cls, input_data: Union[str, Dict[str, Any]]):
         if isinstance(input_data, str):
             # If input is a string, split it into a dictionary
             params = input_data.split()
@@ -459,7 +460,10 @@ class ModelParser(BaseModel):
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
-        backend = input_dict.get('backend', 'exllama')  # Default to 'exllama' if not provided
+        backend = input_dict.get('backend', None)  # Default to None if not provided
+        # TODO clean up code and merge config setting into config manager
+        if backend == "None":
+            backend = None
         cache_quant = input_dict.get('cache_quant', None)
 
         if gpus:
@@ -489,7 +493,7 @@ class ModelParser(BaseModel):
             draft_cache_size = int(draft_cache_size)
 
         # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend,cache_quant=cache_quant,
+        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    max_seq_len=max_seq_len,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
@@ -559,27 +563,10 @@ class ModelParser(BaseModel):
         return ','.join(visible_devices)
 
 
-class SpeculativeDecodingParser(BaseModel):
-    main_model: str = Field(description="main model name")
-    draft_model: str = Field(description="draft model name to use for speculatind decoding")
-    port: Optional[int] = Field(description="Port number for the children api, if multiple model found, will send to all", default=None)
+class ModelDownloadSpec(BaseModel):
+    """ dataclass for model download"""
+    model_name: str
+    quant: Optional[float] = None
 
-    @classmethod
-    def from_dict(cls, input_data: Union[str, Dict[str, str]]):
-        if isinstance(input_data, str):
-            # If input is a string, split it into a dictionary
-            params = input_data.split()
-            input_dict = {}
-            for param in params:
-                key, value = param.split('=')
-                input_dict[key] = value.strip("'")  # Strip single quotes here as well
-        else:
-            # If input is already a dictionary, use it as is
-            input_dict = input_data
-
-        main_model = input_dict.get('main_model')
-        draft_model = input_dict.get('draft_model')
-        port = input_dict.get('port')
-
-        # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(main_model=main_model, draft_model=draft_model, port=port)
+    # disable protected_namespaces due to it field use model_ in the name
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())

@@ -1,10 +1,10 @@
 import argparse
-import os
 import shutil
 from pathlib import Path
 # import gallama
-from gallama.logger import logger
-from gallama.server import run_from_script
+from gallama.logger.logger import logger
+from gallama.server import run_from_script, download_model
+from gallama.data_classes.data_class import ModelDownloadSpec
 
 
 def get_data_dir() -> Path:
@@ -27,7 +27,8 @@ def find_config_file(config_dir, filename):
 def ensure_config_file():
     """Ensure the user-specific configuration file exists."""
     home_dir = Path.home()
-    config_dir = home_dir / ".gallama"
+    config_dir = home_dir / "gallama"
+    model_dir = home_dir / "gallama" / "models"
     config_filename = "model_config"
 
     config_dir_default = get_data_dir()
@@ -37,6 +38,10 @@ def ensure_config_file():
         if not config_dir.exists():
             config_dir.mkdir(parents=True)
             logger.info(f"Created configuration directory: {config_dir}")
+
+        if not model_dir.exists():
+            model_dir.mkdir(parents=True)
+            logger.info(f"Created configuration directory: {model_dir}")
 
         config_file = find_config_file(config_dir, config_filename)
         if not config_file:
@@ -53,7 +58,7 @@ def ensure_config_file():
                 shutil.copy(default_config_dev, config_file)
                 logger.info(f"Created default configuration file: {default_config_dev}")
             else:
-                raise FileNotFoundError(f"Default configuration file not found in: {data_dir}")
+                raise FileNotFoundError(f"Default configuration file not found in: {config_dir}")
 
         return config_file
     except Exception as e:
@@ -71,10 +76,12 @@ def parse_dict(arg):
         result[key] = value.strip("'")  # Strip single quotes here as well
     return result
 
+
 def run_server(host, port):
     import uvicorn
     from .app import app
     uvicorn.run(app, host=host, port=port)
+
 
 def main_cli():
     arg_parser = argparse.ArgumentParser(description="Launch multi model src instance")
@@ -83,7 +90,7 @@ def main_cli():
     subparsers = arg_parser.add_subparsers(dest="command")
 
     # Add 'serve' subcommand
-    serve_parser = subparsers.add_parser("serve", help="Run the FastAPI server")
+    serve_parser = subparsers.add_parser("serve", help="Run the FastAPI server_engine")
     serve_parser.add_argument("--strict_mode", action="store_true", default=False,
                               help="Enable strict mode for routing non-embedding requests to matching model names")
     serve_parser.add_argument("-id", "--model_id", action='append', type=parse_dict, default=None,
@@ -102,9 +109,9 @@ def main_cli():
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
 
-
-    # Add 'cli' subcommand (you can add more CLI-specific options here)
-    cli_parser = subparsers.add_parser("cli", help="Run in CLI mode")
+    # Add 'download' subcommand
+    download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
+    download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
 
     args = arg_parser.parse_args()
 
@@ -121,9 +128,12 @@ def main_cli():
 
     if args.command == "serve" or args.command is None:
         run_from_script(args)  # Pass all arguments to run_from_script
-    elif args.command == "cli":
-        # Implement your CLI logic here
-        print("CLI mode not implemented yet")
+    elif args.command == "download":
+        model_name, quant = args.model_spec.split(':')
+        download_model(ModelDownloadSpec(
+            model_name=model_name,
+            quant=float(quant)
+        ))
 
 if __name__ == "__main__":
     main_cli()

@@ -1,8 +1,6 @@
 import re
-from typing import List, Tuple, Optional, Literal, Union
-from xml.etree import ElementTree as ET
-from pydantic import BaseModel
-from .data_class import TextTag, ArtifactTag
+from typing import List, Tuple, Optional, Union
+from gallama.data_classes.data_class import TextTag, ArtifactTag
 
 
 class StreamParser:

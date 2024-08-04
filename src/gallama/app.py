@@ -3,7 +3,7 @@ import torch
 import gc
 from fastapi import FastAPI, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from gallama.data_class import (
+from gallama.data_classes.data_class import (
     ChatMLQuery,
     ToolForce,
     GenerateQuery,
@@ -14,17 +14,17 @@ from gallama.data_class import (
     EmbeddingRequest
 )
 import argparse
-from gallama.model import Model
-from gallama.prompt_engine import PromptEngine
-from gallama.chatgenerator import ChatGenerator
-from gallama.embedding import EmbeddingModel
+from gallama.backend.model import Model
+from gallama.backend.prompt_engine import PromptEngine
+from gallama.backend.chatgenerator import ChatGenerator
+from gallama.backend.embedding import EmbeddingModel
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
 import json
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from gallama.chat_response import (
+from gallama.api_response.chat_response import (
     chat_completion_response_stream,
     completion_response_stream,
     completion_response,
@@ -32,15 +32,15 @@ from gallama.chat_response import (
     chat_completion_response_artifact_stream,
     chat_completion_response_artifact
 )
-from gallama.config_manager import ConfigManager
+from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
-from gallama.logger import get_logger
+from gallama.logger.logger import get_logger
 import os
 import asyncio
 from contextlib import asynccontextmanager
 
 try:
-    from gallama.chatgenerator import ChatGeneratorLlamaCpp
+    from gallama.backend.chatgenerator import ChatGeneratorLlamaCpp
 except ImportError:
     # llama cpp optional dependancy
     ChatGeneratorLlamaCpp = None
@@ -123,7 +123,6 @@ async def result_generator(gen_queue):
 async def chat_completion(request: Request, query: ChatMLQuery):
     # https://platform.openai.com/docs/api-reference/chat/create
 
-
     global llm_dict, default_model_name
     gen_queue = GenQueue()      # this queue will hold the result for this generation
 
@@ -143,7 +142,7 @@ async def chat_completion(request: Request, query: ChatMLQuery):
         asyncio.create_task(llm.chat(
             query=query,
             prompt_eng=prompt_eng,
-            gen_queue = gen_queue,
+            gen_queue=gen_queue,
         ))
 
         # send the response to client
@@ -242,7 +241,7 @@ def load_model(model_spec: ModelParser):
     model_config = config_manager.get_model_config(model_name)
 
     if not model_config:
-        raise Exception(f"Model config for '{model_name}' not exist in ~/.gallama/model_config.yaml")
+        raise Exception(f"Model config for '{model_name}' not exist in ~/gallama/model_config.yaml")
 
     # load the model with config from the model_spec and yml. model_spec comes from cli
     if model_config["backend"] != "embedding":
@@ -252,7 +251,7 @@ def load_model(model_spec: ModelParser):
             draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
             if not draft_model_config:
                 raise Exception(
-                    f"Model config for '{model_spec.draft_model_name}' not exist in ~/.gallama/model_config.yaml")
+                    f"Model config for '{model_spec.draft_model_name}' not exist in ~/gallama/model_config.yaml")
         else:
             draft_model_config = {}
 
@@ -280,7 +279,9 @@ def load_model(model_spec: ModelParser):
     else:   # embedding model
         llm = EmbeddingModel(
             model_id=model_config["model_id"],
-            model_name=model_name
+            model_name=model_name,
+            model_spec=model_spec,
+            model_config=model_config,
         )
 
         # update dict

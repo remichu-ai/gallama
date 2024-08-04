@@ -1,28 +1,48 @@
-from .data_class import (
+from gallama.data_classes.data_class import (
     EmbeddingRequest,
     EmbeddingResponse,
     EmbeddingObject,
 )
-from .utils import floats_to_base64
-# import asyncio
+from gallama.utils.utils import floats_to_base64
+from typing import Dict
 import logging
-from infinity_emb import AsyncEngineArray, EngineArgs, AsyncEmbeddingEngine
+from infinity_emb import EngineArgs, AsyncEmbeddingEngine
+from gallama.data_classes.data_class import ModelParser
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)      # disable logging from infinity
-from .logger import logger
 
 
 class EmbeddingModel:
-    def __init__(self, model_id='', model_name=None, max_seq_len=None):
+    def __init__(self, model_id: str, model_name: str, model_spec: ModelParser, model_config: Dict):
         self.model_id = model_id
         self.model_name = model_name
-        self.model = self.load_embedding_model(model_id)
+        self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
+        self.model = self.load_embedding_model()
 
-    @staticmethod
-    def load_embedding_model(model_id):
+    def get_visible_gpu_indices(self) -> str:
+        """
+        Generate a string of GPU indices based on allocated GPUs.
+        If no GPUs are specified, return all available GPU indices.
+
+        Returns:
+            str: A comma-separated string of GPU indices with allocated VRAM,
+                 or all available GPU indices if none are specified.
+        """
+        if self.gpus is None or self.gpus == "auto":
+            import torch
+            return ','.join(str(i) for i in range(torch.cuda.device_count()))
+
+        if all(vram == 0 for vram in self.gpus):
+            return ""  # No GPUs allocated
+
+        visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
+        return ','.join(visible_devices)
+
+    def load_embedding_model(self):
+        # load model
         emb_model = AsyncEmbeddingEngine.from_args(
             EngineArgs(
-                model_name_or_path=model_id,
+                model_name_or_path=self.model_id,
                 engine="torch",
                 embedding_dtype="float32",
                 dtype="auto"
