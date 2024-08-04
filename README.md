@@ -35,7 +35,7 @@ Here is the list of currently supported models for downloader:
 
 The syntax to specify the model is model name follow by `:` then follow by quantization float number e.g. `qwen-2-72B:4.0`
 
-For model not listed here, you can refer to the examples/Model_Downloader.ipynb for code to download from huggingface.
+For model not listed here, you can refer to `examples/Model_Downloader.ipynb` for code to download from huggingface.
 
 
 ### OpenAI Compatible Server
