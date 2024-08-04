@@ -474,7 +474,6 @@ arg_dict = """
         else:
             raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
 
-
         logger.info("----------------------Prompt---------------\n" + prompt)
         logger.debug("----------------------temperature---------\n" + str(temperature))
 

@@ -113,6 +113,12 @@ def main_cli():
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
     download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
 
+    # Add 'list_available' subcommand
+    download_parser = subparsers.add_parser("list_available", help="List the ")
+
+    # Add 'list_downloaded' subcommand
+    download_parser = subparsers.add_parser("list_downloaed", help="Download a model from Hugging Face")
+
     args = arg_parser.parse_args()
 
     # ensure config file is there
@@ -140,6 +146,7 @@ def main_cli():
             model_name=model_name,
             quant=float(quant) if quant else None
         ))
+
 
 if __name__ == "__main__":
     main_cli()
