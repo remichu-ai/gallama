@@ -4,6 +4,40 @@ gallama is a Python library that provides a Llama backend optimized for local ag
 
 ## Features
 
+### Integrated Model downloader
+
+Download exl2 model from Hugging Face for a list of standard popular model as following download llama-3.1 8B at 4.0bpw
+
+```shell
+gallama download llama-3.1-8B:4.0
+```
+
+After download, you can run the model with:
+```shell
+gallama serve -id "model_id=llama-3.1-8B"
+```
+
+Here is the list of currently supported models for downloader:
+
+| Model | Available Quantizations (bpw) |
+|-------|-------------------------------|
+| llama-8B | 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
+| llama-70B | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0 |
+| mistral | 2.8, 3.0, 4.0, 4.5, 5.0, 6.0 |
+| mistral-large | 2.3, 2.5, 2.75, 3.0, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0, 6.0 |
+| mistral-nemo | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
+| codestral | 3.0, 3.5, 4.25, 5.0, 6.5, 8.0 |
+| gemma-9B | 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 8.0 |
+| gemma-27B | 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0 |
+| qwen-2-1.5B | 3.0, 4.0, 5.0, 6.0, 8.0 |
+| qwen-2-7B | 3.0, 4.0, 5.0, 6.0, 8.0 |
+| qwen-2-72B | 3.0, 3.5, 4.0, 4.25, 4.65, 5.0, 6.0, 8.0 |
+
+The syntax to specify the model is model name follow by `:` then follow by quantization float number e.g. `qwen-2-72B:4.0`
+
+For model not listed here, you can refer to the examples/Model_Downloader.ipynb for code to download from huggingface.
+
+
 ### OpenAI Compatible Server
 Fully compatible with the OpenAI client.
 
@@ -98,14 +132,15 @@ print(completion.choices[0].message.content)
 ```
 
 ### Multiple Concurrent Models
-Run multiple models (different or same) with automatic load balancing and request routing.
+Run multiple models (different or same) with automatic load balancing and request routing. Model VRAM usage can be auto_loaded or be split among GPUs as following
+Each model will be run as a dedicated FastAPI to ensure no threading issue and guarantee speed.
 
 ```shell
 gallama serve -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
 
 ### OpenAI Embedding Endpoint
-Utilize Infinity Embedding library for both inference and embedding via a single URL for OpenAI client.
+Utilize Infinity Embedding library for both embedding via OpenAI client.
 
 ```python
 response = client.embeddings.create(
@@ -117,7 +152,7 @@ print(response.data[0].embedding)
 ```
 
 ### Legacy OpenAI Completion Endpoint
-Support for the Completion Endpoint is maintained.
+Support for the Legacy Completion Endpoint.
 
 ```python
 client.completions.create(
@@ -128,37 +163,8 @@ client.completions.create(
 )
 ```
 
-### Remote Model Management
-Load and unload models via API calls.
-
-```python
-import requests
-
-api_url = "http://127.0.0.1:8000/add_model"
-
-payload = [
-    {
-        "model_id": "qwen2-72B",
-        "gpus": [22,22,4,0],
-        "cache_size": 32768,
-    },
-    {
-        "model_id": "gemma2-9b",
-        "gpus": [0,0,0,20],
-        "cache_size": 32768,
-    },
-    {
-        "model_id": "/home/model/multilingual-e5-large-instruct",
-        "gpus": [0,0,0,1],
-        "model_type": "embedding",
-    },
-]
-
-response = requests.post(api_url, json=payload)
-```
-
-### Regex Enforcement
-Ensure output conforms to specified patterns.
+### Format Enforcement
+Ensure output conforms to specified patterns with a following options that can be specified in the `extra_body` when using OpenAI client.
 
 ```python
 completion = client.chat.completions.create(
@@ -191,6 +197,42 @@ completion = client.chat.completions.create(
 for chunk in completion:
     print(chunk.choices[0].delta.content, end='')
 ```
+
+### Remote Model Management
+Load and unload models via API calls.
+
+start gallama server if it is not current running:
+
+```shell
+gallama serve
+```
+
+```python
+import requests
+
+api_url = "http://127.0.0.1:8000/add_model"
+
+payload = [
+    {
+        "model_id": "qwen-2-72B",
+        "gpus": [22,22,4,0],
+        "cache_size": 32768,
+    },
+    {
+        "model_id": "gemma-2-9b",
+        "gpus": [0,0,0,12],
+        "cache_size": 32768,
+    },
+    {
+        "model_id": "multilingual-e5-large-instruct",
+        "gpus": [0,0,0,5],
+    },
+]
+
+response = requests.post(api_url, json=payload)
+```
+
+
 
 ## Installation
 
