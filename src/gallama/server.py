@@ -1,23 +1,23 @@
-import subprocess
 import time
 import sys
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from collections import defaultdict
-from typing import Union, AsyncGenerator
-from fastapi.responses import Response, StreamingResponse
+from typing import Union
 from fastapi.middleware.cors import CORSMiddleware
-from sse_starlette.sse import EventSourceResponse
-from pydantic import BaseModel
-from .data_class import ModelParser, SpeculativeDecodingParser
-from typing import List, Dict
-import random
+from gallama.data_classes.data_class import ModelParser, ModelObjectResponse, ModelObject, ModelDownloadSpec
+from gallama.data_classes import ModelRequest, ModelInstanceInfo,  ModelInfo, AgentWithThinking
+from gallama.server_engine import download_model_from_hf, handle_mixture_of_agent_request, create_options_response
+from typing import List, Dict, Optional
+from gallama.config import ConfigManager
+from gallama.server_engine import forward_request
 import psutil
 import asyncio
 import uvicorn
 import argparse
-from .logger import get_logger
-from .utils import get_package_file_path
+from gallama.logger.logger import get_logger
+from gallama.utils.utils import get_package_file_path
+from gallama.server_engine import log_model_status
 import logging
 from logging import DEBUG, INFO
 import zmq
@@ -27,42 +27,13 @@ import threading
 import traceback
 
 
-# Try to import torch, but don't raise an error if it's not available
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-
-
-class ModelRequest(BaseModel):
-    model_id: str
-
-    class Config:
-        # Override protected namespaces to suppress warning
-        protected_namespaces = ()
-
-
-class ModelInstanceInfo(BaseModel):
-    model_id: str
-    port: int
-    pid: int  # Changed from process to pid
-    status: str
-
-    class Config:
-        # Override protected namespaces to suppress warning
-        protected_namespaces = ()
-
-
-class ModelInfo(BaseModel):
-    instances: List[ModelInstanceInfo]
-
-
 manager_app = FastAPI()
 models: Dict[str, ModelInfo] = {}
 model_load_queue = asyncio.Queue()
 loading_lock = asyncio.Lock()
 active_requests_lock = asyncio.Lock()
+
+config_manager = ConfigManager()
 
 # Define a variable for the starting port
 START_PORT = 8001
@@ -70,20 +41,19 @@ START_PORT = 8001
 # Increase the timeout for long-running tasks (adjust as needed)
 TIMEOUT = 300  # 5 minutes
 
+strict_mode = False
+
 # List of endpoints to exclude from API gateway redirection
-EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models"]
-EMBEDDING_SUBPATHS = [
-    {
-        "original": "/v1/embeddings",
-        "replacement": "/embeddings"
-    },
-    {
-        "original": "v1/embeddings",
-        "replacement": "embeddings"
-    }
-    # Add more paths here as needed, e.g.:
-    # {"original": "/v2/some_path", "replacement": "/new_path"}
-]
+EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models", "/v1/models"]
+EMBEDDING_SUBPATHS = []     # No overwriting at the moment
+# EMBEDDING_SUBPATHS = [
+#     {
+#         "original": "/v1/embeddings",
+#         "replacement": "/v1/embeddings"
+#     },
+#     # Add more paths here as needed, e.g.:
+#     # {"original": "/v2/some_path", "replacement": "/new_path"}
+# ]
 
 # Dictionary to keep track of active requests per instance
 active_requests: Dict[int, int] = defaultdict(int)
@@ -153,86 +123,9 @@ manager_app.add_middleware(
 )
 
 
-def get_gpu_memory_info():
-    if not TORCH_AVAILABLE:
-        return "PyTorch not available, GPU info cannot be retrieved"
-
-    try:
-        result = subprocess.check_output(
-            [
-                'nvidia-smi', '--query-gpu=index,memory.used,memory.free,memory.total',
-                '--format=csv,nounits,noheader'
-            ], encoding='utf-8')
-        lines = result.strip().split('\n')
-
-        total_used = 0
-        total_free = 0
-        total_memory = 0
-
-        gpu_memory_info = []
-        for line in lines:
-            index, used, free, total = map(int, line.split(','))
-            gpu_memory_info.append(
-                f"GPU {index}: "
-                f"Used:  {used/1024:.1f}GB, "
-                f"Free:  {free/1024:.1f}GB, "
-                f"Total:  {total/1024:.1f}GB"
-            )
-            total_used += used
-            total_free += free
-            total_memory += total
-
-        total_line = (f"Total: "
-                      f"Used: {total_used/1024:.1f}GB, "
-                      f"Free: {total_free/1024:.1f}GB, "
-                      f"Total: {total_memory/1024:.1f}GB")
-
-        if len(gpu_memory_info) == 1:
-            return "\n".join(gpu_memory_info)   # no total as only 1 GPU
-        else:
-            return "\n".join(gpu_memory_info +
-                             ["------+-------------+-------------+------------------------------------------+"] +
-                             [total_line])    # add total line as more than 1 GPU
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "Unable to retrieve GPU information"
-
-
-def log_model_status():
-    total_models = len(models)
-    total_instances = sum(len(model_info.instances) for model_info in models.values())
-
-    # Prepare model details
-    model_details = []
-    for model_name, model_info in models.items():
-        instances = ["{0}".format(inst.port) for inst in model_info.instances]
-        model_details.append("| {0:<20} | {1:>2} | {2:<30} ".format(model_name, len(instances), ', '.join(instances)))
-
-    # Prepare GPU info
-    gpu_info = get_gpu_memory_info().split('\n')
-    formatted_gpu_info = ''.join("| {0}\n".format(line) for line in gpu_info)
-
-    # Construct the log message
-    log_message = """```
-+------------------------------------------------------------------------------+
-| Current Status: {0} model(s) loaded with {1} total instance(s)               
-+------------------------------------------------------------------------------+
-| Model Name           | # | Ports                                             
-+----------------------+---+---------------------------------------------------+
-{2}
-+------------------------------------------------------------------------------+
-| GPU Memory Information                                                       
-+-------+-------------+-------------+------------------------------------------+
-| GPU   | Used        | Free        | Total       
-+-------+-------------+-------------+------------------------------------------+
-{3}+-------+-------------+-------------+------------------------------------------+
-```""".format(
-        total_models,
-        total_instances,
-        '\n'.join(model_details),
-        formatted_gpu_info
-    )
-
-    logger.info(log_message)
+@manager_app.post("/download_model")
+def download_model(model_spec: ModelDownloadSpec):
+    download_model_from_hf(model_spec)
 
 
 async def model_loader():
@@ -265,17 +158,9 @@ async def wait_for_model_ready(port, timeout=300):  # 5 minutes timeout
                 if response.status_code == 200:
                     return True
         except httpx.RequestError:
-            pass  # The server might not be up yet, so we'll just continue waiting
+            pass  # The server_engine might not be up yet, so we'll just continue waiting
         await asyncio.sleep(1)
     return False
-
-
-def get_library_path():
-    # Get the directory containing the current file
-    current_file_path = os.path.abspath(__file__)
-    # Get the parent directory (which should be the library root)
-    library_path = os.path.dirname(os.path.dirname(current_file_path))
-    return library_path
 
 
 async def run_model(model: ModelParser):
@@ -291,36 +176,40 @@ async def run_model(model: ModelParser):
 
         logger.info(f"Attempting to start model {model.model_name} on port {port}")
 
+        model_config = config_manager.configs.get(model.model_name)
+        backend = model.backend or model_config.get('backend')
+
         try:
             # Use the function
             app_path = get_package_file_path('app.py')
             logger.info(f"Using app path: {app_path}")
-            if model.backend in ["exllama", "llama_cpp"]:
+
+            if backend != "embedding":
                 model_cli_args = model.to_arg_string()
                 logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
-                    # stderr=asyncio.subprocess.DEVNULL
+                    # stderr=asyncio.subprocess.DEVNULL,
                 )
-            elif model.backend in ["embedding"]:
+            else:
+                # for embedding infinity doesnt have way to select GPU to be used, hence enforce
+                # CUDA_VISIBLE_DEVICES constraints before launching fastapi
+
                 # Create a copy of the current environment
                 env = os.environ.copy()
 
                 # Set CUDA_VISIBLE_DEVICES
-                # this is because infinity embedding do not have gpu arguments
-                # hence set it via env parameter
                 env['CUDA_VISIBLE_DEVICES'] = model.get_visible_gpu_indices()
 
+                model_cli_args = model.to_arg_string()
+                logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
-                    "infinity_emb", "v2", "--model-id", model.model_id, "--port", str(port),
-                    # for embedding simply send the output to parent process
-                    #stdout=asyncio.subprocess.DEVNULL,
-                    #stderr=asyncio.subprocess.DEVNULL,
+                    "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    # stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
                 )
-            else:
-                raise ValueError(f"Unsupported model type: {model.backend}")
 
         except Exception as e:
             logger.error(f"Failed to create subprocess for model {model.model_id} on port {port}: {str(e)}")
@@ -329,7 +218,13 @@ async def run_model(model: ModelParser):
         # Wait for the model to become ready
         if await wait_for_model_ready(port):
             logger.info(f"Model {model.model_name} on port {port} is ready")
-            instance_info = ModelInstanceInfo(port=port, pid=process.pid, status="running", model_id=model.model_id)
+            instance_info = ModelInstanceInfo(
+                port=port,
+                pid=process.pid,
+                status="running",
+                model_id=model.model_id,
+                embedding=model.backend == "embedding"
+            )
             models[model.model_name].instances.append(instance_info)
         else:
             logger.error(f"Timeout waiting for model {model.model_name} on port {port} to become ready")
@@ -337,7 +232,7 @@ async def run_model(model: ModelParser):
             return
 
         logger.info(f"Model {model.model_id} instance on port {port} is fully loaded and ready")
-        log_model_status()  # Log status after successfully loading a model
+        log_model_status(models)  # Log status after successfully loading a model
 
         # Instead of entering an infinite loop, we'll exit the function here
         return
@@ -398,74 +293,7 @@ async def stop_model_instance(model: str, port: int):
         if not models[model].instances:
             del models[model]
         logger.info(f"Cleaned up model {model} instance on port {port}")
-        log_model_status()  # Log status after removing a model instance
-
-
-# Optimize the forward_request function
-async def forward_request(request: Request, instance: ModelInstanceInfo) -> Union[Response, StreamingResponse]:
-    original_path = request.url.path
-    path = original_path
-
-    # Check if the path matches any in EMBEDDING_SUBPATHS and replace if necessary
-    for subpath in EMBEDDING_SUBPATHS:
-        if path.startswith(subpath["original"]):
-            path = path.replace(subpath["original"], subpath["replacement"], 1)
-            logger.info(f"Path replaced: {original_path} -> {path}")
-            break
-
-    url = f"http://localhost:{instance.port}{path}"
-    logger.debug(f"Forwarding request to URL: {url}")
-
-    headers = dict(request.headers)
-    body = await request.body()
-    body_json = json.loads(body)
-
-    request.state.instance_port = instance.port
-
-    # Log relevant information
-    logger.debug(f"Request method: {request.method}")
-    logger.debug(f"Accept header: {headers.get('accept')}")
-    logger.debug(f"Content-Type header: {headers.get('content-type')}")
-    logger.debug(f"Request body: {body_json}")
-
-    # Check if it's a streaming request
-    is_streaming_request = body_json.get('stream', False)
-    logger.debug(f"Is streaming request: {is_streaming_request}")
-
-    if request.method == "OPTIONS":
-        return create_options_response(headers)
-    elif is_streaming_request:
-        logger.info("Handling as streaming request")
-        return StreamingResponse(
-            stream_response(request.method, url, headers, body),
-            media_type="application/json"
-        )
-    else:
-        logger.info("Handling as non-streaming request")
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.request(method=request.method, url=url, headers=headers, content=body, timeout=None)
-                logger.info(f"Response status code: {response.status_code}")
-                return Response(content=response.content, status_code=response.status_code,
-                                headers=dict(response.headers))
-            except httpx.RequestError as exc:
-                logger.error(f"An error occurred while forwarding the request to instance at port {instance.port}: {exc}")
-                raise HTTPException(status_code=500, detail="Internal server error")
-
-async def stream_response(method: str, url: str, headers: dict, body: bytes):
-    async with httpx.AsyncClient() as client:
-        async with client.stream(method, url, headers=headers, content=body, timeout=None) as response:
-            async for chunk in response.aiter_bytes():
-                yield chunk
-
-def create_options_response(headers: dict) -> Response:
-    options_headers = {
-        "Access-Control-Allow-Origin": headers.get("Origin", "*"),
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
-        "Access-Control-Max-Age": "3600",
-    }
-    return Response(content="", status_code=204, headers=options_headers)
+        log_model_status(models)  # Log status after removing a model instance
 
 
 async def get_model_from_body(request: Request) -> str:
@@ -518,7 +346,6 @@ async def add_model(model_request: Union[ModelParser, List[ModelParser]]):
         return {"message": f"Model {model_request} instance queued for loading"}
 
 
-
 @manager_app.post("/remove_model")
 async def remove_model(model_request: ModelRequest):
     if model_request.model_id not in models:
@@ -534,6 +361,15 @@ async def list_models():
             for name, model in models.items()}
 
 
+@manager_app.get("/v1/models")
+async def get_models(request: Request):
+    data = []
+    for name, model in models.items():
+        data.append(ModelObject(id=name))
+
+    return ModelObjectResponse(data=data)
+
+
 @manager_app.get("/loading_status")
 async def loading_status():
     return {
@@ -544,6 +380,35 @@ async def loading_status():
     }
 
 
+async def get_instance_for_model(model: str):
+    running_instances = [inst for inst in models[model].instances if inst.status == "running"]
+    if not running_instances:
+        raise HTTPException(status_code=503, detail=f"No running instances available for model: {model}")
+
+    return min(running_instances, key=lambda inst: active_requests[inst.port])
+
+
+async def forward_to_multiple_agents(request: Request, agent_list: List[Union[str, AgentWithThinking]], modified_body: str, modified_headers: str):
+    tasks = []
+    for agent in agent_list:
+        if isinstance(agent, str):
+            instance = await get_instance_for_model(agent)
+            tasks.append(forward_request(request, instance, modified_body, modified_headers))
+        elif isinstance(agent, AgentWithThinking):
+            instance = await get_instance_for_model(agent.model)
+            if agent.thinking_template:
+                # Modify the request to include the thinking in the thinking_template field
+                agent_body = json.loads(modified_body)
+                agent_body["thinking_template"] = agent.thinking_template
+                agent_modified_body = json.dumps(agent_body).encode()
+                agent_modified_headers = dict(modified_headers)
+                agent_modified_headers["content-length"] = str(len(agent_modified_body))
+                tasks.append(forward_request(request, instance, agent_modified_body, agent_modified_headers))
+            else:
+                tasks.append(forward_request(request, instance, modified_body, modified_headers))
+    return await asyncio.gather(*tasks)
+
+
 async def load_balanced_router(request: Request, path: str):
     if request.url.path in EXCLUDED_ENDPOINTS:
         return await request.app.router.get_route_handler()(request)
@@ -551,39 +416,46 @@ async def load_balanced_router(request: Request, path: str):
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
 
+    body = await request.body()
+    body_json = json.loads(body)
+
+    if body_json.get("mixture_of_agents", False):
+        return await handle_mixture_of_agent_request(request, body_json, models, active_requests)
+
     model = await get_model_from_body(request)
 
     async with request_semaphore:
         is_embedding = any(subpath["original"] in path for subpath in EMBEDDING_SUBPATHS)
 
-        if not model or model not in models:
-            if len(models) > 0:
-                if is_embedding:
-                    # For embedding requests, select a random instance with a matching name
-                    matching_instances = [inst for model_info in models.values() for inst in model_info.instances
-                                          if inst.status == "running" and inst.model_id == model]
-                    if not matching_instances:
-                        raise HTTPException(status_code=503, detail="No running instances available for this model")
-                    instance = random.choice(matching_instances)
-                else:
-                    # For non-embedding requests, select the instance with the least active connections across all models
-                    all_instances = [inst for model_info in models.values() for inst in model_info.instances if inst.status == "running"]
-                    if not all_instances:
-                        raise HTTPException(status_code=503, detail="No running instances available")
-                    instance = min(all_instances, key=lambda inst: active_requests[inst.port])
-            else:
-                raise HTTPException(status_code=400, detail="Invalid or missing model in request body")
-        else:
-            running_instances = [inst for inst in models[model].instances if inst.status == "running"]
-            if not running_instances:
-                raise HTTPException(status_code=503, detail="No running instances available for this model")
+        if not model and strict_mode:
+            raise HTTPException(status_code=400, detail="Model must be specified in strict mode")
 
-            if is_embedding:
-                # For embedding requests, select a random instance with a matching name
-                instance = random.choice(running_instances)
-            else:
-                # For other requests, select the instance with the least active requests
-                instance = min(running_instances, key=lambda inst: active_requests[inst.port])
+        available_instances = []
+
+        if strict_mode:
+            if model not in models:
+                raise HTTPException(status_code=404, detail="Specified model not found")
+            available_instances = [inst for inst in models[model].instances if inst.status == "running"]
+        else:
+            available_instances = []
+
+            for model_info in models.values():
+                for inst in model_info.instances:
+                    if inst.status == "running":
+                        if is_embedding:
+                            # For embedding requests, select instances with matching model name
+                            if not model or inst.model_id == model:
+                                available_instances.append(inst)
+                        else:
+                            # For non-embedding requests, select all non-embedding instances
+                            if not inst.embedding:
+                                available_instances.append(inst)
+
+        if not available_instances:
+            raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
+
+        # Select the instance with the least active requests
+        instance = min(available_instances, key=lambda inst: active_requests[inst.port])
 
         # Increment the active request count for the selected instance
         async with active_requests_lock:
@@ -591,7 +463,7 @@ async def load_balanced_router(request: Request, path: str):
 
         try:
             logger.info(f"active_requests: {str(active_requests)}")
-            logger.info(f"Request routed to model {model if model else 'unspecified'} instance at port {instance.port}")
+            logger.info(f"Request routed to model {instance.model_id} instance at port {instance.port}")
 
             # Forward the request
             response = await forward_request(request, instance)
@@ -600,7 +472,7 @@ async def load_balanced_router(request: Request, path: str):
         finally:
             # Decrement the active request count after the request is completed
             async with active_requests_lock:
-                active_requests[instance.port] += 1
+                active_requests[instance.port] -= 1
 
 
 @manager_app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
@@ -648,7 +520,7 @@ async def main(model_list=None, port=8000, strict_mode=False):
 
     await start_server(port)
 
-    # Ensure tasks are cancelled when the server stops
+    # Ensure tasks are cancelled when the server_engine stops
     model_loader_task.cancel()
     health_check_task.cancel()
     try:
@@ -668,6 +540,7 @@ def parse_dict(arg):
 
 
 def llama_picture():
+    """ show a fun picture cause why not :) """
     # Load the image
     llama_art = """
         ,,__
@@ -682,6 +555,11 @@ def llama_picture():
 def run_from_script(args):
     # opening llama picture cause why not
     llama_picture()
+
+    global strict_mode
+
+    if args.strict_mode:
+        strict_mode = True
 
     # parse the cli input
     model_list = []
@@ -700,6 +578,7 @@ def run_from_script(args):
     else:
         logger.setLevel(INFO)
 
+
     logger.info("Parsed Arguments:" + str(args))
 
     asyncio.run(
@@ -715,6 +594,8 @@ if __name__ == "__main__":
 
     logger.info("Script started")
     arg_parser = argparse.ArgumentParser(description="Launch multi model src instance")
+    arg_parser.add_argument("--strict_mode", action="store_true", default=False,
+                            help="Enable strict mode for routing non-embedding requests to matching model names")
     arg_parser.add_argument("-id", "--model_id", action='append', type=parse_dict, default=None,
                             help="Model configuration. Can be used multiple times for different models. "
                                  "Format: -id model_id=<model_name> [gpu=<vram1>,<vram2>,...] [gpu<n>=<vram>] [cache=<size>] [model_type=exllama|embedding]"
@@ -731,8 +612,7 @@ if __name__ == "__main__":
     arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
-    arg_parser.add_argument("--strict_mode", action="store_true", default=False,
-                            help="Enable strict mode for routing non-embedding requests to matching model names")
+
     # arg_parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
 
     args = arg_parser.parse_args()

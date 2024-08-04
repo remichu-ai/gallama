@@ -1,0 +1,1 @@
+from .thinking_template import THINKING_TEMPLATE

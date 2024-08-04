@@ -111,7 +111,7 @@ def get_package_file_path(file_name: str) -> str:
     Returns:
     str: The absolute path to the file
     """
-    current_dir = Path(__file__).parent
+    current_dir = Path(__file__).parent.parent
     file_path = current_dir / file_name
     if not file_path.exists():
         raise FileNotFoundError(f"File {file_name} not found in the gallama package.")

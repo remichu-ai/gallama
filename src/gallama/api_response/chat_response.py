@@ -1,5 +1,5 @@
 from fastapi import Request
-from .data_class import (
+from gallama.data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
     Choice,
@@ -17,14 +17,46 @@ from .data_class import (
     CompletionStreamResponse,
     CompletionChoice,
 )
-from typing import AsyncIterator, Iterator, Literal, TypeVar, Generic
-from .utils import get_response_uid, get_response_tool_uid
-from .logger import logger
+from .stream_parser import StreamParser
+from typing import AsyncIterator
+from gallama.utils.utils import get_response_uid, get_response_tool_uid
+from gallama.logger.logger import logger
 import time
-from datetime import datetime
-from sse_starlette.sse import EventSourceResponse
 import json
 import asyncio
+
+
+async def get_response_from_queue(
+    # request: Request,     # TODO add request cancellation
+    gen_queue: GenQueue,
+):
+    """ function to get the text generated in queue to be used for other part of the library"""
+    response = ""
+    # global result_queue
+    # completed_event = asyncio.Event()
+
+    eos = False
+    genStats = None
+    while not eos:
+        try:
+            result = gen_queue.get_nowait()
+
+            if isinstance(result, GenText):
+                response += result.content
+            elif isinstance(result, GenerationStats):
+                genStats = result
+            elif isinstance(result, GenStart):
+                pass
+            elif isinstance(result, GenEnd):
+                eos = True
+                gen_queue.task_done()
+                logger.info("----------------------LLM Response---------------\n" + response.strip())
+
+        except asyncio.QueueEmpty:
+            await asyncio.sleep(0.1)    # short sleep before trying again
+
+    return response, genStats
+
 
 
 async def chat_completion_response_stream(
@@ -123,7 +155,7 @@ async def chat_completion_response_stream(
                         )
                     ],
                 )
-                yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
 
         if eos:
             # Log the full response at the end
@@ -142,7 +174,7 @@ async def chat_completion_response_stream(
                         total_tokens=gen_stats.total_tokens_count,
                     ),
                 )
-                yield {"data": json.dumps(usage_data.dict(exclude_unset=True))}
+                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
 
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
@@ -170,7 +202,6 @@ async def chat_completion_response(
     while not eos:
         try:
             result = gen_queue.get_nowait()
-
             if isinstance(result, GenText):
                 response += result.content
             elif isinstance(result, GenerationStats):
@@ -270,7 +301,7 @@ async def chat_completion_response(
         )
 
     assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.dict(), indent=2))
+    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
     logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
     return response_obj
@@ -306,6 +337,7 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
     unique_id = get_response_uid()
     full_response = ""
     eos = False
+    gen_stats = None
     while not eos:
         accumulated_text = ""
         try:
@@ -317,8 +349,10 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                     eos = True
                     gen_queue.task_done()
                     break
-                elif isinstance(result, (GenStart, GenerationStats)):
-                    logger.info(f"{model_name} | LLM speed {result.generation_speed:.1f}/s tokens")
+                elif isinstance(result, GenStart):
+                    pass
+                elif isinstance(result, GenerationStats):
+                    gen_stats = result
         except asyncio.QueueEmpty:
             pass
         if accumulated_text:
@@ -344,6 +378,8 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
                 yield json_data
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
+            if gen_stats is not None:
+                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
             yield "[DONE]"
             break
         else:
@@ -357,32 +393,272 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
         logger.info("Stream ended before receiving GenEnd")
 
 
-async def get_response_from_queue(
-    # request: Request,     # TODO add request cancellation
-    gen_queue: GenQueue,
-):
-    response = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
-
+async def chat_completion_response_artifact_stream(
+        query: ChatMLQuery,
+        gen_queue: GenQueue,
+        model_name: str,
+) -> AsyncIterator[dict]:
+    unique_id = get_response_uid()
+    created = int(time.time())
+    full_response = ""
     eos = False
-    genStats = None
+    gen_type = "text"  # Default generation type
+    gen_stats = None
+
+    # last_log_time = time.time()
+    # log_interval = 1  # Log every 5 seconds
+
+    artifact_parser = StreamParser()
+    malformed_data = False
+    MALFORMED_CHECK_LENGTH = 70     # the length limit of text so that the content_type block appear
+    content_type = None    # either text or code
+
+    while not eos:
+        accumulated_text = ""
+        try:
+            # Collect all available items from the queue
+            while True:
+                item = gen_queue.get_nowait()
+                if isinstance(item, GenText):
+                    accumulated_text += item.content
+                elif isinstance(item, GenEnd):
+                    eos = True
+                    break
+                elif isinstance(item, GenStart):
+                    gen_type = item.gen_type
+                elif isinstance(item, GenerationStats):
+                    gen_stats = item
+        except asyncio.QueueEmpty:
+            pass
+
+        if accumulated_text:
+            full_response += accumulated_text
+
+            if gen_type == "text":
+                parsed_chunks = artifact_parser.process_stream(accumulated_text)
+
+                for chunk_type, chunk_content in parsed_chunks:
+                    if chunk_content:
+                        chunk_data = ChatCompletionResponse(
+                            unique_id=unique_id,
+                            model=model_name,
+                            object="chat.completion.chunk",
+                            created=created,
+                            choices=[
+                                StreamChoice(
+                                    index=0,
+                                    delta=ChatMessage(
+                                        role="assistant",
+                                        content=chunk_content,
+                                        artifact_meta=chunk_type.model_dump()
+
+                                    ),
+                                ),
+                            ],
+                        )
+                        yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
+
+            elif gen_type == "tool":
+                # artifact do not affect tool usage
+                # Accumulate tool usage data
+                # Note: This assumes that tool data is complete in a single chunk
+                # If tool data can span multiple chunks, you'll need to implement a more sophisticated accumulation strategy
+                tool_response = json.loads(accumulated_text)
+                tools_list = []
+                for index, tool in enumerate(tool_response.get('functions_calling', [])):
+                    tool_id = get_response_tool_uid()
+                    tools_list.append(
+                        ToolCallResponse(
+                            id=tool_id,
+                            index=index,
+                            function=OneTool(
+                                name=tool['name'],
+                                arguments=json.dumps(tool['arguments']),
+                            )
+                        )
+                    )
+                chunk_data = ChatCompletionResponse(
+                    unique_id=unique_id,
+                    model=model_name,
+                    object="chat.completion.chunk",
+                    created=created,
+                    choices=[
+                        StreamChoice(
+                            index=0,
+                            delta=ChatMessage(
+                                role="assistant",
+                                tool_calls=tools_list,
+                            ),
+                            finish_reason="tool_calls",
+                        )
+                    ],
+                )
+                yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
+
+        if eos:
+            # Log the full response at the end
+            logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
+
+            # Include generation stats if available and requested
+            if gen_stats and query.stream_options and query.stream_options.include_usage:
+                usage_data = ChatCompletionResponse(
+                    unique_id=unique_id,
+                    model=model_name,
+                    object="chat.completion.chunk",
+                    choices=[],
+                    usage=UsageResponse(
+                        prompt_tokens=gen_stats.input_tokens_count,
+                        completion_tokens=gen_stats.output_tokens_count,
+                        total_tokens=gen_stats.total_tokens_count,
+                    ),
+                )
+                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
+
+            if gen_stats:
+                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+
+            # Send the ending DONE message
+            yield {"data": "[DONE]"}
+        else:
+            await asyncio.sleep(0.1)  # Short sleep before next iteration if not at end of stream
+
+
+async def chat_completion_response_artifact(
+        gen_queue: GenQueue,
+        model_name: str,
+) -> ChatCompletionResponse:
+    response = ""
+    response_obj = None
+    gen_type = GenStart(gen_type="text")
+    gen_stats = None
+    eos = False
+
     while not eos:
         try:
             result = gen_queue.get_nowait()
-
             if isinstance(result, GenText):
                 response += result.content
             elif isinstance(result, GenerationStats):
-                genStats = result
+                gen_stats = result
             elif isinstance(result, GenStart):
-                pass
+                gen_type = result
             elif isinstance(result, GenEnd):
                 eos = True
                 gen_queue.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response.strip())
-
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
+            await asyncio.sleep(0.1)
 
-    return response, genStats
+    unique_id = get_response_uid()
+    response = response.strip()
+
+    if gen_type.gen_type == "text":
+        parser = StreamParser()
+        parsed_chunks = parser.parse_full_response(response)
+
+        if parsed_chunks:
+            # If parsing was successful, create a structured response
+            choices = []
+            for idx, (chunk_type, chunk_content) in enumerate(parsed_chunks):
+                choices.append(
+                    Choice(
+                        index=idx,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=chunk_content,
+                            artifact_meta=chunk_type.model_dump()
+                        ),
+                        finish_reason="stop"
+                    )
+                )
+        else:
+            # If parsing failed, treat the entire response as a single text chunk
+            choices = [
+                Choice(
+                    index=0,
+                    message=ChatMessage(
+                        role="assistant",
+                        content=response,
+                        artifact_meta=TextTag().model_dump()
+                    ),
+                    finish_reason="stop"
+                )
+            ]
+
+        response_obj = ChatCompletionResponse(
+            unique_id=unique_id,
+            model=model_name,
+            choices=choices,
+            usage=UsageResponse(
+                prompt_tokens=gen_stats.input_tokens_count if gen_stats else 0,
+                completion_tokens=gen_stats.output_tokens_count if gen_stats else 0,
+                total_tokens=gen_stats.total_tokens_count if gen_stats else 0,
+            ),
+        )
+
+    elif gen_type.gen_type == "tool":
+        try:
+            response_dict = json.loads(response)
+        except:
+            # since output is not tool, return it as text instead #TODO find better solution
+            response_obj = ChatCompletionResponse(
+                unique_id=unique_id,
+                model=model_name,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=response,
+                            artifact_meta=TextTag().model_dump()
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=UsageResponse(
+                    prompt_tokens=gen_stats.input_tokens_count,
+                    completion_tokens=gen_stats.output_tokens_count,
+                    total_tokens=gen_stats.total_tokens_count,
+                ),
+            )
+        else:
+            # successfully parse JSON, convert the tool used into response format
+            tools_list = []  # the list of tool to call
+            for index, tool in enumerate(response_dict['functions_calling']):
+                tool_id = get_response_tool_uid()
+                tools_list.append(
+                    ToolCallResponse(
+                        id=tool_id,
+                        index=index,
+                        function=OneTool(
+                            name=tool['name'],
+                            arguments=json.dumps(tool['arguments']),
+                        )
+                    )
+                )
+
+            response_obj = ChatCompletionResponse(
+                model=model_name,
+                choices=[
+                    Choice(
+                        index=0,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=None,
+                            tool_calls=tools_list,
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ],
+                usage=UsageResponse(
+                    prompt_tokens=gen_stats.input_tokens_count,
+                    completion_tokens=gen_stats.output_tokens_count,
+                    total_tokens=gen_stats.total_tokens_count,
+                ),
+            )
+
+    assert response_obj is not None
+    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
+    logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+
+    return response_obj

@@ -1,5 +1,5 @@
 from . import cli
-from .logger import logger
-from .thinking_template import THINKING_TEMPLATE, Thinking
+from gallama.logger.logger import logger
+from gallama.backend.thinking_template import THINKING_TEMPLATE, Thinking
 from . import app
-from . import chatgenerator
+from .backend import chatgenerator

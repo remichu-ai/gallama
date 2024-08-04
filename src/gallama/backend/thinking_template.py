@@ -1,18 +1,13 @@
-from pydantic import BaseModel, Field, validator
-from lxml import etree
-from typing import Dict, Optional, List
-import re
-
 import os
 import sys
 # Get the directory of the current script
 # current_dir = os.path.dirname(os.path.abspath(__file__))
 from pathlib import Path
-from pydantic import BaseModel, Field, validator
 from lxml import etree
 from typing import Dict, Optional, List, Any
+from gallama.logger import logger
 import re
-from .logger import logger
+
 
 def get_package_root():
     """
@@ -20,13 +15,13 @@ def get_package_root():
     """
     if getattr(sys, 'frozen', False):
         # If the application is frozen (e.g., PyInstaller executable)
-        return Path(sys.executable).parent
+        return Path(sys.executable).parent.parent
     elif __package__:
         # If it's an installed package
-        return Path(__file__).parent
+        return Path(__file__).parent.parent
     else:
         # If it's a standalone script
-        return Path(__file__).resolve().parent
+        return Path(__file__).resolve().parent.parent
 
 # Use the function to get the package root
 current_dir = get_package_root()

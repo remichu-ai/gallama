@@ -1,0 +1,193 @@
+llama-8B:
+  remark: "v3.1"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Llama3.1
+  repo:
+    - repo: "turboderp/Llama-3.1-8B-Instruct-exl2"
+      branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
+      quant: [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+      backend: exllama
+llama-70B:
+  remark: "v3.1"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Llama3.1
+  repo:
+    - repo: "turboderp/Llama-3.1-8B-Instruct-exl2"
+      branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw']
+      quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0]
+      backend: exllama
+mistral:
+  remark: "v0.3"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Mistral_large
+  repo:
+    - repo: "turboderp/Mistral-7B-instruct-v0.3-exl2"
+      branch: ['2.8bpw', '3.0bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw']
+      quant: [2.8, 3.0, 4.0, 4.5, 5.0, 6.0]
+      backend: exllama
+mistral-large:
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Mistral_large
+  repo:
+    - repo: "turboderp/Mistral-Large-Instruct-2407-123B-exl2"
+      branch: ['2.3bpw', '2.5bpw', '2.75bpw', '3.0bpw', '3.5bpw', '4.0bpw', '4.25bpw', '4.5bpw', '4.75bpw', '5.0bpw', '6.0bpw']
+      quant: [2.3, 2.5, 2.75, 3.0, 3.5, 4.0, 4.25, 4.5, 4.75, 5.0, 6.0]
+      backend: exllama
+    - repo: "Panchovix/Mistral-Large-Instruct-2407-3.75bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.75]
+      backend: exllama
+mistral-nemo:
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Mistral
+  repo:
+    - repo: "turboderp/Mistral-Nemo-Instruct-12B-exl2"
+      branch: ['2.5bpw', '3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
+      quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+      backend: exllama
+codestral:
+  remark: "v0.1"
+  default_quant: 4.25
+  default_cache_quant: Q4
+  prompt_template: Mistral
+  repo:
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['3_0']
+      quant: [3.0]
+      backend: exllama
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['3_5']
+      quant: [3.5]
+      backend: exllama
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['4_25']
+      quant: [4.25]
+      backend: exllama
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['5_0']
+      quant: [5.0]
+      backend: exllama
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['6_5']
+      quant: [6.5]
+      backend: exllama
+    - repo: "bartowski/Codestral-22B-v0.1-exl2"
+      branch: ['8_0']
+      quant: [8.0]
+      backend: exllama
+gemma-9B:
+  remark: "v2"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Gemma2
+  repo:
+    - repo: "turboderp/gemma-2-27b-it-exl2"
+      branch: ['2.5bpw', '3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '5.5bpw', '6.0bpw', '8.0bpw']
+      quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 8.0]
+      backend: exllama
+gemma-27B:
+  remark: "v2"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Gemma2
+  repo:
+    - repo: "turboderp/gemma-2-27b-it-exl2"
+      branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
+      quant: [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+      backend: exllama
+qwen-2-1.5B:
+  remark: "v2"
+  default_quant: 4.0
+  default_cache_quant: Q8
+  prompt_template: Qwen2
+  repo:
+    - repo: "LoneStriker/Qwen2-1.5B-Instruct-3.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-1.5B-Instruct-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-1.5B-Instruct-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [5.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-1.5B-Instruct-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [6.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-1.5B-Instruct-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [8.0]
+      backend: exllama
+qwen-2-7B:
+  remark: "v2"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "LoneStriker/Qwen2-7B-Instruct-3.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-7B-Instruct-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-7B-Instruct-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [5.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-7B-Instruct-6.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [6.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-7B-Instruct-8.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [8.0]
+      backend: exllama
+qwen-2-72B:
+  remark: "v2"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "LoneStriker/Qwen2-72B-Instruct-3.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-72B-Instruct-3.5bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.5]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-72B-Instruct-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "bartowski/Qwen2-72B-Instruct-exl2"
+      branch: ["4_25"]
+      quant: [4.25]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-72B-Instruct-4.65bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.65]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-72B-Instruct-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [5.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-72B-Instruct-6.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [6.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2-7B-Instruct-8.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [8.0]
+      backend: exllama
+

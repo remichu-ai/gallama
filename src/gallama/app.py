@@ -3,7 +3,7 @@ import torch
 import gc
 from fastapi import FastAPI, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from gallama.data_class import (
+from gallama.data_classes.data_class import (
     ChatMLQuery,
     ToolForce,
     GenerateQuery,
@@ -11,29 +11,36 @@ from gallama.data_class import (
     ModelObject,
     ModelParser,
     GenQueue,
-    SpeculativeDecodingParser
+    EmbeddingRequest
 )
 import argparse
-from gallama.model import Model
-from gallama.prompt_engine import PromptEngine
-from gallama.chatgenerator import ChatGenerator
+from gallama.backend.model import Model
+from gallama.backend.prompt_engine import PromptEngine
+from gallama.backend.chatgenerator import ChatGenerator
+from gallama.backend.embedding import EmbeddingModel
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
 import json
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
-from gallama.chat_response import chat_completion_response_stream, completion_response_stream, completion_response, chat_completion_response
-# from embedding import EmbeddingModel
-from gallama.config_manager import ConfigManager
+from gallama.api_response.chat_response import (
+    chat_completion_response_stream,
+    completion_response_stream,
+    completion_response,
+    chat_completion_response,
+    chat_completion_response_artifact_stream,
+    chat_completion_response_artifact
+)
+from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
-from gallama.logger import get_logger
+from gallama.logger.logger import get_logger
 import os
 import asyncio
 from contextlib import asynccontextmanager
 
 try:
-    from gallama.chatgenerator import ChatGeneratorLlamaCpp
+    from gallama.backend.chatgenerator import ChatGeneratorLlamaCpp
 except ImportError:
     # llama cpp optional dependancy
     ChatGeneratorLlamaCpp = None
@@ -88,6 +95,10 @@ def validate_api_request(query: ChatMLQuery):
     else:
         query.tool_choice = "none"
 
+    # validate that prefix_strings and regex_prefix_pattern  or regex_pattern can not be used together
+    if query.prefix_strings and (query.regex_pattern or query.regex_prefix_pattern):
+        raise HTTPException(status_code=400, detail="refix_strings and regex_pattern, regex_prefix_pattern can not be used together")
+
     return query
 
 
@@ -107,17 +118,18 @@ async def result_generator(gen_queue):
     await completed_event.wait()
 
 
+# noinspection PyAsyncCall
 @router.post("/v1/chat/completions")
 async def chat_completion(request: Request, query: ChatMLQuery):
     # https://platform.openai.com/docs/api-reference/chat/create
-
-    # validate and fix query
-    query = validate_api_request(query)
 
     global llm_dict, default_model_name
     gen_queue = GenQueue()      # this queue will hold the result for this generation
 
     try:
+        # validate and fix query
+        query = validate_api_request(query)
+
         if llm_dict.get(query.model):
             model_name_to_use = query.model
         else:
@@ -130,15 +142,27 @@ async def chat_completion(request: Request, query: ChatMLQuery):
         asyncio.create_task(llm.chat(
             query=query,
             prompt_eng=prompt_eng,
-            gen_queue = gen_queue,
+            gen_queue=gen_queue,
         ))
 
+        # send the response to client
         if query.stream:
             # EventSourceResponse take iterator so need to handle at here
-            return EventSourceResponse(chat_completion_response_stream(query=query, gen_queue=gen_queue, model_name=model_name_to_use))
+            if query.artifact == "No":     # not using artefact
+                return EventSourceResponse(
+                    chat_completion_response_stream(
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                    ))
+            else:
+                return EventSourceResponse(
+                    chat_completion_response_artifact_stream(
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                    ))
         else:
-            return await chat_completion_response(gen_queue=gen_queue, model_name=model_name_to_use)
-
+            if query.artifact == "No":     # not using artefact
+                return await chat_completion_response(gen_queue=gen_queue, model_name=model_name_to_use)
+            else:
+                return await chat_completion_response_artifact(gen_queue=gen_queue, model_name=model_name_to_use)
     except HTTPException as e:
         logger.error(e)
         return e
@@ -171,6 +195,19 @@ async def generate(request: Request, query: GenerateQuery):
         return await completion_response(gen_queue, model_name=model_name_to_use)
 
 
+@router.post("/v1/embeddings")
+async def embeddings(request: Request, query: EmbeddingRequest):
+    global default_model_name
+    embedding_model = llm_dict[default_model_name]["model"]
+
+    # for embedding, hard enforcement of matching model name
+    if query.model != embedding_model.model_name:
+        raise HTTPException(status_code=400,
+                            detail=f"Embedding model {query.model} is not found. Current loaded model is {embedding_model.model_name}")
+
+    return await embedding_model.text_embeddings(
+        query=query,
+    )
 
 
 @router.get("/v1/models")
@@ -195,15 +232,6 @@ async def options_handler(request: Request):
     )
 
 
-@router.get("/v1/add_speculative_decoding")
-async def add_speculative_decoding(request: Request, draft_spec: SpeculativeDecodingParser):
-    global llm_dict
-
-    # get the base model
-    llm_dict[draft_spec.name].add_speculative_decoding(draft_spec)
-
-
-
 @router.post("/load_model")
 def load_model(model_spec: ModelParser):
     global config_manager, llm_dict
@@ -212,41 +240,59 @@ def load_model(model_spec: ModelParser):
     model_name = model_spec.model_id
     model_config = config_manager.get_model_config(model_name)
 
-    prompt_eng = PromptEngine(prompt_format= model_config["prompt_template"])
-
     if not model_config:
-        raise Exception(f"Model config for '{model_name}' not exist in ~/.gallama/model_config.yaml")
-
-    if model_spec.draft_model_id:
-        draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
-        if not draft_model_config:
-            raise Exception(f"Model config for '{model_spec.draft_model_name}' not exist in ~/.gallama/model_config.yaml")
-    else:
-        draft_model_config = {}
+        raise Exception(f"Model config for '{model_name}' not exist in ~/gallama/model_config.yaml")
 
     # load the model with config from the model_spec and yml. model_spec comes from cli
-    llm_base = Model(
-        model_spec=model_spec,
-        model_config=model_config,
-        draft_model_config=draft_model_config,
-        eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
-    )
+    if model_config["backend"] != "embedding":
+        prompt_eng = PromptEngine(prompt_format=model_config["prompt_template"])
 
-    chat_generator_dict = {
-        "exllama": ChatGenerator,
-        "llama_cpp": ChatGeneratorLlamaCpp
-    }
+        if model_spec.draft_model_id:
+            draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
+            if not draft_model_config:
+                raise Exception(
+                    f"Model config for '{model_spec.draft_model_name}' not exist in ~/gallama/model_config.yaml")
+        else:
+            draft_model_config = {}
 
-    ChatGenerator_touse = chat_generator_dict[llm_base.backend]
-    llm = ChatGenerator_touse(llm_base)
+        # load LLM model
+        llm_base = Model(
+            model_spec=model_spec,
+            model_config=model_config,
+            draft_model_config=draft_model_config,
+            eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
+        )
 
-    logger.info("Loaded: " + llm_base.model_name)
+        chat_generator_dict = {
+            "exllama": ChatGenerator,
+            "llama_cpp": ChatGeneratorLlamaCpp,
+        }
 
-    # update dict
-    llm_dict[model_name] = {
-        "model": llm,
-        "prompt_engine": prompt_eng,
-    }
+        ChatGenerator_to_use = chat_generator_dict[llm_base.backend]
+        llm = ChatGenerator_to_use(llm_base)
+
+        # update dict
+        llm_dict[model_name] = {
+            "model": llm,
+            "prompt_engine": prompt_eng,
+        }
+    else:   # embedding model
+        llm = EmbeddingModel(
+            model_id=model_config["model_id"],
+            model_name=model_name,
+            model_spec=model_spec,
+            model_config=model_config,
+        )
+
+        # update dict
+        llm_dict[model_name] = {
+            "model": llm,
+        }
+
+
+    logger.info("Loaded: " + model_name)
+
+
 
 
 @router.post("/delete_model")
@@ -279,15 +325,16 @@ async def health_check():
 
 async def startup_event():
     # run some dummy generation so that cache is initialized
-    gen_queue = GenQueue()
-    for model_name, model_info in llm_dict.items():
-        llm = model_info["model"]
-        await llm.chat_raw(
-            prompt="Gallama model initialization",
-            stream=False,
-            max_tokens=5,
-            gen_queue=gen_queue
-        )
+    if llm_dict.get("prompt_engine"):   # LLM isntead of embedding
+        gen_queue = GenQueue()
+        for model_name, model_info in llm_dict.items():
+            llm = model_info["model"]
+            await llm.chat_raw(
+                prompt="Gallama model initialization",
+                stream=False,
+                max_tokens=5,
+                gen_queue=gen_queue
+            )
 
 
 
