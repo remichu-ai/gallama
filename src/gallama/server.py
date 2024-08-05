@@ -361,6 +361,12 @@ async def list_models():
             for name, model in models.items()}
 
 
+@manager_app.get("/list_available_models")
+async def list_available_models():
+    config_manager = ConfigManager()
+    return config_manager
+
+
 @manager_app.get("/v1/models")
 async def get_models(request: Request):
     data = []

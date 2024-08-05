@@ -1,10 +1,12 @@
 import argparse
 import shutil
 from pathlib import Path
-# import gallama
+from gallama.config import ConfigManager
 from gallama.logger.logger import logger
 from gallama.server import run_from_script, download_model
 from gallama.data_classes.data_class import ModelDownloadSpec
+from rich.markdown import Markdown
+from rich.console import Console
 
 
 def get_data_dir() -> Path:
@@ -90,7 +92,8 @@ def main_cli():
     subparsers = arg_parser.add_subparsers(dest="command")
 
     # Add 'serve' subcommand
-    serve_parser = subparsers.add_parser("serve", help="Run the FastAPI server_engine")
+    serve_parser = subparsers.add_parser("run", help="Run the FastAPI server_engine")
+    serve_parser.add_argument("model_name", nargs='?', help="Model name to run (simplified version)")
     serve_parser.add_argument("--strict_mode", action="store_true", default=False,
                               help="Enable strict mode for routing non-embedding requests to matching model names")
     serve_parser.add_argument("-id", "--model_id", action='append', type=parse_dict, default=None,
@@ -113,11 +116,10 @@ def main_cli():
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
     download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
 
-    # Add 'list_available' subcommand
-    download_parser = subparsers.add_parser("list_available", help="List the ")
-
-    # Add 'list_downloaded' subcommand
-    download_parser = subparsers.add_parser("list_downloaed", help="Download a model from Hugging Face")
+    # Modify 'list' subcommand
+    list_parser = subparsers.add_parser("list", help="List models")
+    list_parser.add_argument("type", nargs='?', choices=['available'], default='downloaded',
+                             help="List downloaded model (default) or list available to show the list of model that can be downloaded")
 
     args = arg_parser.parse_args()
 
@@ -130,10 +132,12 @@ def main_cli():
     else:
         logger.setLevel("INFO")
 
-    logger.info("Parsed Arguments:" + str(args))
-
-    if args.command == "serve" or args.command is None:
+    if args.command == "run" or args.command is None:
+        if args.model_name and not args.model_id:
+            # Convert simplified version to the full version
+            args.model_id = [{"model_id": args.model_name}]
         run_from_script(args)  # Pass all arguments to run_from_script
+
     elif args.command == "download":
         if ":" in args.model_spec:
             model_name, quant = args.model_spec.split(':')
@@ -146,6 +150,18 @@ def main_cli():
             model_name=model_name,
             quant=float(quant) if quant else None
         ))
+    elif args.command == "list":
+        config_manager = ConfigManager()
+        console = Console()
+        if args.type == "available":
+            md = Markdown(config_manager.list_available_models_table)
+            console.print(md)
+        elif args.type == "downloaded" or args.type is None:
+            md = Markdown(config_manager.list_downloaded_models_table.lstrip())
+            console.print(md)
+        elif args.type == "running":
+            # Implement logic to list running models
+            pass
 
 
 if __name__ == "__main__":

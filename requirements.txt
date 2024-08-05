@@ -1,6 +1,6 @@
 packaging
-torch>=2.2.0,<=2.3.1
 ninja
+torch>=2.2.0,<=2.3.1
 accelerate
 pydantic
 uvicorn
@@ -16,7 +16,7 @@ colorama
 zmq
 transformers
 pyyaml
-exllamav2
+rich
 pyzmq
 pygments
 httpx

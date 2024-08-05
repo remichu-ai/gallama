@@ -1,16 +1,21 @@
 # src/gallama/config_manager.py
 
-import os
 import yaml
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 from collections import defaultdict
+from gallama.logger import logger
+from operator import itemgetter
 
 
 class ConfigManager:
     def __init__(self):
         self.configs: Dict[str, Any] = {}
-        self.load_model_configs()
+        try:
+            self.load_model_configs()
+        except Exception as e:
+            logger.info("~/gallama/model_config.yaml is empty file")
         self.default_model_list = self.load_default_model_list()
 
     @property
@@ -82,6 +87,59 @@ class ConfigManager:
         with open(yaml_path, 'r') as file:
             yaml_data = yaml.safe_load(file)
         return list(yaml_data.keys())
+
+    @staticmethod
+    def extract_bpw(details, model_name):
+        model_id = details.get('model_id', '')
+        bpw = details.get('bpw', '')
+        quant = details.get('quant', '')
+
+        # Check if bpw is in the model name (exact format)
+        model_bpw_match = re.search(r'(\d+(\.\d+)?)(bpw|BPW)', model_id.split('/')[-1])
+        if model_bpw_match:
+            return model_bpw_match.group(1)
+
+        if bpw:
+            return str(bpw)
+
+        # Check if bpw is in the model_id
+        bpw_match = re.search(r'(\d+(\.\d+)?)(bpw|BPW)', model_id)
+        if bpw_match:
+            return bpw_match.group(1)
+
+        if quant:
+            return str(quant)
+
+        # Last resort: check if the model name contains 'bpw' and extract nearby numbers
+        if 'bpw' in model_name.lower():
+            bpw_last_resort = re.search(r'(\d+(\.\d+)?)\s*bpw', model_name.lower())
+            if bpw_last_resort:
+                return bpw_last_resort.group(1)
+
+        return ''  # Return an empty string if no bpw information found
+
+    @property
+    def list_available_models_table(self):
+        return self.generate_model_table()
+
+    @property
+    def list_downloaded_models_table(self):
+        # Create a list of tuples (model, backend, bpw)
+        model_data = []
+        for model, details in self.configs.items():
+            backend = details.get('backend', '')
+            bpw = self.extract_bpw(details, model)
+            model_data.append((model, backend, bpw))
+
+        # Sort the list by backend first, then by model name
+        sorted_data = sorted(model_data, key=itemgetter(1, 0))
+
+        # Create the table
+        table = "| Model | Backend | Quantizations (bpw) |\n|-------|---------|---------------------|\n"
+        for model, backend, bpw in sorted_data:
+            table += f"| {model} | {backend} | {bpw} |\n"
+
+        return table
 
     def generate_model_table(self, specific_backend=None):
         # Parse the YAML data
