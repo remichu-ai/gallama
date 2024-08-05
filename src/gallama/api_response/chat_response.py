@@ -183,10 +183,7 @@ async def chat_completion_response_stream(
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
             # Send the ending DONE message
-            yield {
-                "event": "done",
-                "data": "[DONE]"
-            }
+            yield {"data": "[DONE]"}
         else:
             await asyncio.sleep(0.1)  # Short sleep before next iteration if not at end of stream
 

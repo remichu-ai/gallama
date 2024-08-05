@@ -604,8 +604,6 @@ arg_dict = """
                         g_queue.get_queue().put_nowait(GenEnd())
 
 
-
-
 class ChatGeneratorLlamaCpp(ChatGenerator):
 
     def __init__(self, **kwargs):
