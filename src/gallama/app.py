@@ -17,7 +17,6 @@ import argparse
 from gallama.backend.model import Model
 from gallama.backend.prompt_engine import PromptEngine
 from gallama.backend.chatgenerator import ChatGenerator
-from gallama.backend.embedding import EmbeddingModel
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -42,7 +41,7 @@ from contextlib import asynccontextmanager
 try:
     from gallama.backend.chatgenerator import ChatGeneratorLlamaCpp
 except ImportError:
-    # llama cpp optional dependancy
+    # llama cpp optional dependency
     ChatGeneratorLlamaCpp = None
 
 
@@ -277,6 +276,8 @@ def load_model(model_spec: ModelParser):
             "prompt_engine": prompt_eng,
         }
     else:   # embedding model
+        from gallama.backend.embedding import EmbeddingModel
+
         llm = EmbeddingModel(
             model_id=model_config["model_id"],
             model_name=model_name,

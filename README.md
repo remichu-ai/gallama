@@ -14,7 +14,7 @@ gallama download llama-3.1-8B:4.0
 
 After download, you can run the model with:
 ```shell
-gallama serve -id "model_id=llama-3.1-8B"
+gallama run llama-3.1-8B
 ```
 
 Here is the list of currently supported models for downloader:
@@ -34,6 +34,7 @@ Here is the list of currently supported models for downloader:
 | qwen-2-1.5B | exllama | `3.0`, `4.0`, `5.0`, `6.0`, `8.0` |
 | qwen-2-7B | exllama | `3.0`, `4.0`, `5.0`, `6.0`, `8.0` |
 | qwen-2-72B | exllama | `3.0`, `3.5`, `4.0`, `4.25`, `4.65`, `5.0`, `6.0`, `8.0` |
+| yi-1.5-34B | exllama | `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `5.0`, `6.0`, `6.5`, `8.0` |
 
 **Embedding Models:**
 
@@ -301,18 +302,25 @@ Follow these steps to use the model. We aim to make this process more convenient
 
 2. Initialize gallama:
    ```shell
-   gallama serve
+   gallama run
    ```
    This creates a `model_config.yaml` file in `~/.gallama`.
 
 3. Update `~/.gallama/model_config.yaml` with your model configurations.
 
 4. Launch the model:
-   ```shell
-   gallama serve -id "model_id=mistral"
-   ```
-
+   Simple method
+      ```shell
+      gallama run mistral
+      ```
+   Advanced method
+      ```shell
+      gallama run -id "model_id=mistral"
+      ```
+   
 ### Advanced Usage
+
+Using `gallama run -id` followed by a string which is a dictionary of key-value pair will unlock additional option as following:
 
 Customize the model launch using various parameters. Available parameters for the `-id` option include:
 
@@ -335,12 +343,12 @@ Customize the model launch using various parameters. Available parameters for th
 
 1. Launch two models simultaneously:
    ```shell
-   gallama serve -id "model_id=mistral" -id "model_id=llama3"
+   gallama run -id "model_id=mistral" -id "model_id=llama3"
    ```
 
 2. Launch a model with specific VRAM limits per GPU:
    ```shell
-   gallama serve -id "model_id=qwen2-72B gpus=22,22,10,0"
+   gallama run -id "model_id=qwen2-72B gpus=22,22,10,0"
    ```
    This limits memory usage to 22GB for GPU0 and GPU1, 10GB for GPU2, and 0GB for GPU3.
 
@@ -349,19 +357,19 @@ Customize the model launch using various parameters. Available parameters for th
    However, if there is VRAM to spare, increase cache_size will have model to perform better for concurrent and batched request.
    By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesnt work well with Q4 cache, please use Q6 or Q8.
    ```shell
-   gallama serve -id "model_id=mistral cache_size=102400 cache_quant=Q8"
+   gallama run -id "model_id=mistral cache_size=102400 cache_quant=Q8"
    ```
    
 4. Launch a model with reduced cache size and quantization:
    For model with high context, lower the sequence length can significantly reduce VRAM usage.
    e.g. Mistral Large 2 can handle 128K content, however, it will require significant vram for the cache
    ```shell
-   gallama serve -id "model_id=mistral_large max_seq_len=32768"
+   gallama run -id "model_id=mistral_large max_seq_len=32768"
    ```
 
 5. Launch a model for embedding:
    ```shell
-   gallama serve -id "model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
+   gallama run -id "model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
    ```
 
 6. Launch a model with speculative decoding:
@@ -369,7 +377,7 @@ Customize the model launch using various parameters. Available parameters for th
    For reference, by enabling speculative decoding, qwen2-72B generation speed improve from 20tok/s to 25-35tok/s on my 4090s.
    Highly recommend speculative decoding if you have VRAM to spare.
    ```shell
-   gallama serve -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
+   gallama run -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
    ```
 
 Ensure your GPU settings can accommodate the model requirements. Adjust parameters as needed for your specific use case.

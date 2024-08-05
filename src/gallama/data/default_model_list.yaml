@@ -190,6 +190,49 @@ qwen-2-72B:
       branch: ['main']
       quant: [8.0]
       backend: exllama
+yi-1.5-34B:
+  remark: "v1.5"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Yi1.5
+  repo:
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-3_0bpw_exl2"
+      branch: ['main']
+      quant: [3.0]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-3_5bpw_exl2"
+      branch: ['main']
+      quant: [3.5]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-3_75bpw_exl2"
+      branch: ['main']
+      quant: [3.75]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-4_0bpw_exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-4_25bpw_exl2"
+      branch: ["4_25"]
+      quant: [4.25]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-5_0bpw_exl2"
+      branch: ['main']
+      quant: [5.0]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-6_0bpw_exl2"
+      branch: ['main']
+      quant: [6.0]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-6_5bpw_exl2"
+      branch: ['main']
+      quant: [6.5]
+      backend: exllama
+    - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-8_0bpw_exl2"
+      branch: ['main']
+      quant: [8.0]
+      backend: exllama
+
 
 # embedding model from here
 multilingual-e5-large-instruct:
