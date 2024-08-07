@@ -3,6 +3,8 @@ ninja
 torch>=2.2.0,<=2.3.1
 accelerate
 pydantic
+pytest
+httpx
 uvicorn
 sentence-transformers
 lm-format-enforcer
