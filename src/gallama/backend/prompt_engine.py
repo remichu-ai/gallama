@@ -142,7 +142,6 @@ class PromptEngine:
 
         return content
 
-
     def _format_tool_call_msg(self, msg: BaseMessage) -> str:
         """one msg might have multiple tool calls"""
         tool_call_str = f"Please help to call these tool:\n"
@@ -276,7 +275,7 @@ class PromptEngine:
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
 
         # add the default system prompt for artifact
-        if query.artifact != "NO":
+        if query.artifact != "No":
             prompt += ARTIFACT_SYSTEM_PROMPT
 
         msg_groups = self._regroup_msg(query.messages)

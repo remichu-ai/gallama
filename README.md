@@ -140,7 +140,10 @@ While Claude probably train their model with custom dataset, we neither have thi
 
 Current the library implement it via a combination of prompting, XML tag and format enforcement.
 
-As Artifact feature is most useful for interaction instead of via API, we do have a lightweight WebUI here using react which work with our Artifact System.
+To be able to use Artifact mode effectively, you will need a good enough model, from our testing you will need minimally codestral 22B.
+70B+ models such as Qwen2 or Llama 3.1 will give the best result.
+
+As Artifact feature is most useful for interaction instead of via API, we do have a lightweight WebUI here which work with our Artifact System.
 
 If using python, you can interact with the UI as following.
 

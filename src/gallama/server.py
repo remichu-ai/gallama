@@ -443,19 +443,24 @@ async def load_balanced_router(request: Request, path: str):
                 raise HTTPException(status_code=404, detail="Specified model not found")
             available_instances = [inst for inst in models[model].instances if inst.status == "running"]
         else:
-            available_instances = []
+            # Try to find a matching model first
+            if model:
+                if model in models:
+                    available_instances = [inst for inst in models[model].instances if inst.status == "running"]
 
-            for model_info in models.values():
-                for inst in model_info.instances:
-                    if inst.status == "running":
-                        if is_embedding:
-                            # For embedding requests, select instances with matching model name
-                            if not model or inst.model_id == model:
-                                available_instances.append(inst)
-                        else:
-                            # For non-embedding requests, select all non-embedding instances
-                            if not inst.embedding:
-                                available_instances.append(inst)
+            # If no matching model or no instances found, pick any running instance
+            if not available_instances:
+                for model_info in models.values():
+                    for inst in model_info.instances:
+                        if inst.status == "running":
+                            if is_embedding:
+                                # For embedding requests, select instances with matching model name
+                                if not model or inst.model_id == model:
+                                    available_instances.append(inst)
+                            else:
+                                # For non-embedding requests, select all non-embedding instances
+                                if not inst.embedding:
+                                    available_instances.append(inst)
 
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
