@@ -1,12 +1,26 @@
 # gallama - Guided Agentic Llama
 
-gallama is a Python library that provides a Llama backend optimized for local agentic tasks. It serves as a middleware layer, bridging the gap between base inference engines (such as ExLlamaV2 and Llama.cpp) and agentic work (e.g., function calling, formatting constraints).
+__gallama__ is an opinionated Python library that provides a LLM inference API service backend optimized for local agentic tasks.
 
-## Features
+It tries to close the gap between pure inference engine (such as ExLlamaV2 and Llama.cpp) and additional needs for agentic work (e.g., function calling, formatting constraints).
 
-### Integrated Model downloader
+It provides some experimental features such as Artifact (like Claude's) and Thinking template (to guide chain of though).
 
-Download exl2 model from Hugging Face for a list of standard popular model as following download llama-3.1 8B at 4.0bpw
+As there is no standard approach for these experimental feature current, the library does implement it via some boilerplate code (you will find some fixed prompt inside the code) and thus is an opinionated API engine. 
+
+This library is marked with rolling update so please be patient hi-cup and bugs :) (feel free to open an issue if you come across any).
+
+Currently, the backend is mainly using ExllamaV2. Llama.cpp support is under experiment. 
+
+Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
+
+# Features
+
+## Integrated Model downloader
+
+Ability to download exl2 model from Hugging Face via CLI for popular models.
+
+Example as following to download llama-3.1 8B at 4.0bpw (4 bit per weight quantization)
 
 ```shell
 gallama download llama-3.1-8B:4.0
@@ -18,6 +32,11 @@ gallama run llama-3.1-8B
 ```
 
 Here is the list of currently supported models for downloader:
+
+You can view it in CLI using following command:
+```shell
+gallama list available
+```
 
 **LLM Models**
 
@@ -46,10 +65,17 @@ Here is the list of currently supported models for downloader:
 The syntax to specify the model is model name follow by `:` then follow by quantization float number e.g. `qwen-2-72B:4.0`
 
 For model not listed here, you can refer to `examples/Model_Downloader.ipynb` for code to download from huggingface.
+And then you will need to manually update the config in `~/gallama/model_config.yaml`. Instruction will be updated
 
 
-### OpenAI Compatible Server
+## OpenAI Compatible Server
 Fully compatible with the OpenAI client.
+
+Install openai client and overwrite its base setting as follow:
+
+```shell
+pip install openai
+```
 
 ```python
 import os
@@ -57,7 +83,9 @@ from openai import OpenAI
 
 os.environ['OPENAI_API_KEY'] = 'test'
 client = OpenAI(base_url='http://127.0.0.1:8000/v1')
+```
 
+```python
 messages = [{"role": "user", "content": "Which is faster in terms of reaction speed: a cat or a dog?"}]
 
 completion = client.chat.completions.create(
@@ -69,7 +97,7 @@ completion = client.chat.completions.create(
 print(completion)
 ```
 
-### Function Calling
+## Function Calling
 Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.
 
 ```python
@@ -106,8 +134,10 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.tool_calls[0].function)
 ```
 
-### Thinking Method
+## Thinking Method
 A novel approach to guide LLM's thinking with XML templates (e.g., chain of thought) without modifying the prompt.
+The benefit of this versus traditional CoT prompting is you can customize the XML template to be used depending on model and situation without the need to fix change the prompt,
+As following example, you can influence the model to provide the answer with CoT while not showing the CoT in the answer.
 
 ```python
 thinking_template = """
@@ -139,17 +169,20 @@ completion = client.chat.completions.create(
 )
 
 print(completion.choices[0].message.content)
+# 10 apples
 ```
 
-### Multiple Concurrent Models
-Run multiple models (different or same) with automatic load balancing and request routing. Model VRAM usage can be auto_loaded or be split among GPUs as following
+## Multiple Concurrent Models
+Run multiple models (different or same) with automatic load balancing and request routing. 
+Model VRAM usage can be auto_loaded or with specific GPUs spliting.
 Each model will be run as a dedicated FastAPI to ensure no threading issue and guarantee speed.
+However, do note that this will be more demanding on the system as there will be multiple FastAPI running
 
 ```shell
 gallama serve -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
 
-### OpenAI Embedding Endpoint
+## OpenAI Embedding Endpoint
 Utilize Infinity Embedding library for both embedding via OpenAI client.
 
 ```python
@@ -161,7 +194,7 @@ response = client.embeddings.create(
 print(response.data[0].embedding)
 ```
 
-### Legacy OpenAI Completion Endpoint
+## Legacy OpenAI Completion Endpoint
 Support for the Legacy Completion Endpoint.
 
 ```python
@@ -173,7 +206,7 @@ client.completions.create(
 )
 ```
 
-### Format Enforcement
+## Format Enforcement
 Ensure output conforms to specified patterns with a following options that can be specified in the `extra_body` when using OpenAI client.
 
 ```python
@@ -191,8 +224,8 @@ completion = client.chat.completions.create(
 )
 ```
 
-### Streaming
-Support for streaming responses using the OpenAI client.
+## Streaming
+Streaming is fully supported even in artifact mode.
 
 ```python
 messages = [{"role": "user", "content": "Tell me a 200-word story about a Llama"}]
@@ -208,7 +241,7 @@ for chunk in completion:
     print(chunk.choices[0].delta.content, end='')
 ```
 
-### Remote Model Management
+## Remote Model Management
 Load and unload models via API calls.
 
 start gallama server if it is not current running:
@@ -355,14 +388,14 @@ Customize the model launch using various parameters. Available parameters for th
 3. Launch a model with custom cache size and quantization:
    By default cache_size is initialized to max sequence length of the model.
    However, if there is VRAM to spare, increase cache_size will have model to perform better for concurrent and batched request.
-   By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesnt work well with Q4 cache, please use Q6 or Q8.
+   By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesn't work well with Q4 cache, please use Q6 or Q8.
    ```shell
    gallama run -id "model_id=mistral cache_size=102400 cache_quant=Q8"
    ```
    
 4. Launch a model with reduced cache size and quantization:
    For model with high context, lower the sequence length can significantly reduce VRAM usage.
-   e.g. Mistral Large 2 can handle 128K content, however, it will require significant vram for the cache
+   e.g. Mistral Large 2 can handle 128K content, however, it will require significant VRAM for the cache
    ```shell
    gallama run -id "model_id=mistral_large max_seq_len=32768"
    ```
