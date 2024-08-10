@@ -118,7 +118,7 @@ def main_cli():
 
     # Modify 'list' subcommand
     list_parser = subparsers.add_parser("list", help="List models")
-    list_parser.add_argument("type", nargs='?', choices=['available'], default='downloaded',
+    list_parser.add_argument("type", nargs='?', choices=['available', 'downloaded'], default='downloaded',
                              help="List downloaded model (default) or list available to show the list of model that can be downloaded")
 
     args = arg_parser.parse_args()

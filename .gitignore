@@ -6,6 +6,10 @@
 .idea/
 *.egg-info/
 /**/__pycache__/
+/**/**/__pycache__/
 /src/gallama.egg-info/
 /src/__pycache__/
 /experiment/
+sonar-project.properties
+/src/tests/*
+

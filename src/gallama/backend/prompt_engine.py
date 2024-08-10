@@ -8,6 +8,7 @@ from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
+from ..data import ARTIFACT_SYSTEM_PROMPT
 
 
 class PromptEngine:
@@ -31,50 +32,49 @@ class PromptEngine:
             yaml_data = yaml.safe_load(file)
         return yaml_data
 
-    def get_conversation_start_token(self, **kwargs):
+    def get_conversation_start_token(self):
         return self.model_prompt.get("conversation_start", "")
 
-    def get_conversation_end_token(self, **kwargs):
+    def get_conversation_end_token(self):
         return self.model_prompt.get("conversation_end", "")
 
-    @property
-    def leading_prompt_token(self, **kwargs):
+    def leading_prompt_token(self):
         return self.model_prompt.get("leading_prompt_token", "")
 
-    def get_user_start_token(self, **kwargs):
+    def get_user_start_token(self):
         return self.model_prompt.get("user_start", "")
 
-    def get_user_end_token(self, **kwargs):
+    def get_user_end_token(self):
         return self.model_prompt.get("user_end", "")
 
-    def get_sys_start_token(self, **kwargs):
+    def get_sys_start_token(self):
         return self.model_prompt.get("system_start", "")
 
-    def get_sys_end_token(self, **kwargs):
+    def get_sys_end_token(self):
         return self.model_prompt.get("system_end", "")
 
-    def get_assistant_start_token(self, **kwargs):
+    def get_assistant_start_token(self):
         return self.model_prompt.get("assistant_start", "")
 
-    def get_assistant_end_token(self, **kwargs):
+    def get_assistant_end_token(self):
         return self.model_prompt.get("assistant_end", "")
 
-    def get_tool_start_token(self, **kwargs):
+    def get_tool_start_token(self):
         return self.model_prompt.get("tool_start", "")
 
-    def get_tool_end_token(self, **kwargs):
+    def get_tool_end_token(self):
         return self.model_prompt.get("tool_end", "")
 
-    def get_tool_result_start_token(self, **kwargs):
+    def get_tool_result_start_token(self):
         return self.model_prompt.get("tool_result_start", "")
 
-    def get_tool_result_end_token(self, **kwargs):
+    def get_tool_result_end_token(self):
         return self.model_prompt.get("tool_result_end", "")
 
-    def get_tool_call_start_token(self, **kwargs):
+    def get_tool_call_start_token(self):
         return self.model_prompt.get("tool_call_start", "")
 
-    def get_tool_call_end_token(self, **kwargs):
+    def get_tool_call_end_token(self):
         return self.model_prompt.get("tool_call_start", "")
 
     def _get_role_token(self, role, token_type: str):
@@ -107,7 +107,8 @@ class PromptEngine:
         else:
             return ""
 
-    def _get_message_type(self, msg: BaseMessage) -> str:
+    @staticmethod
+    def _get_message_type(msg: BaseMessage) -> str:
         if msg.tool_call_id:
             return "tool_result"
         elif msg.role == "tool":
@@ -273,6 +274,11 @@ class PromptEngine:
 
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
+
+        # add the default system prompt for artifact
+        if query.artifact != "NO":
+            prompt += ARTIFACT_SYSTEM_PROMPT
+
         msg_groups = self._regroup_msg(query.messages)
 
         # concat all msg
@@ -322,7 +328,7 @@ End of Example of answer with Tool/ Function_calling usage.
 
         # prompt creation with thinking_template
         if use_thinking and thinking_template and not thinking_response:
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
 
             prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
                       f"{thinking_example}\n" + \
@@ -346,13 +352,13 @@ End of Example of answer with Tool/ Function_calling usage.
             prompt += self.get_conversation_end_token()
 
             # for thinking response, we put it before the leading prompt
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
 
         else:
             # add ending token
             prompt += self.get_conversation_end_token()
 
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token)
+            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
 
 
         # add leading_prompt from code which is usually tool related
