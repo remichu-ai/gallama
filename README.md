@@ -134,6 +134,56 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.tool_calls[0].function)
 ```
 
+## Artifact System (Experimental)
+The engine support artifact mode (similar to Claude's Artifact).
+While Claude probably train their model with custom dataset, we neither have this with open source nor I think there will be a standard for it (much like every new model use a different special tokens :D)
+
+Current the library implement it via a combination of prompting, XML tag and format enforcement.
+
+As Artifact feature is most useful for interaction instead of via API, we do have a lightweight WebUI here using react which work with our Artifact System.
+
+If using python, you can interact with the UI as following.
+
+__Non-Streaming__
+```python
+completion = client.chat.completions.create(
+    model="codestral",
+    messages=[{"role": "user",
+               "content": "Explain in one liner what quicksort is and write me quicksort in python and Java"}],
+    extra_body={
+        "artifact": "Fast",
+    }
+)
+
+for choice in completion.choices:
+    print("-------------------------------\n")
+    print(choice.message.artifact_meta)
+    print(choice.message.content)
+```
+
+__Streaming__
+```python
+completion = client.chat.completions.create(
+  model="codestral",
+    messages=[{"role": "user",
+               "content": "Explain in one liner what quicksort is and write me quicksort in python and Java"}],
+  stream=True,
+  extra_body= {
+      "artifact": "Fast",
+  }
+)
+
+current_content_type = None
+for chunk in completion:
+  if current_content_type != chunk.choices[0].delta.artifact_meta["tag_type"]:
+      print("\n------------------------------")
+      print(chunk.choices[0].delta.artifact_meta)
+      print("\n------------------------------")
+      current_content_type = chunk.choices[0].delta.artifact_meta["tag_type"]
+  print(chunk.choices[0].delta.content, end='')
+```
+
+
 ## Thinking Method
 A novel approach to guide LLM's thinking with XML templates (e.g., chain of thought) without modifying the prompt.
 The benefit of this versus traditional CoT prompting is you can customize the XML template to be used depending on model and situation without the need to fix change the prompt,
