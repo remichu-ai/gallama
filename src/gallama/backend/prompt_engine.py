@@ -8,6 +8,7 @@ from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
+from ..data import ARTIFACT_SYSTEM_PROMPT
 
 
 class PromptEngine:
@@ -273,6 +274,11 @@ class PromptEngine:
 
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
+
+        # add the default system prompt for artifact
+        if query.artifact != "NO":
+            prompt += ARTIFACT_SYSTEM_PROMPT
+
         msg_groups = self._regroup_msg(query.messages)
 
         # concat all msg

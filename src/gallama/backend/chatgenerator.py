@@ -164,7 +164,7 @@ class ChatGenerator(Model):
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
-        # overwrite prefix_strings if in artifact mode
+        # Handle Artifact mode: overwrite prefix_strings if in artifact mode
         if query.artifact and query.artifact == "Fast":
             prefix_strings = "```xml\n<answer>\n <"
 
