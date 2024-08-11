@@ -166,7 +166,7 @@ class ChatGenerator(Model):
 
         # Handle Artifact mode: overwrite prefix_strings if in artifact mode
         if query.artifact and query.artifact == "Fast":
-            prefix_strings = "```xml\n<answer>\n <"
+            prefix_strings = "```xml\n<answer><![CDATA[\n <"
 
         await self.generate(
             prompt=prompt,
