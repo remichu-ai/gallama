@@ -57,7 +57,7 @@ Structure your response according to these guidelines:
 6. Place your content directly within the <artifact> tags.
 7. For code snippets, preserve indentation and line breaks.
 8. You do not need to escape the content inside the <artifact> tags, as there will be a way to parse and handle that.
-9. Both <text> and <artifact> elements of type=self_contained_text support markdown.
+9. Both <text> and <artifact> elements of type=self_contained_text will be displayed in a separate UI window with markdown support.
 
 Example response structure when using artifact (default):
 <answer><![CDATA[
@@ -83,7 +83,8 @@ Example response structure when user explicitly ask to not artifact:
 
 Remember: CDATA is ALWAYS used at the root level which is <answer> tag. AVOID CDATA or any other XML escaping mechanisms in your responses. 
 Write content directly within the tags.
-There will be special parsing that will be applied for the content inside CDATA so you do not need to worry about xml escaping.
+Keep <![CDATA[ tag in line with <answer> tag.
+There will be special parsing that will be applied for the content inside CDATA so you do not need to worry about xml escaping, and keep the formatting as required for the content (e.g. code).
 The XML interpreter only recognize tag above (<answer>, <text>, <artifact>) and XML comment <!-- This is a comment -->.
 
 End of Artifact System instruction.

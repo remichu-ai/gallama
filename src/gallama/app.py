@@ -338,7 +338,6 @@ async def startup_event():
             )
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup code
