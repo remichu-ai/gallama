@@ -44,7 +44,7 @@ class Model:
         self.draft_model_id = draft_model_config.get("model_id")
         self.draft_model_name = model_spec.draft_model_name or None
         self.draft_gpus = model_spec.gpus or draft_model_config.get("gpus") or "auto"
-        self.draft_cache_size = model_spec.draft_cache_size or draft_model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
+        self.draft_cache_size = self.cache_size   # set to the same as main model
         self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "Q4"
         assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
@@ -65,7 +65,7 @@ class Model:
             self.draft_model, _, self.draft_cache = self.load_model(
                 model_id=self.draft_model_id,
                 backend=self.backend,
-                max_seq_len=self.max_seq_len,
+                max_seq_len=self.max_seq_len,   # draft model max_seq_len must be same as main model
                 cache_size=self.draft_cache_size,
                 cache_quant=self.draft_cache_quant,
                 gpus=self.draft_gpus,
