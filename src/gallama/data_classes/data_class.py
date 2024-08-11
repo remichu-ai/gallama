@@ -514,7 +514,7 @@ class ModelParser(BaseModel):
             args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
 
         if self.max_seq_len is not None:
-            args.append(f"cache_size={self.max_seq_len}")
+            args.append(f"max_seq_len={self.max_seq_len}")
 
         if self.cache_size is not None:
             args.append(f"cache_size={self.cache_size}")

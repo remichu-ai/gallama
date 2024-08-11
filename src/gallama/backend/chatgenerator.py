@@ -165,8 +165,27 @@ class ChatGenerator(Model):
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
         # Handle Artifact mode: overwrite prefix_strings if in artifact mode
+        stop_words_to_use = query.stop_words
+        banned_strings = None
         if query.artifact and query.artifact == "Fast":
-            prefix_strings = "```xml\n<answer>\n <"
+            prefix_strings = None
+            manual_prefix_string = "```xml\n<answer><![CDATA[\n <"
+            prompt += manual_prefix_string
+            # prefix_strings = "```xml\n<answer><![CDATA[\n <"
+            banned_strings = ["<![CDATA["]
+            # add the stopword for artifact tag to the answer
+
+            if isinstance(stop_words_to_use, list):
+                stop_words_to_use.append("]]></answer>")
+            elif isinstance(stop_words_to_use, str):
+                stop_words_to_use = [stop_words_to_use, "]]></answer>"]
+            else:
+                stop_words_to_use = "]]></answer>"
+
+            # add the initial string as prefix_strings can not be used together with banned_strings
+            chunk = GenText(content=manual_prefix_string)
+            gen_queue.put_nowait(chunk)
+
 
         await self.generate(
             prompt=prompt,
@@ -174,9 +193,10 @@ class ChatGenerator(Model):
             **{
                 'temperature': query.temperature,
                 'lm_enforcer_parser': lm_enforcer_parser_regex,
-                'stop_words': query.stop_words,
+                'stop_words': stop_words_to_use,
                 'max_tokens': query.max_tokens,
                 'prefix_strings': prefix_strings,   # already generated as part of the prefix string
+                'banned_strings': banned_strings
             }
         )
 
@@ -451,6 +471,7 @@ arg_dict = """
         lm_enforcer_parser: TokenEnforcerTokenizerData = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
         max_tokens: int = None,
         **kwargs,
     ) -> (str, GenerationStats):
@@ -519,6 +540,7 @@ arg_dict = """
                                max_tokens) if max_tokens else self.max_seq_len - len(input_ids[0]),
             gen_settings=settings,
             stop_conditions=stop_conditions,  #self.eos_token_id if self.eos_token_id else None,
+            banned_strings=banned_strings,
             decode_special_tokens=True,
             filters=filters,
             token_healing=True,
