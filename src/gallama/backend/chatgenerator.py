@@ -170,22 +170,17 @@ class ChatGenerator(Model):
         if query.artifact and query.artifact == "Fast":
             prefix_strings = None
             manual_prefix_string = "```xml\n<answer><![CDATA[\n <"
+            # prompt += manual_prefix_string
+            # prefix_strings = "```xml\n<answer>\n <"
+
+            manual_prefix_string = "```xml\n<answer>\n <"
             prompt += manual_prefix_string
-            # prefix_strings = "```xml\n<answer><![CDATA[\n <"
+            prefix_strings = None
             banned_strings = ["<![CDATA["]
             # add the stopword for artifact tag to the answer
+            gen_queue.put_nowait(GenText(content="```xml\n<answer>\n <"))
 
-            if isinstance(stop_words_to_use, list):
-                stop_words_to_use.append("]]></answer>")
-            elif isinstance(stop_words_to_use, str):
-                stop_words_to_use = [stop_words_to_use, "]]></answer>"]
-            else:
-                stop_words_to_use = "]]></answer>"
-
-            # add the initial string as prefix_strings can not be used together with banned_strings
-            chunk = GenText(content=manual_prefix_string)
-            gen_queue.put_nowait(chunk)
-
+            stop_words_to_use = "</answer>"
 
         await self.generate(
             prompt=prompt,
