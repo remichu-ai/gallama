@@ -11,7 +11,8 @@ class StreamParser:
         self.current_content = ""
         self.MALFORMED_CHECK_LENGTH = 300
         self.in_answer_tag = False
-        self.xml_prefix = "```xml\n"
+        # self.xml_prefix = "```xml\n"
+        self.xml_prefix = ""
         self.root_key = "<answer>"
         self.full_root_key = f"{self.xml_prefix}{self.root_key}"
         self.tag_pattern = re.compile(r'(<artifact\s+(?:(?:identifier|type|title|language)="[^"]*"\s*)*>)|(<text>)')

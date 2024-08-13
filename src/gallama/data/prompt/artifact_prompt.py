@@ -32,18 +32,18 @@ artifact_instructions:
 Structure your response according to these guidelines:
 
 1. When using artifacts (default for substantial content):
-<answer><![CDATA[
+<answer>
     <text>[Simple text here]</text>
     <artifact identifier="[unique-identifier]" type="[artifact_type]" language="[language if applicable]" title="[Brief title]">
     [Your content here]
     </artifact>
     <!-- Additional text or artifact as needed -->
-]]></answer>
+</answer>
 
 2.When explicitly asked NOT to use artifacts or for simple responses:
-<answer><![CDATA[
+<answer>
     <text>[Answer here]</text>
-]]></answer>
+</answer>
 
 3. Use the <text> or <artifact> element for each distinct part of your response into chunks where applicable.
 4. Use the <text> for content that doesnt form an artifact by the good artifacts criteria mentioned above..
@@ -58,9 +58,10 @@ Structure your response according to these guidelines:
 7. For code snippets, preserve indentation and line breaks.
 8. You do not need to escape the content inside the <artifact> tags, as there will be a way to parse and handle that.
 9. Both <text> and <artifact> elements of type=self_contained_text will be displayed in a separate UI window with markdown support.
+10. If write code inside <text> tag please use ``` to indicate the codeblock and programming language
 
 Example response structure when using artifact (default):
-<answer><![CDATA[
+<answer>
     <text>Here is a brief explanation...</text>
     <artifact identifier="example-function" type="code" language="python" title="Example Python Function">
 def example_function():
@@ -70,21 +71,22 @@ def example_function():
     <artifact identifier="detailed-report" type="self_contained_text" title="Comprehensive Topic Analysis">
 A detailed report on the topic, which may include multiple paragraphs...
     </artifact>
-]]></answer>
+</answer>
 
 Example response structure when user explicitly ask to not artifact:
-<answer><![CDATA[
+<answer>
     <text>Here is a brief explanation...
+    ```python
     # code here
     print("Hello, world!")
+    ```
     A detailed report on the topic, which may include multiple paragraphs...
     </text>
-]]></answer>
+</answer>
 
-Remember: CDATA is ALWAYS used at the root level which is <answer> tag. AVOID CDATA or any other XML escaping mechanisms in your responses. 
+Remember: CDATA is prohibited. The data is processed in a special way and NO XML escaping is needed.
+<text> and <self_contain_text> will be displayed in a separate UI window using markdown.
 Write content directly within the tags.
-Keep <![CDATA[ tag in line with <answer> tag.
-There will be special parsing that will be applied for the content inside CDATA so you do not need to worry about xml escaping, and keep the formatting as required for the content (e.g. code).
 The XML interpreter only recognize tag above (<answer>, <text>, <artifact>) and XML comment <!-- This is a comment -->.
 
 End of Artifact System instruction.
