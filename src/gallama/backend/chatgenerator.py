@@ -44,8 +44,8 @@ except:
     build_token_enforcer_tokenizer_data_llama_cpp = None
     LogitsProcessorList = None
 
-
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
+
 
 @dataclass
 class QueueContext:
@@ -65,16 +65,15 @@ class QueueContext:
         return self.gen_queue()
 
 
-
 class ChatGenerator(Model):
     def __init__(
-        self,
-        llm_base: Model,
-        # model, cache, tokenizer, model_name,
-        # cache_size: int = None,        # the length of cache size, can be more than context length
-        # eos_token_id: List[int] = [],
-        # eos_token_str: List[str] = [],
-        # max_seq_len=512
+            self,
+            llm_base: Model,
+            # model, cache, tokenizer, model_name,
+            # cache_size: int = None,        # the length of cache size, can be more than context length
+            # eos_token_id: List[int] = [],
+            # eos_token_str: List[str] = [],
+            # max_seq_len=512
     ):
         # unpack all variables from llm_base
         # refer Model class for details of variable available
@@ -159,7 +158,6 @@ class ChatGenerator(Model):
             # append generated content to the full prompt
             prompt = prompt.strip() + first_response.strip()
 
-
         # Final generation to retun to client
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
@@ -169,18 +167,22 @@ class ChatGenerator(Model):
         banned_strings = None
         if query.artifact and query.artifact == "Fast":
             prefix_strings = None
-            manual_prefix_string = "```xml\n<answer><![CDATA[\n <"
-            # prompt += manual_prefix_string
-            # prefix_strings = "```xml\n<answer>\n <"
-
-            manual_prefix_string = "```xml\n<answer>\n <"
+            manual_prefix_string = "<answer>\n "
             prompt += manual_prefix_string
-            prefix_strings = None
+            # prefix_strings = "```xml\n<answer><![CDATA[\n <"
             banned_strings = ["<![CDATA["]
             # add the stopword for artifact tag to the answer
-            gen_queue.put_nowait(GenText(content="```xml\n<answer>\n <"))
 
-            stop_words_to_use = "</answer>"
+            if isinstance(stop_words_to_use, list):
+                stop_words_to_use.append("</answer>")
+            elif isinstance(stop_words_to_use, str):
+                stop_words_to_use = [stop_words_to_use, "</answer>"]
+            else:
+                stop_words_to_use = "</answer>"
+
+            # add the initial string as prefix_strings can not be used together with banned_strings
+            chunk = GenText(content=manual_prefix_string)
+            gen_queue.put_nowait(chunk)
 
         await self.generate(
             prompt=prompt,
@@ -190,15 +192,15 @@ class ChatGenerator(Model):
                 'lm_enforcer_parser': lm_enforcer_parser_regex,
                 'stop_words': stop_words_to_use,
                 'max_tokens': query.max_tokens,
-                'prefix_strings': prefix_strings,   # already generated as part of the prefix string
+                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                 'banned_strings': banned_strings
             }
         )
 
     async def chat_with_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
         # use_tool marker
-        use_tool_bool = False       # this will be set to True if tool is used
-        fall_back_bool = False      # this will decide if fallback generation with regex enforcement is required
+        use_tool_bool = False  # this will be set to True if tool is used
+        fall_back_bool = False  # this will decide if fallback generation with regex enforcement is required
 
         # tool class have the method to handle converting processing or tool requirement, schema and response
         tool_handler = Tools(
@@ -219,7 +221,7 @@ class ChatGenerator(Model):
             pydantic_tool_dict=tool_handler.tool_dict,
             thinking_template=tool_thinking_formatted,
             answer_format_schema=False,
-            #leading_prompt=leading_prompt,
+            # leading_prompt=leading_prompt,
         )
         # lm_enforcer_parser_regex = RegexParser(
         #                     TOOL_THINKING.regex) if TOOL_THINKING.regex else None
@@ -229,7 +231,7 @@ class ChatGenerator(Model):
             temperature=query.temperature,
             stop_words=TOOL_THINKING.root_key_stop_words,
             prefix_strings=f"<{TOOL_THINKING.root_tag}>",
-            #lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
+            # lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
         )
 
         # evaluate tool usage neccessity
@@ -241,7 +243,8 @@ class ChatGenerator(Model):
         try:
             # parse the xml object
             tool_thinking_response_dict = Thinking.parse_xml_to_dict(tool_thinking_response)
-            tool_decision = tool_thinking_response_dict[TOOL_THINKING.root_tag]["final_decision"]["is_tool_needed"]     # TODO implement a less hardcoding way
+            tool_decision = tool_thinking_response_dict[TOOL_THINKING.root_tag]["final_decision"][
+                "is_tool_needed"]  # TODO implement a less hardcoding way
             if tool_decision.lower().strip() == "yes":
                 use_tool_bool = True
             elif tool_decision.lower().strip() == "no":
@@ -265,7 +268,6 @@ class ChatGenerator(Model):
 
         logger.info(tool_thinking_response)
 
-
         # Fall back plan
         fall_back_prompt = ""
         if fall_back_bool:
@@ -284,7 +286,7 @@ class ChatGenerator(Model):
                 prompt,
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
-                #prefix_strings="n",
+                # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
             )
@@ -322,7 +324,7 @@ class ChatGenerator(Model):
             tool_as_code_prompt = """
 def run_function(arg_dict):
     function_calls = arg_dict["functions_calling"]
-    
+
     if function_calls == []:
         print("No function/tool calling needed")
         return
@@ -401,9 +403,9 @@ arg_dict = """
         #     logger.info("Custom Cache size: " + str(self.cache_size))
         #     self.cache = ExLlamaV2Cache_Q4(self.model, max_seq_len=self.cache_size, lazy=not self.model.loaded)
 
-            # Test VRAM allocation with a full-length forward pass
-            # input_ids = torch.zeros((1, self.max_seq_len), dtype=torch.long)
-            # model.forward(input_ids, cache=cache, preprocess_only=True)
+        # Test VRAM allocation with a full-length forward pass
+        # input_ids = torch.zeros((1, self.max_seq_len), dtype=torch.long)
+        # model.forward(input_ids, cache=cache, preprocess_only=True)
 
         lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
 
@@ -438,7 +440,7 @@ arg_dict = """
         settings.token_repetition_penalty = 1.1
         settings.token_frequency_penalty = 0.05
         settings.token_repetition_range: int = 1024
-        #settings.token_repetition_decay: int = 0.98
+        # settings.token_repetition_decay: int = 0.98
         settings.temperature_last = False
 
         return settings
@@ -458,19 +460,19 @@ arg_dict = """
         return None
 
     async def generate(
-        self,
-        prompt: str,
-        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],   # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-        temperature: float = 0.01,
-        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
-        stop_words: Union[List[str], str] = None,
-        prefix_strings: Optional[Union[str, List[str]]] = None,
-        banned_strings: list[str] | None = None,
-        max_tokens: int = None,
-        **kwargs,
+            self,
+            prompt: str,
+            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+            # the generated result will be store to this queue
+            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+            temperature: float = 0.01,
+            lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+            stop_words: Union[List[str], str] = None,
+            prefix_strings: Optional[Union[str, List[str]]] = None,
+            banned_strings: list[str] | None = None,
+            max_tokens: int = None,
+            **kwargs,
     ) -> (str, GenerationStats):
-
 
         # ensure that generator is initialized
         if self.pipeline is None:
@@ -525,16 +527,16 @@ arg_dict = """
 
         job_id = uuid.uuid4().hex
 
-        #logger.info("pending_jobs and active_jobs lists in the ExLlamaV2DynamicGenerator")
-        #logger.info(f"job_id: {self.pipeline.generator.jobs}")
+        # logger.info("pending_jobs and active_jobs lists in the ExLlamaV2DynamicGenerator")
+        # logger.info(f"job_id: {self.pipeline.generator.jobs}")
 
         job = ExLlamaV2DynamicJobAsync(
             generator=self.pipeline.generator,
             input_ids=input_ids,
             max_new_tokens=min(self.max_seq_len - len(input_ids[0]),
-                               max_tokens) if max_tokens else self.max_seq_len - len(input_ids[0]),
+                               max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096),
             gen_settings=settings,
-            stop_conditions=stop_conditions,  #self.eos_token_id if self.eos_token_id else None,
+            stop_conditions=stop_conditions,  # self.eos_token_id if self.eos_token_id else None,
             banned_strings=banned_strings,
             decode_special_tokens=True,
             filters=filters,
@@ -560,7 +562,7 @@ arg_dict = """
         async for result in job:
             if eos:
                 await job.cancel()
-            #print(result.get("text", ""))
+            # print(result.get("text", ""))
             # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
             # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
             # outputs pertaining to the single job started above, and it will all go straight to the console.
@@ -573,15 +575,15 @@ arg_dict = """
 
             # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
             # grab the output text stream.
-            #generate_text += result.get("text", "")
+            # generate_text += result.get("text", "")
             # logger.info(f'{datetime.now()} {result.get("text", "")}')
 
             chunk = GenText(content=result.get("text", ""))
             for g_queue in gen_queue_list:
                 g_queue.get_queue().put_nowait(chunk)
 
-            #logger.info(result.get("text", ""))
-            #logger.info(self.tokenizer.encode(result.get("text", "")))
+            # logger.info(result.get("text", ""))
+            # logger.info(self.tokenizer.encode(result.get("text", "")))
             # The "streaming" stage also emits the EOS signal when it occurs. If present, it will accompany a
             # summary of the job. Print the last packet here to illustrate.
             if result["eos"]:
@@ -647,16 +649,16 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         )
 
     async def generate(
-        self,
-        prompt: str,
-        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-        # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-        temperature: float = 0.01,
-        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
-        stop_words: Union[List[str], str] = None,
-        max_tokens: int = None,
-        **kwargs,
+            self,
+            prompt: str,
+            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+            # the generated result will be store to this queue
+            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+            temperature: float = 0.01,
+            lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+            stop_words: Union[List[str], str] = None,
+            max_tokens: int = None,
+            **kwargs,
     ):
 
         logger.info("----------------------Prompt---------------\n" + prompt)
@@ -680,7 +682,6 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         else:
             raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
 
-
         # convert prompt to token id
         input_ids = self.tokenizer.tokenize(prompt.encode("utf-8"), add_bos=False)
         self.validate_token_length(len(input_ids))
@@ -696,7 +697,8 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             ])
 
         start_time = time.time()
-        max_tokens_to_use = min(max_tokens, self.max_seq_len - len(input_ids)) if max_tokens else self.max_seq_len - len(
+        max_tokens_to_use = min(max_tokens,
+                                self.max_seq_len - len(input_ids)) if max_tokens else self.max_seq_len - len(
             input_ids)
 
         # # find stop conditions
@@ -758,4 +760,3 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
                 g_queue.get_queue().put_nowait(GenEnd())
 
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)
-

@@ -57,7 +57,8 @@ Structure your response according to these guidelines:
 6. Place your content directly within the <artifact> tags.
 7. For code snippets, preserve indentation and line breaks.
 8. You do not need to escape the content inside the <artifact> tags, as there will be a way to parse and handle that.
-9. Both <text> and <artifact> of type=self_contained_text support markdown formating.
+9. Both <text> and <artifact> elements of type=self_contained_text will be displayed in a separate UI window with markdown support.
+10. If write code inside <text> tag please use ``` to indicate the codeblock and programming language
 
 Example response structure when using artifact (default):
 <answer>
@@ -75,14 +76,16 @@ A detailed report on the topic, which may include multiple paragraphs...
 Example response structure when user explicitly ask to not artifact:
 <answer>
     <text>Here is a brief explanation...
+    ```python
     # code here
     print("Hello, world!")
+    ```
     A detailed report on the topic, which may include multiple paragraphs...
     </text>
 </answer>
 
-Remember: CDATA is PROHIBITED. AVOID XML escaping mechanisms in your responses.
-There will be special parsing that will be applied for the content inside CDATA so you do not need to worry about xml escaping, and keep the formatting as required for the content (e.g. code).
+Remember: CDATA is prohibited. The data is processed in a special way and NO XML escaping is needed.
+<text> and <self_contain_text> will be displayed in a separate UI window using markdown.
 Write content directly within the tags.
 The XML interpreter only recognize tag above (<answer>, <text>, <artifact>) and XML comment <!-- This is a comment -->.
 
