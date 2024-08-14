@@ -21,6 +21,13 @@ except:
     # optional dependency
     Llama = None
 
+# experimental feature: tensor parallel
+try:
+    from exllamav2 import ExLlamaV2Cache_TP
+except:
+    # optional dependency
+    ExLlamaV2Cache_TP = None
+
 
 class Model:
     """A model class that contain the llm and tokenizer"""
@@ -39,6 +46,12 @@ class Model:
         self.cache_size = model_spec.cache_size or model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
         self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
         self.backend = model_spec.backend or model_config["backend"] or "exllama"
+        self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
+        # TODO to remove this after exllama support cache Q
+        self.forced_max_seq_len = None
+        if self.tensor_parallel:
+            self.forced_max_seq_len = 32768
+
 
         # draft model is via cli only
         self.draft_model_id = draft_model_config.get("model_id")
@@ -52,11 +65,12 @@ class Model:
         self.model, self.tokenizer, self.cache = self.load_model(
             model_id=self.model_id,
             backend=self.backend,
-            max_seq_len=self.max_seq_len,
-            cache_size=self.cache_size,
+            max_seq_len=self.forced_max_seq_len or self.max_seq_len,
+            cache_size=self.forced_max_seq_len or self.cache_size,
             cache_quant=self.cache_quant,
             gpus=self.gpus,
             reserve_vram=self._reserve_vram,
+            tensor_parallel=self.tensor_parallel,
         )
 
         # load draft model
@@ -65,8 +79,8 @@ class Model:
             self.draft_model, _, self.draft_cache = self.load_model(
                 model_id=self.draft_model_id,
                 backend=self.backend,
-                max_seq_len=self.max_seq_len,   # draft model max_seq_len must be same as main model
-                cache_size=self.draft_cache_size,
+                max_seq_len=self.forced_max_seq_len or self.max_seq_len,   # draft model max_seq_len must be same as main model
+                cache_size=self.forced_max_seq_len or self.draft_cache_size,
                 cache_quant=self.draft_cache_quant,
                 gpus=self.draft_gpus,
                 reserve_vram=self._reserve_vram,
@@ -80,7 +94,7 @@ class Model:
         self.eos_token_str = list(set(model_config.get("eos_token_list", []) + eos_token_list_from_prompt_template))
         self.eos_token_ids = self.generate_eos_tokens_id()
 
-    def load_model(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None):
+    def load_model(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
 
@@ -112,20 +126,32 @@ class Model:
 
             assert cache_quant_to_use is not None
 
-            if isinstance(gpus, str) and gpus == "auto":
-                cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
-                model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
-            elif isinstance(gpus, list):      # user specify the gpus split
-                logger.info("Custom GPU Allocation in GB: " + str(gpus))
-                model.load(gpu_split=gpus, progress=True)
-                cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
-            else:
-                raise ValueError("Device map should be either 'auto', 'gpu' or 'exllama'")
+            if not tensor_parallel:
+                if isinstance(gpus, str) and gpus == "auto":
+                    cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
+                    model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
+                elif isinstance(gpus, list):      # user specify the gpus split
+                    logger.info("Custom GPU Allocation in GB: " + str(gpus))
+                    model.load(gpu_split=gpus, progress=True)
+                    cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
+                else:
+                    raise ValueError("Device map should be either 'auto', 'gpu' or 'exllama'")
 
-            # Test using a dummy generation so that cache is initialized
-            logger.info("Initialize Cache")
-            input_ids = torch.zeros((1, 10), dtype=torch.long)
-            model.forward(input_ids, cache=cache, preprocess_only=False)
+                # Test using a dummy generation so that cache is initialized
+                # Currently this will cause error with TP
+                logger.info("Initialize Cache")
+                input_ids = torch.zeros((1, 10), dtype=torch.long)
+                model.forward(input_ids, cache=cache, preprocess_only=False)
+            else:
+                # tensor parallel mode
+                logger.info("ExllamaV2 Tensor Parallel enabled")
+                if ExLlamaV2Cache_TP:
+                    model.load_tp(progress=True)
+                    cache = ExLlamaV2Cache_TP(model, max_seq_len=max_seq_len)     # no cache Quantization yet, default to lower number
+                else:
+                    raise ValueError("ExllamaV2 was not installed with tensor parallel")
+
+
 
         elif backend == "llama_cpp":
             #TODO to add equivalent support for all exllama option

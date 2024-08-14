@@ -389,6 +389,7 @@ class ModelParser(BaseModel):
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
     backend: Optional[Union[Literal["exllama", "llama_cpp", "embedding"], None]] = Field(description="model engine backend", default=None)
+    tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -461,6 +462,10 @@ class ModelParser(BaseModel):
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
         backend = input_dict.get('backend', None)  # Default to None if not provided
+        tensor_parallel = input_dict.get('tp', False)
+        if tensor_parallel=="True" or tensor_parallel=="true":
+            tensor_parallel = True
+
         # TODO clean up code and merge config setting into config manager
         if backend == "None":
             backend = None
@@ -495,6 +500,7 @@ class ModelParser(BaseModel):
         # Note: We don't need to set model_name here, as the validator will handle it
         return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    max_seq_len=max_seq_len,
+                   tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
 
@@ -524,6 +530,9 @@ class ModelParser(BaseModel):
 
         if self.backend != "exllama":  # Only include if it's not the default value
             args.append(f"backend={self.backend}")
+
+        if self.tensor_parallel:
+            args.append(f"tp={self.tensor_parallel}")
 
         # Add draft model parameters
         if self.draft_model_id is not None:

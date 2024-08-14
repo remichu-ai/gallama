@@ -14,7 +14,7 @@ llama-3.1-70B:
   default_cache_quant: Q4
   prompt_template: Llama3.1
   repo:
-    - repo: "turboderp/Llama-3.1-8B-Instruct-exl2"
+    - repo: "turboderp/Llama-3.1-70B-Instruct-exl2"
       branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw']
       quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0]
       backend: exllama

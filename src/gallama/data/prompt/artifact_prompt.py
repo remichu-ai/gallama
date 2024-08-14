@@ -58,7 +58,8 @@ Structure your response according to these guidelines:
 7. For code snippets, preserve indentation and line breaks.
 8. You do not need to escape the content inside the <artifact> tags, as there will be a way to parse and handle that.
 9. Both <text> and <artifact> elements of type=self_contained_text will be displayed in a separate UI window with markdown support.
-10. If write code inside <text> tag please use ``` to indicate the codeblock and programming language
+10. If write code inside <text> tag please use ``` to indicate the codeblock and programming language.
+    For code inside <artifact>, do not use ``` to indicate.
 
 Example response structure when using artifact (default):
 <answer>
