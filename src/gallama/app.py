@@ -44,6 +44,13 @@ except ImportError:
     # llama cpp optional dependency
     ChatGeneratorLlamaCpp = None
 
+# experimental feature: tensor parallel
+try:
+    from exllamav2 import ExLlamaV2Cache_TP
+except:
+    # optional dependency
+    ExLlamaV2Cache_TP = None
+
 
 # Add this after your imports to clear logging from 3rd party module
 
