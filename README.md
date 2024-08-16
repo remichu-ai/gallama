@@ -232,7 +232,7 @@ Each model will be run as a dedicated FastAPI to ensure no threading issue and g
 However, do note that this will be more demanding on the system as there will be multiple FastAPI running
 
 ```shell
-gallama serve -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
+gallama run -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
 
 ## OpenAI Embedding Endpoint
@@ -300,7 +300,7 @@ Load and unload models via API calls.
 start gallama server if it is not current running:
 
 ```shell
-gallama serve
+gallama run
 ```
 
 ```python
@@ -465,7 +465,18 @@ Customize the model launch using various parameters. Available parameters for th
    ```shell
    gallama run -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
    ```
+   Ensure your GPU settings can accommodate the model requirements. Trial and adjust parameters as needed for your specific use case.
+   Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.
 
-Ensure your GPU settings can accommodate the model requirements. Adjust parameters as needed for your specific use case.
+7. (Experimental) Tensor Parallel (TP)
+   Exllama V2 Tensor Parallel support is in the work. If you are adventurous, you can enable it by:
+   - Update your python>=3.11
+   - Install [exllamav2 dev_tp branch](https://github.com/turboderp/exllamav2/tree/dev_tp)
+   - Only support Qwen2-72B, Llama3.1-70B and Mistral Large at the moment
+   - Do run a draft model to help further with speed
+   - Currently there is no quantization for cache with TP yet, so please set maq_seq_len to a lower number if you do not have enough VRAM
+   You can launch gallama with tensor parallel as following:
+   ```shell
+   gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B max_seq_len=32768 tp=True"
+   ```
 
-Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.

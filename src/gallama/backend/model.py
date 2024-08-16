@@ -1,19 +1,22 @@
 # import transformers
 import torch
-# from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
-from exllamav2 import (
-    ExLlamaV2,
-    ExLlamaV2Tokenizer,
-    ExLlamaV2Cache,
-    ExLlamaV2Cache_Q4,
-    ExLlamaV2Cache_Q6,
-    ExLlamaV2Cache_Q8,
-    ExLlamaV2Config
-)
 from typing import List, Dict
 from gallama.logger.logger import logger
 from gallama.data_classes.data_class import ModelParser
-# from sentence_transformers import SentenceTransformer
+
+try:
+    from exllamav2 import (
+        ExLlamaV2,
+        ExLlamaV2Tokenizer,
+        ExLlamaV2Cache,
+        ExLlamaV2Cache_Q4,
+        ExLlamaV2Cache_Q6,
+        ExLlamaV2Cache_Q8,
+        ExLlamaV2Config
+    )
+except:
+    ExLlamaV2 = None
+
 
 try:
     from llama_cpp import Llama
@@ -27,6 +30,8 @@ try:
 except:
     # optional dependency
     ExLlamaV2Cache_TP = None
+
+assert ExLlamaV2 or Llama, "Please install ExllamaV2 or LLama CPP Python as backend"
 
 
 class Model:
@@ -49,8 +54,8 @@ class Model:
         self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
         # TODO to remove this after exllama support cache Q
         self.forced_max_seq_len = None
-        if self.tensor_parallel:
-            self.forced_max_seq_len = 32768
+        # if self.tensor_parallel:
+        #     self.forced_max_seq_len = 32768
 
 
         # draft model is via cli only

@@ -86,9 +86,10 @@ Example response structure when user explicitly ask to not artifact:
 </answer>
 
 Remember: CDATA is prohibited. The data is processed in a special way and NO XML escaping is needed.
+XML comment ( <!-- tag) is prohibited.
 <text> and <self_contain_text> will be displayed in a separate UI window using markdown.
 Write content directly within the tags.
-The XML interpreter only recognize tag above (<answer>, <text>, <artifact>) and XML comment <!-- This is a comment -->.
+The XML interpreter only recognize tag above (<answer>, <text>, <artifact>).
 
 End of Artifact System instruction.
 

@@ -86,8 +86,8 @@ class ChatGenerator(Model):
         chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
         return await chat_method(query=query, prompt_eng=prompt_eng, gen_queue=gen_queue)
 
-    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None):
-        return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue)
+    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None, quiet=False):
+        return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue, quiet=quiet)
 
     def validate_token_length(self, token_length):
         if token_length > self.max_seq_len:
@@ -170,7 +170,7 @@ class ChatGenerator(Model):
             manual_prefix_string = "<answer>\n "
             prompt += manual_prefix_string
             # prefix_strings = "```xml\n<answer><![CDATA[\n <"
-            banned_strings = ["<![CDATA["]
+            banned_strings = ["<![CDATA[", "<!--"]
             # add the stopword for artifact tag to the answer
 
             if isinstance(stop_words_to_use, list):
@@ -471,6 +471,7 @@ arg_dict = """
             prefix_strings: Optional[Union[str, List[str]]] = None,
             banned_strings: list[str] | None = None,
             max_tokens: int = None,
+            quiet=False,
             **kwargs,
     ) -> (str, GenerationStats):
 
@@ -492,8 +493,9 @@ arg_dict = """
         else:
             raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
 
-        logger.info("----------------------Prompt---------------\n" + prompt)
-        logger.debug("----------------------temperature---------\n" + str(temperature))
+        if not quiet:
+            logger.info("----------------------Prompt---------------\n" + prompt)
+            logger.debug("----------------------temperature---------\n" + str(temperature))
 
         # for async generator, create it as part of the generate job
 

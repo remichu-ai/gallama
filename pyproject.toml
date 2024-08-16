@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gallama"
 version = "0.0.1"
-description = "A multi-model Gallama instance launcher"
-authors = [{name = "Your Name", email = "your.email@example.com"}]
+description = "An oppinionated Llama Server engine with focus on agentic task"
+authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["dependencies"]
+
+[project.urls]
+"Homepage" = "https://github.com/remichu-ai/gallama"
 
 [project.scripts]
 gallama = "gallama.cli:main_cli"
