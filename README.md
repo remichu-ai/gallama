@@ -17,6 +17,7 @@ Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a re
 # Quick Start
    Head down to the installation guide at the bottom of this page.
    Then check out the [Examples_Notebook.ipynb](https://github.com/remichu-ai/gallama/blob/main/examples/Examples_Notebook.ipynb) in the examples folder
+   A simple python streamlit frontend chat UI code is included in the examples folder [streamlit](https://github.com/remichu-ai/gallama/blob/main/examples/streamlit_chatbot.py)
 
 # Features
 
