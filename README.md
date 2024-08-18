@@ -14,6 +14,10 @@ Currently, the backend is mainly using ExllamaV2. Llama.cpp support is under exp
 
 Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
 
+# Quick Start
+   Head down to the installation guide at the bottom of this page.
+   Then check out the [Examples_Notebook.ipynb](https://github.com/remichu-ai/gallama/blob/main/examples/Examples_Notebook.ipynb) in the examples folder
+
 # Features
 
 ## Integrated Model downloader
@@ -232,9 +236,20 @@ Model VRAM usage can be auto_loaded or with specific GPUs spliting.
 Each model will be run as a dedicated FastAPI to ensure no threading issue and guarantee speed.
 However, do note that this will be more demanding on the system as there will be multiple FastAPI running
 
+Basic
+```shell
+gallama run -id "model_id=llama-3.1-8B" -id "model_id=mistral"
+```
+
+Customize GPUs split
 ```shell
 gallama run -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
+
+## Mixture of Experts
+Query and combine response from multiple model via OpenAI client
+
+
 
 ## OpenAI Embedding Endpoint
 Utilize Infinity Embedding library for both embedding via OpenAI client.

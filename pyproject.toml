@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gallama"
-version = "0.0.1r1"
+version = "0.0.1post4"
 description = "An oppinionated Llama Server engine with focus on agentic task"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dynamic = ["dependencies"]
 
 [project.urls]
