@@ -108,7 +108,9 @@ class ChatGenerator(Model):
         return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue, quiet=quiet)
 
     def validate_token_length(self, token_length):
-        if token_length > self.max_seq_len:
+        # TODO to find max_seq_len for llama cpp from Model
+        # if max_seq_len == None meaning there is no token length yet
+        if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
     async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):

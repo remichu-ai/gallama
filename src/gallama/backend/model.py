@@ -16,7 +16,12 @@ try:
     )
 except:
     ExLlamaV2 = None
-
+    ExLlamaV2Tokenizer = None
+    ExLlamaV2Cache = None
+    ExLlamaV2Cache_Q4 = None
+    ExLlamaV2Cache_Q6 = None
+    ExLlamaV2Cache_Q8 = None
+    ExLlamaV2Config = None
 
 try:
     from llama_cpp import Llama
@@ -191,6 +196,8 @@ class Model:
             else:
                 raise ValueError("Device map should be either 'auto', 'gpu' split")
 
+            # set max_seq_len based on model
+            self.max_seq_len = model._model.n_ctx_train()
 
             tokenizer = model
 
@@ -243,24 +250,28 @@ class Model:
 
     @property
     def _reserve_vram(self):
-        reserve_block_size = 1024 ** 2
-        num_devices = torch.cuda.device_count()
-        #reserved_vram = [192 * 1024**2] + [64 * 1024**2] * (num_devices - 1)
-        #reserved_vram = [256 * 1024 ** 2] + [96 * 1024 ** 2] * (num_devices - 1)
+        try:
+            reserve_block_size = 1024 ** 2
+            num_devices = torch.cuda.device_count()
+            #reserved_vram = [192 * 1024**2] + [64 * 1024**2] * (num_devices - 1)
+            #reserved_vram = [256 * 1024 ** 2] + [96 * 1024 ** 2] * (num_devices - 1)
 
-        # GPU1 is the main GPU for my PC
-        # The below is lower threshold than exllamav2 default setting
-        reserve_per_gpu = [32 for _ in range(num_devices)]
-        main_gpu = 0    # TODO pass it to front end
-        reserve_per_gpu[main_gpu] = 64
-        reserved_vram = [_reserve * reserve_block_size for _reserve in reserve_per_gpu]
-        return reserved_vram
+            # GPU1 is the main GPU for my PC
+            # The below is lower threshold than exllamav2 default setting
+            reserve_per_gpu = [32 for _ in range(num_devices)]
+            main_gpu = 0    # TODO pass it to front end
+            reserve_per_gpu[main_gpu] = 64
+            reserved_vram = [_reserve * reserve_block_size for _reserve in reserve_per_gpu]
+            return reserved_vram
+        except:
+            # for non cuda env e.g. macbook
+            return None
 
 
     def generate_eos_tokens_id(self):
         if self.eos_token_str:
             # exllama
-            if isinstance(self.tokenizer, ExLlamaV2Tokenizer):
+            if ExLlamaV2Tokenizer and isinstance(self.tokenizer, ExLlamaV2Tokenizer):
                 eos_token_ids = [self.tokenizer.single_id(token) for token in self.eos_token_str]
                 return eos_token_ids
             elif self.backend in ["llama_cpp"]:
