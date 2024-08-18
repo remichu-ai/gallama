@@ -102,7 +102,7 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
 
             update_model_yaml(
                 model_name=f"{model_name}_llama_cpp",
-                model_path=f"{str(download_dir)}/ {filename}",
+                model_path=f"{str(download_dir)}/{filename}",
                 backend=backend,
                 prompt_template=model_config.get('prompt_template', None),
                 quant=quant,
