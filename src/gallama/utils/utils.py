@@ -1,10 +1,15 @@
 import uuid
-from exllamav2 import ExLlamaV2Tokenizer
 import yaml
 import base64
 import struct
 from lxml import etree
 from pathlib import Path
+
+# Lazy import for Exllama
+try:
+    from exllamav2 import ExLlamaV2Tokenizer
+except:
+    ExLlamaV2Tokenizer = None
 
 # Lazy import for llama_cpp
 llama_cpp = None

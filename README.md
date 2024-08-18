@@ -67,6 +67,7 @@ The syntax to specify the model is model name follow by `:` then follow by quant
 For model not listed here, you can refer to `examples/Model_Downloader.ipynb` for code to download from huggingface.
 And then you will need to manually update the config in `~/gallama/model_config.yaml`. Instruction will be updated
 
+Sometime, the download speed might get slowed down. Just cancel the download by Ctrl+C and run the same download command again. The download will resume with higher speed.
 
 ## OpenAI Compatible Server
 Fully compatible with the OpenAI client.
@@ -232,7 +233,7 @@ Each model will be run as a dedicated FastAPI to ensure no threading issue and g
 However, do note that this will be more demanding on the system as there will be multiple FastAPI running
 
 ```shell
-gallama serve -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
+gallama run -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
 
 ## OpenAI Embedding Endpoint
@@ -300,7 +301,7 @@ Load and unload models via API calls.
 start gallama server if it is not current running:
 
 ```shell
-gallama serve
+gallama run
 ```
 
 ```python
@@ -334,7 +335,8 @@ response = requests.post(api_url, json=payload)
 
 gallama requires certain components to be installed and functioning. 
 
-If you already have ExLlamaV2 (and optionally Flash Attention) running, you can install gallama by:
+Ensure that you have either ExllamaV2 (recommended) or Llama CPP Python (in development) installed. You can have both installed and use both with gallama as well,
+If you already have either ExLlamaV2 (and optionally Flash Attention) running, you can install gallama by:
 
 ```shell
 pip install gallama
@@ -343,7 +345,7 @@ pip install gallama
 Or, install from source:
 
 ```shell
-git clone https://github.com/waterangel91/gallama.git
+git clone https://github.com/remichu-ai/gallama.git
 cd gallama
 pip install .
 ```
@@ -351,14 +353,19 @@ pip install .
 If you're starting from scratch and don't have these dependencies yet, follow these steps:
 
 1. Create a virtual environment (recommended):
+   Recommend to use python 3.12 if you can or minimally 3.11 for future tensor parallel compatibility.
    ```shell
-   conda create --name genv python=3.11
+   conda create --name genv python=3.12
    conda activate genv
    ```
 
-2. Install and verify ExLlamaV2:
+2. Install and verify ExLlamaV2 (Recommended):
    - Follow instructions at [ExLlamaV2 GitHub](https://github.com/turboderp/exLlamav2)
    - Test with examples from [ExLlamaV2 Examples](https://github.com/turboderp/exLlamav2/tree/master/examples)
+
+   (Optional) Install llama cpp-python:
+   - Follow instructions at [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
+   - Test with examples from [llama-cpp-python Examples](https://github.com/abetlen/llama-cpp-python/blob/main/examples/high_level_api/high_level_api_streaming.py)
 
 3. (Optional) Install Flash Attention for improved performance:
    - Follow instructions at [Flash Attention GitHub](https://github.com/Dao-AILab/flash-attention)
@@ -390,9 +397,9 @@ Follow these steps to use the model. We aim to make this process more convenient
    ```shell
    gallama run
    ```
-   This creates a `model_config.yaml` file in `~/.gallama`.
+   This creates a `model_config.yaml` file in `~/gallama`.
 
-3. Update `~/.gallama/model_config.yaml` with your model configurations.
+3. Update `~/gallama/model_config.yaml` with your model configurations.
 
 4. Launch the model:
    Simple method
@@ -417,6 +424,7 @@ Customize the model launch using various parameters. Available parameters for th
 - `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional, defaults to Q4)
 - `max_seq_len`: Maximum sequence length (optional)
 - `backend`: Model engine backend, options are "exLlama", "Llama_cpp", "embedding" (optional, defaults to "exLlama")
+- `tp`: enable tensor parallel with exllama v2 (experimental). See further below
 
 #### Speculative Decoding Parameters
 - `draft_model_id`: ID of the draft model (optional)
@@ -465,7 +473,18 @@ Customize the model launch using various parameters. Available parameters for th
    ```shell
    gallama run -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
    ```
+   Ensure your GPU settings can accommodate the model requirements. Trial and adjust parameters as needed for your specific use case.
+   Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.
 
-Ensure your GPU settings can accommodate the model requirements. Adjust parameters as needed for your specific use case.
+7. (Experimental) Tensor Parallel (TP)
+   Exllama V2 Tensor Parallel support is in the work. If you are adventurous, you can enable it by:
+   - Update your python>=3.11
+   - Install [exllamav2 dev_tp branch](https://github.com/turboderp/exllamav2/tree/dev_tp)
+   - Only support Qwen2-72B, Llama3.1-70B and Mistral Large at the moment
+   - Do run a draft model to help further with speed
+   - Currently there is no quantization for cache with TP yet, so please set maq_seq_len to a lower number if you do not have enough VRAM
+   You can launch gallama with tensor parallel as following:
+   ```shell
+   gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B max_seq_len=32768 tp=True"
+   ```
 
-Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.

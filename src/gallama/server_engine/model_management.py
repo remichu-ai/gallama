@@ -4,10 +4,10 @@ import subprocess
 from gallama.config import ConfigManager
 from gallama.logger import logger
 from fastapi import HTTPException
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, hf_hub_download
 from pathlib import Path
 from typing import Dict
-from gallama.data_classes import ModelInfo
+from gallama.data_classes import ModelInfo, ModelDownloadSpec
 
 
 def represent_list(self, data):
@@ -56,65 +56,82 @@ def update_model_yaml(
     logger.info(f"Updated model configuration in {config_manager.get_gallama_user_config_file_path}")
 
 
-def download_model_from_hf(model_spec):         # TODO add type hint : ModelDownloadSpec
-    # Load config manager
+def download_model_from_hf(model_spec: ModelDownloadSpec):
     config_manager: ConfigManager = ConfigManager()
-
-    # Load the model configuration
-    config = config_manager.default_model_list      # the default list of model
+    config = config_manager.default_model_list
 
     model_name = model_spec.model_name
     quant = model_spec.quant
+    backend = model_spec.backend
 
     if model_name not in config:
-        return HTTPException(f"Error: Model '{model_name}' not found in configuration.")
+        raise HTTPException(status_code=404, detail=f"Error: Model '{model_name}' not found in configuration.")
 
     model_config = config[model_name]
 
     if quant is None:
         quant = model_config.get('default_quant')
         if quant is None:
-            raise HTTPException(status_code=400,
-                                detail=f"Error: No default quantization specified for model '{model_name}'.")
+            raise HTTPException(status_code=400, detail=f"Error: No default quantization specified for model '{model_name}'.")
 
-    # Find the matching repository and branch
-    repo_info = next((repo for repo in model_config['repo'] if quant in repo['quant']), None)
+    # Filter repo_info based on both quant and backend
+    repo_info = next((repo for repo in model_config['repo'] if quant in repo['quant'] and repo['backend'] == backend), None)
 
     if repo_info is None:
-        return HTTPException(f"Error: Quantization {quant} not available for model '{model_name}'.")
+        raise HTTPException(status_code=400, detail=f"Error: Quantization {quant} with backend {backend} not available for model '{model_name}'.")
 
     repo_id = repo_info['repo']
     branch = next(branch for branch, q in zip(repo_info['branch'], repo_info['quant']) if q == quant)
 
-    # Set up the download directory     # TODO make path dynamic in the future
-    download_dir = str(Path.home() / "gallama" / "models" / f"{model_name}-{quant}bpw")
+    download_dir = str(Path.home() / "gallama" / "models" / f"{model_name}-{quant}bpw-{backend}")
 
-    # Enable HF Transfer for faster downloads
     os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
 
-    logger.info(f"Downloading {model_name} (quantization: {quant})...")
+    logger.info(f"Downloading {model_name} (quantization: {quant}, backend: {backend})...")
     try:
-        snapshot_download(
-            repo_id=repo_id,
-            revision=branch,
-            local_dir=download_dir,
-        )
-        logger.info(f"Download complete. Model saved in {download_dir}")
+        if backend == "llama_cpp" and 'url' in repo_info:
+            # Single file download for GGUF models
+            filename = repo_info['url'].split('/')[-1]
+            file_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                local_dir=download_dir,
+                revision=branch
+            )
+            logger.info(f"Download complete. Model saved as {file_path}")
 
-        # Update the YAML file
-        update_model_yaml(
-            model_name=model_name,
-            model_path=str(download_dir),
-            backend=repo_info['backend'],
-            prompt_template=model_config.get('prompt_template', None),
-            quant=quant,
-            cache_quant=model_config.get('default_cache_quant', "Q4"),
-            config_manager=config_manager,
-        )
+            update_model_yaml(
+                model_name=f"{model_name}_llama_cpp",
+                model_path=f"{str(download_dir)}/ {filename}",
+                backend=backend,
+                prompt_template=model_config.get('prompt_template', None),
+                quant=quant,
+                cache_quant=model_config.get('default_cache_quant', "Q4"),
+                config_manager=config_manager,
+            )
+        else:
+            # Full repository download for other models
+            snapshot_download(
+                repo_id=repo_id,
+                revision=branch,
+                local_dir=download_dir,
+            )
+            logger.info(f"Download complete. Model saved in {download_dir}")
+
+            update_model_yaml(
+                model_name=model_name,
+                model_path=str(download_dir),
+                backend=backend,
+                prompt_template=model_config.get('prompt_template', None),
+                quant=quant,
+                cache_quant=model_config.get('default_cache_quant', "Q4"),
+                config_manager=config_manager,
+            )
 
         return {"status": "success", "message": f"Model downloaded and configured: {model_name}"}
     except Exception as e:
         logger.error(f"Error during download: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error during download: {str(e)}")
 
 
 def get_gpu_memory_info():

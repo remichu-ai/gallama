@@ -34,6 +34,7 @@ from gallama.api_response.chat_response import (
 from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
 from gallama.logger.logger import get_logger
+from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import os
 import asyncio
 from contextlib import asynccontextmanager
@@ -274,8 +275,8 @@ def load_model(model_spec: ModelParser):
             "llama_cpp": ChatGeneratorLlamaCpp,
         }
 
-        ChatGenerator_to_use = chat_generator_dict[llm_base.backend]
-        llm = ChatGenerator_to_use(llm_base)
+        chatGenerator_to_use = chat_generator_dict[llm_base.backend]
+        llm = chatGenerator_to_use(llm_base)
 
         # update dict
         llm_dict[model_name] = {
@@ -333,16 +334,23 @@ async def health_check():
 
 async def startup_event():
     # run some dummy generation so that cache is initialized
-    if llm_dict.get("prompt_engine"):   # LLM isntead of embedding
-        gen_queue = GenQueue()
-        for model_name, model_info in llm_dict.items():
-            llm = model_info["model"]
+    logger.info("Generator initialization")
+    global llm_dict
+    gen_queue = GenQueue()
+
+    for _model_name, _model in llm_dict.items():
+        if _model.get("prompt_engine"):     # this is an LLM not embedding model
+            llm = _model["model"]
             await llm.chat_raw(
-                prompt="Gallama model initialization",
+                prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
                 stream=False,
-                max_tokens=5,
-                gen_queue=gen_queue
+                max_tokens=200,
+                gen_queue=gen_queue,
+                quiet=True
             )
+
+    gen_queue = None
+    logger.info("Generator warmed up")
 
 
 @asynccontextmanager
