@@ -275,8 +275,8 @@ def load_model(model_spec: ModelParser):
             "llama_cpp": ChatGeneratorLlamaCpp,
         }
 
-        ChatGenerator_to_use = chat_generator_dict[llm_base.backend]
-        llm = ChatGenerator_to_use(llm_base)
+        chatGenerator_to_use = chat_generator_dict[llm_base.backend]
+        llm = chatGenerator_to_use(llm_base)
 
         # update dict
         llm_dict[model_name] = {

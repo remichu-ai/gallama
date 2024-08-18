@@ -47,15 +47,20 @@ class Model:
         self.model_id = model_config["model_id"]
         self.model_name = model_spec.model_name or model_config["model_name"]
         self.max_seq_len = model_spec.max_seq_len or model_config.get("max_seq_len", None)
+        if self.max_seq_len is not None:
+            self.max_seq_len = (self.max_seq_len//256) * 256     # for paged attention
+
         self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
         self.cache_size = model_spec.cache_size or model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
+        if self.cache_size is not None:
+            self.cache_size = (self.cache_size//256) * 256     # for paged attention
+            if self.max_seq_len is not None:
+                # cache size must be greater or equal to max_seq_len
+                self.cache_size = max(self.cache_size, self.max_seq_len)
+
         self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
         self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
-        # TODO to remove this after exllama support cache Q
-        self.forced_max_seq_len = None
-        # if self.tensor_parallel:
-        #     self.forced_max_seq_len = 32768
 
 
         # draft model is via cli only
@@ -70,8 +75,8 @@ class Model:
         self.model, self.tokenizer, self.cache = self.load_model(
             model_id=self.model_id,
             backend=self.backend,
-            max_seq_len=self.forced_max_seq_len or self.max_seq_len,
-            cache_size=self.forced_max_seq_len or self.cache_size,
+            max_seq_len=self.max_seq_len,
+            cache_size=self.cache_size,
             cache_quant=self.cache_quant,
             gpus=self.gpus,
             reserve_vram=self._reserve_vram,
@@ -84,8 +89,8 @@ class Model:
             self.draft_model, _, self.draft_cache = self.load_model(
                 model_id=self.draft_model_id,
                 backend=self.backend,
-                max_seq_len=self.forced_max_seq_len or self.max_seq_len,   # draft model max_seq_len must be same as main model
-                cache_size=self.forced_max_seq_len or self.draft_cache_size,
+                max_seq_len=self.max_seq_len,   # draft model max_seq_len must be same as main model
+                cache_size=self.draft_cache_size,
                 cache_quant=self.draft_cache_quant,
                 gpus=self.draft_gpus,
                 reserve_vram=self._reserve_vram,
@@ -112,6 +117,7 @@ class Model:
                 config.max_seq_len = max_seq_len
             else:
                 # set the self.max_seq_len using model config file as it is None at the moment
+                max_seq_len = config.max_seq_len
                 self.max_seq_len = config.max_seq_len
 
             model = ExLlamaV2(config)
@@ -125,8 +131,17 @@ class Model:
                 "Q8": ExLlamaV2Cache_Q8,
             }
 
+            # cache size need to minimally max_seq_len size
             cache_size_to_use = cache_size if cache_size else config.max_seq_len
+            cache_size_to_use = (cache_size_to_use//256) * 256      # round to multiplier of 256 for paged attention
+            # ensure cache_size is minimally max_seq_len
+            cache_size_to_use = max(cache_size_to_use, max_seq_len)
+
+
             cache_quant_to_use = cache_quant_dict[cache_quant]
+
+            logger.info("max_seq_len: " + str(self.max_seq_len))
+            logger.info("cache_size: " + str(cache_size_to_use))
             logger.info("Cache Quantization: " + str(cache_quant))
 
             assert cache_quant_to_use is not None
@@ -140,13 +155,8 @@ class Model:
                     model.load(gpu_split=gpus, progress=True)
                     cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
                 else:
-                    raise ValueError("Device map should be either 'auto', 'gpu' or 'exllama'")
+                    raise ValueError("Device map should be either 'auto', 'gpu' split")
 
-                # Test using a dummy generation so that cache is initialized
-                # Currently this will cause error with TP
-                logger.info("Initialize Cache")
-                input_ids = torch.zeros((1, 10), dtype=torch.long)
-                model.forward(input_ids, cache=cache, preprocess_only=False)
             else:
                 # tensor parallel mode
                 logger.info("ExllamaV2 Tensor Parallel enabled")
@@ -156,17 +166,31 @@ class Model:
                 else:
                     raise ValueError("ExllamaV2 was not installed with tensor parallel")
 
-
-
         elif backend == "llama_cpp":
             #TODO to add equivalent support for all exllama option
-            model = Llama(
-                model_path=self.model_id,
-                n_gpu_layers=self.device_map,   # Uncomment to use GPU acceleration
-                seed=1,                         # Uncomment to set a specific seed
-                n_ctx=self.max_seq_len,         # Uncomment to increase the context window
-                flash_attn=True,
-            )
+
+            if isinstance(gpus, str) and gpus == "auto":
+                model = Llama(
+                    model_path=self.model_id,
+                    n_gpu_layers=-1,
+                    seed=1,
+                    n_ctx=self.max_seq_len if self.max_seq_len else 0,  # Uncomment to increase the context window
+                    flash_attn=True,
+                    offload_kqv=True,
+                )
+            elif isinstance(gpus, list):  # user specify the gpus split
+                model = Llama(
+                    model_path=self.model_id,
+                    n_gpu_layers=-1,
+                    seed=1,
+                    n_ctx=self.max_seq_len if self.max_seq_len else 0,  # Uncomment to increase the context window
+                    flash_attn=True,
+                    offload_kqv=True,
+                    tensor_split=gpus,
+                )
+            else:
+                raise ValueError("Device map should be either 'auto', 'gpu' split")
+
 
             tokenizer = model
 
@@ -239,7 +263,7 @@ class Model:
             if isinstance(self.tokenizer, ExLlamaV2Tokenizer):
                 eos_token_ids = [self.tokenizer.single_id(token) for token in self.eos_token_str]
                 return eos_token_ids
-            elif self.quantize_mode in ["llama_cpp"]:
+            elif self.backend in ["llama_cpp"]:
                 return []   # no tokenizer for llama cpp
             else:
                 # transformer:

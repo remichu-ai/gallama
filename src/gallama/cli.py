@@ -115,6 +115,8 @@ def main_cli():
     # Add 'download' subcommand
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
     download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
+    download_parser.add_argument("--backend", type=str, default="exllama", choices=['exllama', 'llama_cpp', 'embedding'],
+                                 help="The backend to download model with. One of exllama, llama_cpp, embedding")
 
     # Modify 'list' subcommand
     list_parser = subparsers.add_parser("list", help="List models")
@@ -148,8 +150,10 @@ def main_cli():
 
         download_model(ModelDownloadSpec(
             model_name=model_name,
-            quant=float(quant) if quant else None
+            quant=float(quant) if quant else None,
+            backend=args.backend,
         ))
+
     elif args.command == "list":
         config_manager = ConfigManager()
         console = Console()

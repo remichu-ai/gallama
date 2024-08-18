@@ -1,36 +1,49 @@
 # generator.py
-from typing import List, Union, Literal, Optional
-from lmformatenforcer.integrations.exllamav2 import (
-    ExLlamaV2TokenEnforcerFilter,
-    build_token_enforcer_tokenizer_data
-)
+import time
 import re
+import asyncio
+import uuid
+import weakref
+from typing import List, Union, Literal, Optional
 from pydantic import BaseModel, Field
 from fastapi import HTTPException
 from .model import Model
 from gallama.data_classes.data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
 from .tools import Tools, create_function_models_v2
-from exllamav2 import (
-    ExLlamaV2Cache,
-    ExLlamaV2Cache_Q4,
-)
-from exllamav2.generator import (
-    ExLlamaV2Sampler,
-    ExLlamaV2DynamicGeneratorAsync,
-    ExLlamaV2DynamicJobAsync,
-)
-from exllamav2.generator.filters import ExLlamaV2PrefixFilter
 from dataclasses import dataclass
-import time
 from gallama.utils.utils import get_token_length
 from gallama.logger.logger import logger
 from .thinking_template import THINKING_TEMPLATE, Thinking
-import asyncio
 from gallama.api_response.chat_response import get_response_from_queue
-import uuid
-import weakref
 from lmformatenforcer import JsonSchemaParser, RegexParser
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+from concurrent.futures import ThreadPoolExecutor
+
+
+try:
+    from exllamav2 import (
+        ExLlamaV2Cache,
+        ExLlamaV2Cache_Q4,
+    )
+    from exllamav2.generator import (
+        ExLlamaV2Sampler,
+        ExLlamaV2DynamicGeneratorAsync,
+        ExLlamaV2DynamicJobAsync,
+    )
+    from exllamav2.generator.filters import ExLlamaV2PrefixFilter
+    from lmformatenforcer.integrations.exllamav2 import (
+        ExLlamaV2TokenEnforcerFilter,
+        build_token_enforcer_tokenizer_data
+    )
+except:
+    ExLlamaV2Cache = None
+    ExLlamaV2Cache_Q4 = None
+    ExLlamaV2Cache = None
+    ExLlamaV2Sampler = None
+    ExLlamaV2DynamicGeneratorAsync = None
+    ExLlamaV2DynamicJobAsync = None
+    ExLlamaV2TokenEnforcerFilter = None
+    build_token_enforcer_tokenizer_data = None
 
 try:
     from llama_cpp import LogitsProcessorList
@@ -43,6 +56,11 @@ except:
     build_llamacpp_logits_processor = None
     build_token_enforcer_tokenizer_data_llama_cpp = None
     LogitsProcessorList = None
+
+
+assert ExLlamaV2Cache or LogitsProcessorList, "Please install ExllamaV2 or LLama CPP Python as backend"
+
+
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
 
@@ -460,19 +478,19 @@ arg_dict = """
         return None
 
     async def generate(
-            self,
-            prompt: str,
-            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-            # the generated result will be store to this queue
-            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-            temperature: float = 0.01,
-            lm_enforcer_parser: TokenEnforcerTokenizerData = None,
-            stop_words: Union[List[str], str] = None,
-            prefix_strings: Optional[Union[str, List[str]]] = None,
-            banned_strings: list[str] | None = None,
-            max_tokens: int = None,
-            quiet=False,
-            **kwargs,
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        temperature: float = 0.01,
+        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
+        max_tokens: int = None,
+        quiet=False,
+        **kwargs,
     ) -> (str, GenerationStats):
 
         # ensure that generator is initialized
@@ -531,12 +549,16 @@ arg_dict = """
 
         # logger.info("pending_jobs and active_jobs lists in the ExLlamaV2DynamicGenerator")
         # logger.info(f"job_id: {self.pipeline.generator.jobs}")
+        max_tokens_to_use = min(
+            self.max_seq_len - len(input_ids[0]),
+            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]),
+            4096
+        )
 
         job = ExLlamaV2DynamicJobAsync(
             generator=self.pipeline.generator,
             input_ids=input_ids,
-            max_new_tokens=min(self.max_seq_len - len(input_ids[0]),
-                               max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096),
+            max_new_tokens=max_tokens_to_use,
             gen_settings=settings,
             stop_conditions=stop_conditions,  # self.eos_token_id if self.eos_token_id else None,
             banned_strings=banned_strings,
@@ -626,9 +648,13 @@ arg_dict = """
 
 
 class ChatGeneratorLlamaCpp(ChatGenerator):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+            self,
+            llm_base: Model,
+    ):
+        # unpack all variables from llm_base
+        # refer Model class for details of variable available
+        self.__dict__.update(llm_base.__dict__)
         self.pipeline = self._get_pipeline()
 
     class LLamaCppPipeline:
@@ -650,21 +676,52 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
         )
 
+    async def _async_generator(self, sync_generator):
+        for item in sync_generator:
+            yield item
+
+    def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list):
+        generator = self.pipeline.generator(
+            prompt=prompt,
+            logits_processor=logits_processor,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=0.95,
+            min_p=0.05,
+            stop=stop,
+            repeat_penalty=1.1,
+            stream=True,
+        )
+
+        generate_text = ""
+        for chunk in generator:
+            chunk_text = GenText(content=chunk['choices'][0]['text'])
+            generate_text += chunk_text.content
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk_text)
+
+        return generate_text
+
     async def generate(
-            self,
-            prompt: str,
-            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-            # the generated result will be store to this queue
-            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-            temperature: float = 0.01,
-            lm_enforcer_parser: TokenEnforcerTokenizerData = None,
-            stop_words: Union[List[str], str] = None,
-            max_tokens: int = None,
-            **kwargs,
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        temperature: float = 0.01,
+        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
+        max_tokens: int = None,
+        quiet=False,
+        **kwargs,
     ):
 
-        logger.info("----------------------Prompt---------------\n" + prompt)
-        logger.debug("----------------------temperature---------\n" + str(temperature))
+
+        if not quiet:
+            logger.info("----------------------Prompt---------------\n" + prompt)
+            logger.debug("----------------------temperature---------\n" + str(temperature))
 
         # ensure that generator is initialized
         # if self.pipeline is None:
@@ -699,20 +756,24 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             ])
 
         start_time = time.time()
-        max_tokens_to_use = min(max_tokens,
-                                self.max_seq_len - len(input_ids)) if max_tokens else self.max_seq_len - len(
-            input_ids)
 
-        # # find stop conditions
-        # if stop_words:
-        #     if not self.eos_token_str:
-        #         raise Exception("EOS token not set in model_config")
-        #     stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
-        #     logger.debug("stop_words: " + str(stop_conditions))
-        # else:
-        #     stop_conditions = self.eos_token_str
+        # find stop conditions
+        if stop_words:
+            if isinstance(stop_words, str):
+                stop_words = [stop_words]
 
-        stop_conditions = stop_words
+            if not self.eos_token_str:
+                raise Exception("EOS token not set in model_config")
+            stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
+            logger.debug("stop_words: " + str(stop_conditions))
+        else:
+            stop_conditions = self.eos_token_str
+
+        max_tokens_to_use = min(
+            self.max_seq_len - len(input_ids),
+            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids),
+            4096
+        )
 
         # kickstart the generation and let down stream know gen type
         if isinstance(gen_type, str):
@@ -720,34 +781,15 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         for g_queue in gen_queue_list:
             g_queue.get_queue().put_nowait(gen_type)
 
-        result = self.pipeline.generator(
-            prompt=prompt,
-            logits_processor=logits_processors,
-            max_tokens=max_tokens_to_use,
-            temperature=temperature,
-            top_p=0.95,
-            min_p=0.05,
-            stop=stop_conditions,
-            repeat_penalty=1.1,
-            stream=True,
-        )
-
-        # this method to convert generator to async generator
-        def async_generator(sync_generator):
-            async def wrapper():
-                for item in sync_generator:
-                    yield item
-
-            return wrapper()
-
-        generate_text = ""
-        async for chunk in async_generator(result):
-            # logger.info(chunk)
-            chunk_text = GenText(content=chunk['choices'][0]['text'])
-            for g_queue in gen_queue_list:
-                g_queue.get_queue().put_nowait(chunk_text)
-
-            generate_text += chunk_text.content
+        # llama cpp python generator is not async, hence running fake async..
+        # Run the synchronous generator in a separate thread
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as pool:
+            generate_text = await loop.run_in_executor(
+                pool,
+                self._run_generator_and_queue,
+                prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list
+            )
 
         duration = time.time() - start_time
 
@@ -762,3 +804,4 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
                 g_queue.get_queue().put_nowait(GenEnd())
 
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)
+

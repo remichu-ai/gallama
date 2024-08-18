@@ -576,6 +576,7 @@ class ModelDownloadSpec(BaseModel):
     """ dataclass for model download"""
     model_name: str
     quant: Optional[float] = None
+    backend: Literal["exllama", "llama_cpp", "embedding"] = "exllama"
 
     # disable protected_namespaces due to it field use model_ in the name
     model_config = ConfigDict(extra="forbid", protected_namespaces=())

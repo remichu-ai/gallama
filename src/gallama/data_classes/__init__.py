@@ -6,4 +6,8 @@ from .server_dataclass import (
     MixtureOfAgents
 )
 
+from .data_class import (
+    ModelDownloadSpec
+)
+
 

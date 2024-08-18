@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 from collections import defaultdict
 from gallama.logger import logger
 from operator import itemgetter
+import os
 
 
 class ConfigManager:
@@ -22,7 +23,6 @@ class ConfigManager:
     def get_library_path(self):
         return Path(__file__).parent.parent
 
-
     @property
     def get_data_dir(self) -> Path:
         """Get the absolute path to the data directory."""
@@ -31,29 +31,31 @@ class ConfigManager:
     @property
     def get_gallama_user_config_folder(self) -> Path:
         """Get the absolute path to the Gallama user config folder."""
-        home_dir = Path.home()
-        config_dir = home_dir / "gallama"
+        gallama_home = os.environ.get('GALLAMA_HOME_PATH')
+        if gallama_home:
+            config_dir = Path(gallama_home)
+        else:
+            home_dir = Path.home()
+            config_dir = home_dir / "gallama"
         return config_dir
 
     @property
     def get_gallama_user_config_file_path(self) -> Path:
-        """Get the absolute path to the Gallama user config folder."""
-        home_dir = Path.home()
-        config_dir = home_dir / "gallama" / "model_config.yaml"
-        return config_dir
+        """Get the absolute path to the Gallama user config file."""
+        return self.get_gallama_user_config_folder / "model_config.yaml"
 
     def load_model_configs(self):
         """Load all YAML files (both .yaml and .yml) from the data directory and combine them."""
-        # data_dir = self.get_data_dir()
-        data_dir = self.get_gallama_user_config_folder
-        for yaml_file in data_dir.glob('model_config.yaml'):  # This pattern matches both .yaml and .yml
-            with open(yaml_file, 'r') as file:
+        config_file = self.get_gallama_user_config_file_path
+        if config_file.exists():
+            with open(config_file, 'r') as file:
                 yaml_data = yaml.safe_load(file)
-                # Merge the loaded data with existing configs
                 if yaml_data:
                     self.configs.update(yaml_data)
                 else:
-                    raise ValueError(f'No model config in YAML files found in {yaml_file}')
+                    raise ValueError(f'No model config in YAML file found in {config_file}')
+        else:
+            logger.info(f"Config file not found at {config_file}")
 
     def load_default_model_list(self):
         data_dir = self.get_data_dir

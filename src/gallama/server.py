@@ -12,6 +12,7 @@ from typing import List, Dict, Optional
 from gallama.config import ConfigManager
 from gallama.server_engine import forward_request
 import psutil
+import shutil
 import asyncio
 import uvicorn
 import argparse
@@ -184,11 +185,14 @@ async def run_model(model: ModelParser):
             app_path = get_package_file_path('app.py')
             logger.info(f"Using app path: {app_path}")
 
-            if backend != "embedding":
+            # Determine the correct Python executable
+            python_exec = shutil.which("python3") or shutil.which("python")
+
+            if backend == "exllama":
                 model_cli_args = model.to_arg_string()
                 logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
-                    "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
+                    python_exec, app_path, "-id", model_cli_args, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
                     # stderr=asyncio.subprocess.DEVNULL,
                 )
@@ -205,7 +209,7 @@ async def run_model(model: ModelParser):
                 model_cli_args = model.to_arg_string()
                 logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
-                    "python", app_path, "-id", model_cli_args, "--detached", "--port", str(port),
+                    python_exec, app_path, "-id", model_cli_args, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
                     # stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
