@@ -64,8 +64,11 @@ RUN pip install flash-attn==2.6.3 --no-build-isolation
 RUN pip install -r requirements.txt
 RUN pip install https://github.com/turboderp/exllamav2/releases/download/v0.1.8/exllamav2-0.1.8+cu121.torch2.3.1-cp311-cp311-linux_x86_64.whl
 
+RUN pip install gallama
+
 # Clean up
 RUN apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-ENTRYPOINT ["python"]
+
+ENTRYPOINT ["gallama", "run"]

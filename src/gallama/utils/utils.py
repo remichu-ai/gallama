@@ -36,7 +36,7 @@ def get_token_length(tokenizer, text):
     if not isinstance(text, str):
         str_text = str(text)
 
-    if isinstance(tokenizer, ExLlamaV2Tokenizer):
+    if ExLlamaV2Tokenizer and isinstance(tokenizer, ExLlamaV2Tokenizer):
         return tokenizer.num_tokens(str_text)
     elif type(tokenizer).__name__ == 'Llama':  # Check the type name instead of using isinstance
         # this is because llama_cpp is optional dependency
@@ -47,7 +47,6 @@ def get_token_length(tokenizer, text):
             return len(tokenizer.encode(str_text))
     else:
         return len(tokenizer.encode(str_text))
-
 
 def read_yaml(file_path):
     try:

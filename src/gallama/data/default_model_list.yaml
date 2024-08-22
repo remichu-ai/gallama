@@ -48,6 +48,21 @@ llama-3.1-70B:
       branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw']
       quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0]
       backend: exllama
+    - repo: "MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF"
+      branch: ['main']
+      quant: [3.0]
+      url: https://huggingface.co/MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF/blob/main/Meta-Llama-3.1-70B-Instruct.Q3_K_S.gguf
+      backend: llama_cpp
+    - repo: "MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF/blob/main/Meta-Llama-3.1-70B-Instruct.Q4_K_S.gguf
+      backend: llama_cpp
+    - repo: "MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF"
+      branch: ['main']
+      quant: [5.0]
+      url: https://huggingface.co/MaziyarPanahi/Meta-Llama-3.1-70B-Instruct-GGUF/blob/main/Meta-Llama-3.1-70B-Instruct.Q5_K_S.gguf
+      backend: llama_cpp
 mistral:
   remark: "v0.3"
   default_quant: 4.0
@@ -241,25 +256,25 @@ qwen-2-1.5B:
       branch: ['main']
       quant: [8.0]
       backend: exllama
-    - repo: "afrideva/Qwen2-1.5B-GGUF"
+    - repo: "Qwen/Qwen2-0.5B-Instruct-GGUF"
       branch: ['main']
       quant: [4.0]
-      url: https://huggingface.co/afrideva/Qwen2-1.5B-GGUF/blob/main/qwen2-1.5b.Q4_K_M.gguf
+      url: https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/blob/main/qwen2-0_5b-instruct-q4_0.gguf
       backend: llama_cpp
-    - repo: "afrideva/Qwen2-1.5B-GGUF"
+    - repo: "Qwen/Qwen2-0.5B-Instruct-GGUF"
       branch: ['main']
       quant: [5.0]
-      url: https://huggingface.co/afrideva/Qwen2-1.5B-GGUF/blob/main/qwen2-1.5b.Q5_K_M.gguf
+      url: https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/blob/main/qwen2-0_5b-instruct-q5_k_m.gguf
       backend: llama_cpp
-    - repo: "afrideva/Qwen2-1.5B-GGUF"
+    - repo: "Qwen/Qwen2-0.5B-Instruct-GGUF"
       branch: ['main']
       quant: [6.0]
-      url: https://huggingface.co/afrideva/Qwen2-1.5B-GGUF/blob/main/qwen2-1.5b.Q6_K.gguf
+      url: https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/blob/main/qwen2-0_5b-instruct-q6_k.gguf
       backend: llama_cpp
-    - repo: "afrideva/Qwen2-1.5B-GGUF"
+    - repo: "Qwen/Qwen2-0.5B-Instruct-GGUF"
       branch: ['main']
       quant: [8.0]
-      url: https://huggingface.co/afrideva/Qwen2-1.5B-GGUF/blob/main/qwen2-1.5b.Q8_0.gguf
+      url: https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/blob/main/qwen2-0_5b-instruct-q8_0.gguf
       backend: llama_cpp
 qwen-2-7B:
   remark: "v2"
@@ -325,6 +340,21 @@ qwen-2-72B:
       branch: ['main']
       quant: [8.0]
       backend: exllama
+    - repo: "Qwen/Qwen2-72B-Instruct-GGUF"
+      branch: ['main']
+      quant: [2.0]
+      url: https://huggingface.co/Qwen/Qwen2-72B-Instruct-GGUF/blob/main/qwen2-72b-instruct-q2_k.gguf
+      backend: llama_cpp
+    - repo: "Qwen/Qwen2-72B-Instruct-GGUF"
+      branch: ['main']
+      quant: [3.0]
+      url: https://huggingface.co/Qwen/Qwen2-72B-Instruct-GGUF/blob/main/qwen2-72b-instruct-q3_k_m.gguf
+      backend: llama_cpp
+    - repo: "Qwen/Qwen2-72B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/Qwen/Qwen2-72B-Instruct-GGUF/blob/main/qwen2-72b-instruct-q4_k_m.gguf
+      backend: llama_cpp
 yi-1.5-34B:
   remark: "v1.5"
   default_quant: 4.0
