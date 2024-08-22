@@ -492,15 +492,15 @@ Customize the model launch using various parameters. Available parameters for th
    Ensure your GPU settings can accommodate the model requirements. Trial and adjust parameters as needed for your specific use case.
    Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.
 
-7. (Experimental) Tensor Parallel (TP)
-   Exllama V2 Tensor Parallel support is in the work. If you are adventurous, you can enable it by:
+7. Tensor Parallel (TP)
+   Exllama V2 Tensor Parallel support Tensor Parallel from v0.1.9.
    - Update your python>=3.11
-   - Install [exllamav2 dev branch](https://github.com/turboderp/exllamav2/tree/dev)
+   - Install ExllamaV2>=0.1.9
    - Only support Qwen2-72B, Llama3.1-70B and Mistral Large at the moment
    - Do run a draft model to help further with speed (Qwen2-1.5B, Llama3.1-8B, Mistral v0.3 respectively)
    To enable tensor parallel, simply add `tp=True`
    Exllama tensor parallel support parallelism on odd number of GPUs. Also exact matching of GPU is not requirement
-   The speed boost for TP is huge (close to X1.5-X2). So do try it out.
+   The speed boost for TP is huge (close to X1.5-X2).
    ```shell
    gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B tp=True"
    ```
