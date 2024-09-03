@@ -236,7 +236,7 @@ async def run_model(model: ModelParser):
             return
 
         logger.info(f"Model {model.model_id} instance on port {port} is fully loaded and ready")
-        log_model_status(models)  # Log status after successfully loading a model
+        log_model_status(models, custom_logger=logger)  # Log status after successfully loading a model
 
         # Instead of entering an infinite loop, we'll exit the function here
         return
@@ -297,7 +297,7 @@ async def stop_model_instance(model: str, port: int):
         if not models[model].instances:
             del models[model]
         logger.info(f"Cleaned up model {model} instance on port {port}")
-        log_model_status(models)  # Log status after removing a model instance
+        log_model_status(models, custom_logger=logger)   # Log status after removing a model instance
 
 
 async def get_model_from_body(request: Request) -> str:

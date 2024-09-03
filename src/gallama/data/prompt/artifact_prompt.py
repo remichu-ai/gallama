@@ -91,6 +91,7 @@ XML comment ( <!-- tag) is prohibited.
 Write content directly within the tags.
 The XML interpreter only recognize tag above (<answer>, <text>, <artifact>).
 
+Always precede an artifact by acknowledging the user's question or intention using <text>, unless it is unnecessary or explicitly requested other wise.
 End of Artifact System instruction.
 
 """
