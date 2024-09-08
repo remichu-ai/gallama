@@ -61,9 +61,9 @@ async def get_response_from_queue(
 
 
 async def chat_completion_response_stream(
-        query: ChatMLQuery,
-        gen_queue: GenQueue,
-        model_name: str,
+    query: ChatMLQuery,
+    gen_queue: GenQueue,
+    model_name: str,
 ) -> AsyncIterator[dict]:
     unique_id = get_response_uid()
     created = int(time.time())
@@ -453,13 +453,14 @@ async def completion_response_stream(request: Request, gen_queue: GenQueue, mode
 
 
 async def chat_completion_response_artifact_stream(
-        query: ChatMLQuery,
-        gen_queue: GenQueue,
-        model_name: str,
+    query: ChatMLQuery,
+    gen_queue: GenQueue,
+    model_name: str,
 ) -> AsyncIterator[dict]:
     unique_id = get_response_uid()
     created = int(time.time())
     full_response = ""
+    response_thinking = ""
     eos = False
     gen_type = "text"  # Default generation type
     gen_stats = None
@@ -474,12 +475,16 @@ async def chat_completion_response_artifact_stream(
 
     while not eos:
         accumulated_text = ""
+        accumulated_thinking = ""
+
         try:
             # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
-                if isinstance(item, GenText):
+                if isinstance(item, GenText) and item.text_type=="text":
                     accumulated_text += item.content
+                if isinstance(item, GenText) and item.text_type=="thinking":
+                    accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
                     break
@@ -489,6 +494,27 @@ async def chat_completion_response_artifact_stream(
                     gen_stats = item
         except asyncio.QueueEmpty:
             pass
+
+        if accumulated_thinking and query.return_thinking is not False:
+            full_response += accumulated_thinking
+            chunk_data = ChatCompletionResponse(
+                unique_id=unique_id,
+                model=model_name,
+                object="chat.completion.chunk",
+                created=created,
+                choices=[
+                    StreamChoice(
+                        index=0,
+                        delta=ChatMessage(
+                            role="assistant",
+                            content="",
+                            thinking=accumulated_thinking,
+                        ),
+                    )
+                ],
+            )
+            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder,
+                                      ensure_ascii=False)}
 
         if accumulated_text:
             full_response += accumulated_text
@@ -583,10 +609,14 @@ async def chat_completion_response_artifact_stream(
 
 
 async def chat_completion_response_artifact(
-        gen_queue: GenQueue,
-        model_name: str,
+    query: ChatMLQuery,
+    gen_queue: GenQueue,
+    model_name: str,
 ) -> ChatCompletionResponse:
     response = ""
+    response_thinking = ""
+    response_all = ""
+
     response_obj = None
     gen_type = GenStart(gen_type="text")
     gen_stats = None
@@ -595,8 +625,12 @@ async def chat_completion_response_artifact(
     while not eos:
         try:
             result = gen_queue.get_nowait()
-            if isinstance(result, GenText):
+            if isinstance(result, GenText) and result.text_type=="text":
                 response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="thinking":
+                response_thinking += result.content
+                response_all += result.content
             elif isinstance(result, GenerationStats):
                 gen_stats = result
             elif isinstance(result, GenStart):
@@ -604,20 +638,36 @@ async def chat_completion_response_artifact(
             elif isinstance(result, GenEnd):
                 eos = True
                 gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response.strip())
+                logger.info("----------------------LLM Response---------------\n" + response_all.strip())
         except asyncio.QueueEmpty:
             await asyncio.sleep(0.1)
 
     unique_id = get_response_uid()
     response = response.strip()
 
-    if gen_type.gen_type == "text":
+    if gen_type.gen_type == "text" or gen_type=="thinking":
+        choices = []
+
+        # return thinking first
+        if response_thinking and query.return_thinking is not False:    # currently always return as separate
+            choices.append(
+                Choice(
+                    index=0,    # only 1 thinking per response for now
+                    message=ChatMessage(
+                        role="assistant",
+                        content='',
+                        thinking=response_thinking,
+                    ),
+                    finish_reason="stop"
+                )
+            )
+
         parser = StreamParser()
         parsed_chunks = parser.parse_full_response(response)
 
         if parsed_chunks:
             # If parsing was successful, create a structured response
-            choices = []
+
             for idx, (chunk_type, chunk_content) in enumerate(parsed_chunks):
                 choices.append(
                     Choice(
@@ -625,7 +675,7 @@ async def chat_completion_response_artifact(
                         message=ChatMessage(
                             role="assistant",
                             content=chunk_content,
-                            artifact_meta=chunk_type.model_dump()
+                            artifact_meta=chunk_type.model_dump(),
                         ),
                         finish_reason="stop"
                     )
