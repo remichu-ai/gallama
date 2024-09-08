@@ -85,6 +85,20 @@ class ToolForce(BaseModel):
         extra = "forbid"  # This will prevent extra keys in the dictionary
 
 
+test_thinking = """
+<plan>
+  <task>Brief task summary</task>
+  <structure>
+    <c1>[text]: Acknowledge question and introduce answer</c1>
+    <c2>[artifact]: Main content (e.g., code)</c2>
+    <c3>[text]: Explain or elaborate on c2</c3>
+    <c4>[artifact]: Additional content if needed</c4>
+    <c5>[text]: Explain or elaborate on c4</c5>
+    <!-- Add more pairs if needed -->
+  </structure>
+</plan>
+"""
+
 class ChatMLQuery(BaseModel):
     class ResponseFormat(BaseModel):
         type: Literal["text", "json_object"]
@@ -107,9 +121,10 @@ class ChatMLQuery(BaseModel):
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = None
     thinking_template: Optional[str] = None
+    # thinking_template: Optional[str] = test_thinking
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
-
+    return_thinking: Optional[Literal[False, True, "separate"]] = Field(default=False, description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field")
 
     # not yet supported options from here # TODO
     max_tokens: Optional[int] = None
@@ -170,6 +185,9 @@ class ChatMessage(BaseModel):
     tool_call_id: Optional[str] = None
     content: Optional[str] = None
     name: Optional[str] = None
+    # thinking
+    thinking: Optional[str] = None
+
     # function_call: Optional[ToolCalling] = None   # depreciated
     tool_calls: Optional[List[ToolCallResponse]] = None
     artifact_meta: Union[TextTag, ArtifactTag] = None
@@ -338,19 +356,26 @@ class ModelObjectResponse(BaseModel):
 
 class GenStart(BaseModel):
     """ this item signal start of generation"""
-    gen_type: Literal["text", "tool"]  = Field(description='True to signal end of generation', default="text")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+
+    gen_type: Literal["text", "tool", "thinking"]  = Field(description='True to signal end of generation', default="text")
 
 class GenEnd(BaseModel):
     """ this item signal end of generation"""
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+
     generation_end: bool = Field(description='True to signal end of generation', default=True)
 
 
 class GenText(BaseModel):
-    text_type: Literal["text"] = "text"
-    content: str = Field(description='text of text')
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+
+    text_type: Literal["text", "thinking"] = "text"
+    content: str = Field(description='text or thinking')
     @classmethod
     def __instancecheck__(cls, instance):
         return isinstance(instance, cls)
+
 
 class GenQueue(asyncio.Queue):
     def __init__(self, maxsize=0, allowed_types: List[str] = [GenText, GenerationStats, GenStart, GenEnd]):

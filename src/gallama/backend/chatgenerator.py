@@ -61,6 +61,15 @@ except:
 assert ExLlamaV2Cache or LogitsProcessorList, "Please install ExllamaV2 or LLama CPP Python as backend"
 
 
+# experimental support for formatron
+try:
+    from formatron.formatter import FormatterBuilder
+    from formatron.integrations.exllamav2 import create_formatter_filter
+
+except:
+    FormatterBuilder = None
+    create_formatter_filter = None
+
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
 
@@ -83,15 +92,65 @@ class QueueContext:
         return self.gen_queue()
 
 
+class FormatEnforcer:
+    """ this class will help to create filter for generation enforcement"""
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def get_default_engine() -> Literal["formatron", "lm_enforcer"]:
+        """ this function will select the format enforcer engine to use if not selected by user"""
+
+        # use formatron if it is available
+        if FormatterBuilder:
+            return "formatron"
+        else:
+            return "lm_enforcer"
+
+
+    def regex(self, regex_pattern: str, filter_engine: Literal["formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
+
+        # set the filter engine to use
+        if not filter_engine:
+            filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
+
+        # create filter if engine is lm_enforcer
+        if filter_engine == "lm_enforcer":
+            return RegexParser(regex_pattern)
+
+        # create filter if engine is formatron
+        if filter_engine == "formatron":
+            f = FormatterBuilder()
+            _regex = f.regex(regex_pattern, capture_name='regex')
+            f.append_line(f"{_regex}")
+            return f
+
+
+    def json(self, pydantic_model, filter_engine: Literal["formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
+        """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
+
+        # set the filter engine to use
+        if not filter_engine:
+            filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
+
+        # create filter if engine is lm_enforcer
+        if filter_engine == "lm_enforcer" or filter_engine == "formatron":      # TODO currently formatron and nested pydantic model is having issue
+            json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
+            return JsonSchemaParser(json_schema)
+
+        # # create filter if engine is formatron
+        # if filter_engine == "formatron":
+        #     f = FormatterBuilder()
+        #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
+        #     return f
+
+
+
+
 class ChatGenerator(Model):
     def __init__(
             self,
             llm_base: Model,
-            # model, cache, tokenizer, model_name,
-            # cache_size: int = None,        # the length of cache size, can be more than context length
-            # eos_token_id: List[int] = [],
-            # eos_token_str: List[str] = [],
-            # max_seq_len=512
     ):
         # unpack all variables from llm_base
         # refer Model class for details of variable available
@@ -99,6 +158,9 @@ class ChatGenerator(Model):
 
         # placeholder
         self.pipeline = None
+
+        # format enforcer
+        self.formatter = FormatEnforcer()
 
     async def chat(self, query: ChatMLQuery, prompt_eng, gen_queue: GenQueue):
         chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
@@ -113,6 +175,7 @@ class ChatGenerator(Model):
         if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
+
     async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
 
         prompt = prompt_eng.get_prompt(
@@ -120,9 +183,10 @@ class ChatGenerator(Model):
             thinking_template=query.thinking_template,
         )
 
-        lm_enforcer_parser_regex = RegexParser(query.regex_pattern) if query.regex_pattern else None
-        lm_enforcer_parser_prefix_regex = RegexParser(
+        formatter_prefix_regex = self.formatter.regex(
             query.regex_prefix_pattern) if query.regex_prefix_pattern else None
+
+        formatter_regex = self.formatter.regex(query.regex_pattern) if query.regex_pattern else None
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
@@ -134,13 +198,23 @@ class ChatGenerator(Model):
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
 
+            # Not returning thinking
             thinking_queue = GenQueue()
-            queue_group = [
-                QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
-                # QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
-            ]
+            if query.return_thinking:
+                # return thinking to front end
+                queue_group = [
+                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
+                    QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
+                ]
+            else:
+                # not return thinking to front end
+                queue_group = [
+                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
+                ]
+
             await self.generate(
                 prompt,
+                gen_type="thinking",
                 gen_queue=queue_group,
                 temperature=query.temperature,
                 stop_words=thinking.root_key_stop_words,
@@ -168,7 +242,7 @@ class ChatGenerator(Model):
                 prompt,
                 gen_queue=queue_group,
                 temperature=query.temperature,
-                lm_enforcer_parser=lm_enforcer_parser_prefix_regex,
+                formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 # stop_words=query.stop_words,
             )
@@ -178,7 +252,7 @@ class ChatGenerator(Model):
             # append generated content to the full prompt
             prompt = prompt.strip() + first_response.strip()
 
-        # Final generation to retun to client
+        # Final generation to return to client
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
@@ -189,10 +263,11 @@ class ChatGenerator(Model):
             prefix_strings = None
             manual_prefix_string = "<answer>\n "
             prompt += manual_prefix_string
-            # prefix_strings = "```xml\n<answer><![CDATA[\n <"
-            banned_strings = ["<![CDATA[", "<!--"]
-            # add the stopword for artifact tag to the answer
 
+            # ban XML comment format which could mess up the parsing of output
+            banned_strings = ["<![CDATA[", "<!--"]
+
+            # add the stopword for artifact tag to the answer
             if isinstance(stop_words_to_use, list):
                 stop_words_to_use.append("</answer>")
             elif isinstance(stop_words_to_use, str):
@@ -209,7 +284,7 @@ class ChatGenerator(Model):
             gen_queue=gen_queue,
             **{
                 'temperature': query.temperature,
-                'lm_enforcer_parser': lm_enforcer_parser_regex,
+                'formatter': formatter_regex,
                 'stop_words': stop_words_to_use,
                 'max_tokens': query.max_tokens,
                 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
@@ -235,7 +310,7 @@ class ChatGenerator(Model):
             {"fstring_available_tools": tool_handler.tool_name_list}
         )
 
-        # perform generation with tool thinking to evaluate if it is necessity
+        # perform generation with tool thinking to evaluate if it is necessity to call a tool
         prompt = prompt_eng.get_prompt(
             query,
             pydantic_tool_dict=tool_handler.tool_dict,
@@ -243,21 +318,19 @@ class ChatGenerator(Model):
             answer_format_schema=False,
             # leading_prompt=leading_prompt,
         )
-        # lm_enforcer_parser_regex = RegexParser(
-        #                     TOOL_THINKING.regex) if TOOL_THINKING.regex else None
+
         await self.generate(
             prompt,
             gen_queue=tool_thinking_queue,
             temperature=query.temperature,
             stop_words=TOOL_THINKING.root_key_stop_words,
             prefix_strings=f"<{TOOL_THINKING.root_tag}>",
-            # lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
+            # formatter=formatter_regex  # no longer enforce format
         )
 
-        # evaluate tool usage neccessity
+        # evaluate tool usage necessity
         tool_thinking_response, _ = await get_response_from_queue(tool_thinking_queue)
-        # add the closing root_key_stop
-        # tool_thinking_response += TOOL_THINKING.root_key_stop_words[0]    #TODO check if exllama v2 have way to get the stop_word returned
+
 
         # see if llm able to generate the xml format correctly
         try:
@@ -301,14 +374,15 @@ class ChatGenerator(Model):
             # perform generation with tool thinking to evaluate if it is necessity
             tool_thinking_queue_fallback = GenQueue()
 
-            lm_enforcer_parser_regex = RegexParser('(needed|not needed)')
+            formatter_regex = self.formatter.regex('(needed|not needed)')
+
             await self.generate(
                 prompt,
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
-                lm_enforcer_parser=lm_enforcer_parser_regex  # no longer enforce format
+                formatter=formatter_regex  # no longer enforce format
             )
 
             # evaluate tool usage necessity
@@ -332,15 +406,18 @@ class ChatGenerator(Model):
                     default=[]
                 )
 
-            class ItemModel(BaseModel):
-                Use: Literal['Yes', 'No']
-                reason: str
+            # class ItemModel(BaseModel):
+            #     Use: Literal['Yes', 'No']
+            #     reason: str
 
-            answer_format_schema = tool_handler.replace_refs_with_definitions_v2(ToolCalling.schema())
+            # answer_format_schema = tool_handler.replace_refs_with_definitions_v2(ToolCalling.schema())
+            #
+            # # get format enforcer
+            # formatter = JsonSchemaParser(answer_format_schema)
 
-            # get format enforcer
-            lm_enforcer_parser = JsonSchemaParser(answer_format_schema)
+            formatter_json = self.formatter.json(pydantic_model=ToolCalling)
 
+            # Experiment feature, formulate function calling as python programming. Which is more natural than a random Json output as part of conversation
             tool_as_code_prompt = """
 def run_function(arg_dict):
     function_calls = arg_dict["functions_calling"]
@@ -380,7 +457,7 @@ arg_dict = """
                 temperature=query.temperature,
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 prefix_strings=['{\n "functions_calling": ['],
-                lm_enforcer_parser=lm_enforcer_parser,  # no longer enforce format
+                formatter=formatter_json,
                 max_tokens=query.max_tokens,
             )
 
@@ -484,9 +561,9 @@ arg_dict = """
         prompt: str,
         gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
         # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        gen_type: Union[str, GenStart] = "text",
         temperature: float = 0.01,
-        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -528,8 +605,13 @@ arg_dict = """
 
         # format enforcer
         filters = []
-        if lm_enforcer_parser:
-            filters = [ExLlamaV2TokenEnforcerFilter(lm_enforcer_parser, self.pipeline.lm_enforcer_tokenizer_data)]
+        if formatter:
+            if isinstance(formatter, TokenEnforcerTokenizerData):      # lm format enforcer
+                filters = [ExLlamaV2TokenEnforcerFilter(formatter, self.pipeline.lm_enforcer_tokenizer_data)]
+            elif FormatterBuilder and isinstance(formatter, FormatterBuilder):   # formatron
+                filters = [create_formatter_filter(self.model, self.tokenizer, formatter)]
+            else:
+                raise "Format enforcer is not correctly initialized"
 
         if prefix_strings:
             assert isinstance(prefix_strings, str) or (isinstance(prefix_strings, list) and len(prefix_strings) > 0)
@@ -579,7 +661,10 @@ arg_dict = """
 
         # kick-start the generation and let down stream know gen type
         if isinstance(gen_type, str):
+            gen_type_str = gen_type
             gen_type = GenStart(gen_type=gen_type)
+        else:
+            gen_type_str = gen_type.text_type        # get out the generation type in str format
 
         for g_queue in gen_queue_list:
             g_queue.get_queue().put_nowait(gen_type)
@@ -604,7 +689,7 @@ arg_dict = """
             # generate_text += result.get("text", "")
             # logger.info(f'{datetime.now()} {result.get("text", "")}')
 
-            chunk = GenText(content=result.get("text", ""))
+            chunk = GenText(content=result.get("text", ""), text_type=gen_type_str)
             for g_queue in gen_queue_list:
                 g_queue.get_queue().put_nowait(chunk)
 
@@ -625,7 +710,7 @@ arg_dict = """
 
                         if stop_word_used:
                             # end_string is custom token -> return
-                            chunk = GenText(content=stop_word_used)
+                            chunk = GenText(content=stop_word_used, text_type=gen_type_str)
                             for g_queue in gen_queue_list:
                                 g_queue.get_queue().put_nowait(chunk)
                         else:
@@ -711,7 +796,7 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         # the generated result will be store to this queue
         gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
         temperature: float = 0.01,
-        lm_enforcer_parser: TokenEnforcerTokenizerData = None,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -749,11 +834,11 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
 
         # format enforcer
         logits_processors = None
-        if lm_enforcer_parser:
+        if formatter:
             logits_processors = LogitsProcessorList([
                 build_llamacpp_logits_processor(
                     llm=self.pipeline.lm_enforcer_tokenizer_data,
-                    character_level_parser=lm_enforcer_parser,
+                    character_level_parser=formatter,
                 )
             ])
 

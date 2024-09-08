@@ -145,6 +145,10 @@ async def chat_completion(request: Request, query: ChatMLQuery):
         llm = llm_dict[model_name_to_use]["model"]
         prompt_eng = llm_dict[model_name_to_use]["prompt_engine"]
 
+        # log if thinking is used
+        if query.thinking_template:
+            logger.info(f"thinking is used with returnThinking set to {query.return_thinking}")
+
         # start the generation task
         asyncio.create_task(llm.chat(
             query=query,
@@ -167,9 +171,9 @@ async def chat_completion(request: Request, query: ChatMLQuery):
                     ))
         else:
             if query.artifact == "No":     # not using artefact
-                return await chat_completion_response(gen_queue=gen_queue, model_name=model_name_to_use)
+                return await chat_completion_response(query=query, gen_queue=gen_queue, model_name=model_name_to_use)
             else:
-                return await chat_completion_response_artifact(gen_queue=gen_queue, model_name=model_name_to_use)
+                return await chat_completion_response_artifact(query=query, gen_queue=gen_queue, model_name=model_name_to_use)
     except HTTPException as e:
         logger.error(e)
         return e

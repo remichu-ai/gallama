@@ -180,3 +180,61 @@ class ConfigManager:
                         table += f"| | {backend} | {', '.join(quants_formatted)} |\n"
 
         return table
+
+    def generate_model_dict(self, specific_backend=None) -> List[Dict[str, Any]]:
+        # Parse the YAML data
+        data = self.default_model_list
+
+        # List to hold the dictionaries
+        model_list = []
+
+        # Iterate through the models
+        for model, info in data.items():
+            if 'repo' in info:
+                # Group quantizations by backend
+                backend_quants = defaultdict(set)
+                for repo in info['repo']:
+                    backend = repo.get('backend', 'unknown')
+                    quants = repo.get('quant', [])
+                    backend_quants[backend].update(quants)
+
+                # Filter by specific backend if provided
+                if specific_backend:
+                    if specific_backend in backend_quants:
+                        backend_quants = {specific_backend: backend_quants[specific_backend]}
+                    else:
+                        continue  # Skip this model if it doesn't have the specified backend
+
+                # Sort backends and their quantizations
+                sorted_backends = sorted(backend_quants.keys())
+                for backend in sorted_backends:
+                    quants = backend_quants[backend]
+                    quants_formatted = [q for q in sorted(quants)]
+                    model_list.append({
+                        "model": model,
+                        "backend": backend,
+                        "available_quantizations": quants_formatted
+                    })
+
+        return model_list
+
+
+    @property
+    def list_available_models_dict(self) -> List[Dict[str, Any]]:
+        return self.generate_model_dict()
+
+    @property
+    def list_downloaded_models_dict(self) -> List[Dict[str, Any]]:
+        # Create a list of dictionaries (model, backend, bpw)
+        model_data = []
+        for model, details in self.configs.items():
+            # print(details)
+            # backend = details.get('backend', '')
+            # bpw = self.extract_bpw(details, model)
+            # model_data.append({"model": model, "backend": backend, "bpw": bpw})
+            model_data.append({**{"model": model}, **details})
+
+        # Sort the list by backend first, then by model name
+        sorted_data = sorted(model_data, key=itemgetter("backend", "model"))
+
+        return sorted_data

@@ -176,7 +176,7 @@ def get_gpu_memory_info():
         return "Unable to retrieve GPU information"
 
 
-def log_model_status(models: Dict[str, ModelInfo]):
+def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None):
     total_models = len(models)
     total_instances = sum(len(model_info.instances) for model_info in models.values())
 
@@ -211,5 +211,8 @@ def log_model_status(models: Dict[str, ModelInfo]):
         formatted_gpu_info
     )
 
-    logger.info(log_message)
+    if custom_logger:
+        custom_logger.info(log_message)
+    else:
+        logger.info(log_message)
 
