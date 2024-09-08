@@ -86,12 +86,16 @@ async def chat_completion_response_stream(
         #     last_log_time = current_time
 
         accumulated_text = ""
+        accumulated_thinking = ""
+
         try:
             # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
-                if isinstance(item, GenText):
+                if isinstance(item, GenText) and item.text_type=="text":
                     accumulated_text += item.content
+                if isinstance(item, GenText) and item.text_type=="thinking":
+                    accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
                     break
@@ -102,25 +106,58 @@ async def chat_completion_response_stream(
         except asyncio.QueueEmpty:
             pass
 
-        if accumulated_text:
-            full_response += accumulated_text
-            if gen_type == "text":
-                chunk_data = ChatCompletionResponse(
-                    unique_id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    created=created,
-                    choices=[
-                        StreamChoice(
-                            index=0,
-                            delta=ChatMessage(
-                                role="assistant",
-                                content=accumulated_text,
-                            ),
-                        )
-                    ],
-                )
-                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+        if accumulated_text or accumulated_thinking:
+            full_response += accumulated_thinking + accumulated_text
+
+            # TODO current naive implementation with assumption that thinking will always come first instead of the actual order that text stream in
+
+            if gen_type == "text" or gen_type == "thinking":
+
+                # if the output is returned together, then concat into one text
+                if query.return_thinking is True and accumulated_thinking:
+                    if accumulated_text:
+                        accumulated_text = "\n" + accumulated_text
+                    # assumption: thinking come first
+                    accumulated_text = accumulated_thinking + accumulated_text
+
+                # yield thinking response first
+                if accumulated_thinking and query.return_thinking=="separate":
+                    chunk_data = ChatCompletionResponse(
+                        unique_id=unique_id,
+                        model=model_name,
+                        object="chat.completion.chunk",
+                        created=created,
+                        choices=[
+                            StreamChoice(
+                                index=0,
+                                delta=ChatMessage(
+                                    role="assistant",
+                                    content="",
+                                    thinking=accumulated_thinking,
+                                ),
+                            )
+                        ],
+                    )
+                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+
+                # yield text response
+                if accumulated_text:
+                    chunk_data = ChatCompletionResponse(
+                        unique_id=unique_id,
+                        model=model_name,
+                        object="chat.completion.chunk",
+                        created=created,
+                        choices=[
+                            StreamChoice(
+                                index=0,
+                                delta=ChatMessage(
+                                    role="assistant",
+                                    content=accumulated_text,
+                                ),
+                            )
+                        ],
+                    )
+                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
             elif gen_type == "tool":
                 # Accumulate tool usage data
                 # Note: This assumes that tool data is complete in a single chunk
@@ -189,6 +226,7 @@ async def chat_completion_response_stream(
 
 
 async def chat_completion_response(
+    query: ChatMLQuery,
     gen_queue: GenQueue,
     # response: str,
     # gen_stats: GenerationStats,
@@ -197,24 +235,31 @@ async def chat_completion_response(
 ) -> ChatCompletionResponse:
 
     response = ""
+    response_thinking = ""
+    response_all = ""
     # global result_queue
     # completed_event = asyncio.Event()
-    gen_type = GenStart(gen_type="text")
+    gen_type = "text"
     gen_stats = None
     eos = False
     while not eos:
         try:
             result = gen_queue.get_nowait()
-            if isinstance(result, GenText):
+            if isinstance(result, GenText) and result.text_type=="text":
                 response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="thinking":
+                response_thinking += result.content
+                response_all += result.content
             elif isinstance(result, GenerationStats):
                 gen_stats = result        # Not applicable for completion endpoint
             elif isinstance(result, GenStart):
                 gen_type = result
+                gen_type = result.gen_type      # get the gen_type e.g. text, tool, thinking
             elif isinstance(result, GenEnd):
                 eos = True
                 gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response.strip())
+                logger.info("----------------------LLM Response---------------\n" + response_all.strip())
 
         except asyncio.QueueEmpty:
             await asyncio.sleep(0.1)    # short sleep before trying again
@@ -223,7 +268,17 @@ async def chat_completion_response(
     unique_id = get_response_uid()
     response = response.strip()
 
-    if gen_type.gen_type == "text":
+    if gen_type == "text" or gen_type=="thinking":
+
+        # whether to return separate or together
+        if query.return_thinking is False:
+            response_thinking = ""
+        elif query.return_thinking is True:
+            response = response_thinking + "\n" + response
+            # response_thinking = ""     # still return the response_thinking for user to be able to segregate
+        elif query.return_thinking == "separate":
+            pass
+
         response_obj = ChatCompletionResponse(
             unique_id=unique_id,
             model=model_name,
@@ -233,6 +288,7 @@ async def chat_completion_response(
                     message=ChatMessage(
                         role="assistant",
                         content=response,
+                        thinking=response_thinking,
                     ),
                     finish_reason="stop",
                 )
@@ -243,7 +299,7 @@ async def chat_completion_response(
                 total_tokens=gen_stats.total_tokens_count,
             ),
         )
-    elif gen_type.gen_type == "tool":
+    elif gen_type == "tool":
         try:
             response_dict = json.loads(response)
         except:

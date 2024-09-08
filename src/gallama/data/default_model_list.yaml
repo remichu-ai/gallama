@@ -397,6 +397,40 @@ yi-1.5-34B:
       branch: ['main']
       quant: [8.0]
       backend: exllama
+reflection-llama-3.1-70B:
+  remark: "v3.1"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Llama3.1
+  repo:
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-2.25bpw-h6-exl2"
+      branch: ['main']
+      quant: [2.25]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-2.4bpw-h6-exl2"
+      branch: ['main']
+      quant: [2.4]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-3.5bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.5]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-4.65bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.65]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-5.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [5.0]
+      backend: exllama
+    - repo: "LoneStriker/Reflection-Llama-3.1-70B-6.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [6.0]
+      backend: exllama
 
 
 # embedding model from here

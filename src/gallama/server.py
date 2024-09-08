@@ -1,10 +1,13 @@
 import time
 import sys
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+import uuid
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from collections import defaultdict
 from typing import Union
-from fastapi.middleware.cors import CORSMiddleware
 from gallama.data_classes.data_class import ModelParser, ModelObjectResponse, ModelObject, ModelDownloadSpec
 from gallama.data_classes import ModelRequest, ModelInstanceInfo,  ModelInfo, AgentWithThinking
 from gallama.server_engine import download_model_from_hf, handle_mixture_of_agent_request, create_options_response
@@ -29,11 +32,40 @@ import traceback
 
 
 manager_app = FastAPI()
+
+
+@manager_app.middleware("http")
+@manager_app.middleware("https")
+async def log_requests(request: Request, call_next):
+    try:
+        if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
+            request_content = await request.body()
+            if request_content:  # Only process if the body is not empty
+                request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
+                logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
+
+        response = await call_next(request)
+    except RequestValidationError as e:
+        logger.debug(f"Validation error:\n{e}")
+        response = JSONResponse(status_code=422, content={"detail": "Validation error"})
+
+    return response
+
+# Add CORS middleware
+manager_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
+
 models: Dict[str, ModelInfo] = {}
 model_load_queue = asyncio.Queue()
 loading_lock = asyncio.Lock()
 active_requests_lock = asyncio.Lock()
-
+task_status = {}
 config_manager = ConfigManager()
 
 # Define a variable for the starting port
@@ -45,7 +77,11 @@ TIMEOUT = 300  # 5 minutes
 strict_mode = False
 
 # List of endpoints to exclude from API gateway redirection
-EXCLUDED_ENDPOINTS = ["/add_model", "/remove_model", "/list_models", "/v1/models"]
+EXCLUDED_ENDPOINTS = [
+    "/add_model", "/remove_model", "/list_models", "/list_available_models",
+    "/v1/add_model", "/v1/remove_model", "/v1/list_models", "/v1/list_available_models"
+    "/v1/models", "/task_status"
+]
 EMBEDDING_SUBPATHS = []     # No overwriting at the moment
 # EMBEDDING_SUBPATHS = [
 #     {
@@ -114,14 +150,6 @@ logger = get_logger(name="manager", to_console=True, to_zmq=False)
 
 
 
-# Add CORS middleware
-manager_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
 
 
 @manager_app.post("/download_model")
@@ -331,26 +359,52 @@ async def periodic_health_check():
                     # Implement recovery logic here (e.g., restart the instance)
 
 
+async def load_models(model_request, task_id):
+    task_status[task_id] = "loading"
+    try:
+        if isinstance(model_request, List):
+            for model in model_request:
+                await model_load_queue.put(model)
+                logger.info(f"Model {model} instance queued for loading")
+        else:
+            await model_load_queue.put(model_request)
+            logger.info(f"Model {model_request} instance queued for loading")
+
+        task_status[task_id] = "completed"
+    except Exception as e:
+        task_status[task_id] = f"failed: {str(e)}"
+
 @manager_app.post("/add_model")
-async def add_model(model_request: Union[ModelParser, List[ModelParser]]):
-    logger.info(f"Received request to add model(s): {model_request}")
+@manager_app.post("/v1/add_model")
+async def add_model(model_request: Union[ModelParser, List[ModelParser]], background_tasks: BackgroundTasks, request: Request):
+    task_id = str(uuid.uuid4())
+    # Log the incoming request body
+    logger.info(f"Received raw request: {await request.body()}")
+
+
+    logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}")
 
     if any(instance.status == "loading" for model in models.values() for instance in model.instances):
         logger.warning("Another model is currently loading. Request rejected.")
         raise HTTPException(status_code=409, detail="Another model is currently loading. Please try again later.")
 
-    if isinstance(model_request, List):
-        for model in model_request:
-            await model_load_queue.put(model)
-            logger.info(f"Model {model} instance queued for loading")
-        return {"message": f"{len(model_request)} models queued for loading"}
-    else:
-        await model_load_queue.put(model_request)
-        logger.info(f"Model {model_request} instance queued for loading")
-        return {"message": f"Model {model_request} instance queued for loading"}
+    task_status[task_id] = "queued"
+    background_tasks.add_task(load_models, model_request, task_id)
+
+    return {"message": f"Model(s) queued for loading", "task_id": task_id}
+
+
+@manager_app.get("/task_status/{task_id}")
+@manager_app.get("/v1/task_status/{task_id}")
+async def get_task_status(task_id: str):
+    status = task_status.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"task_id": task_id, "status": status}
 
 
 @manager_app.post("/remove_model")
+@manager_app.post("/v1/remove_model")
 async def remove_model(model_request: ModelRequest):
     if model_request.model_id not in models:
         raise HTTPException(status_code=404, detail="Model not found")
@@ -360,15 +414,19 @@ async def remove_model(model_request: ModelRequest):
 
 
 @manager_app.get("/list_models")
+@manager_app.get("/v1/list_models")
 async def list_models():
     return {name: {"instances": [{"port": inst.port, "status": inst.status} for inst in model.instances]}
             for name, model in models.items()}
 
 
 @manager_app.get("/list_available_models")
+@manager_app.get("/v1/list_available_models")
 async def list_available_models():
     config_manager = ConfigManager()
-    return config_manager
+    downloaded_models = config_manager.list_downloaded_models_dict
+    # logger.info(downloaded_models)
+    return downloaded_models
 
 
 @manager_app.get("/v1/models")
@@ -420,14 +478,15 @@ async def forward_to_multiple_agents(request: Request, agent_list: List[Union[st
 
 
 async def load_balanced_router(request: Request, path: str):
+    body = await request.body()
+    body_json = json.loads(body)
+
     if request.url.path in EXCLUDED_ENDPOINTS:
+        logger.info(body_json)
         return await request.app.router.get_route_handler()(request)
 
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
-
-    body = await request.body()
-    body_json = json.loads(body)
 
     if body_json.get("mixture_of_agents", False):
         return await handle_mixture_of_agent_request(request, body_json, models, active_requests)
