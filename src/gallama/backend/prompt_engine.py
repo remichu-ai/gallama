@@ -259,17 +259,19 @@ class PromptEngine:
 
             return _leading_prompt
 
-        thinking_example = dedent("""
-        ### Thinking example:
-        Question: Is dog or cat faster? Answer in Capital letter
-        Apply thinking template:
-        <format_restriction>Any specific format requirement from user</format_restriction>
-        My thought process using the thinking template:
-        <format_restriction>User request for answer in capital letter</format_restriction>
-        Final answer:
-        CAT
-        End of Thinking Example.
-        """).strip()
+        thinking_example = ""
+
+        # thinking_example = dedent("""
+        # ### Thinking example:
+        # Question: Is dog or cat faster? Answer in Capital letter
+        # Apply thinking template:
+        # <format_restriction>Any specific format requirement from user</format_restriction>
+        # My thought process using the thinking template:
+        # <format_restriction>User request for answer in capital letter</format_restriction>
+        # Final answer:
+        # CAT
+        # End of Thinking Example.
+        # """).strip()
 
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
@@ -331,7 +333,7 @@ End of Example of answer with Tool/ Function_calling usage.
 
             prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
                       f"{thinking_example}\n" + \
-                      "Now, the thinking template i need to apply to answer this question is:\n" + \
+                      "The thinking template i need to apply to answer this question is as follow:\n" + \
                       thinking_template + "\n" + \
                       f"My thinking using the above XML template as follow:\n\n```xml"
             # add ending token
@@ -345,7 +347,8 @@ End of Example of answer with Tool/ Function_calling usage.
                       "Now, the thinking template i need to apply to answer this question is:\n" + \
                       thinking_template + "\n" + \
                       f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
-                      "Now answer the question. Remember that the thinking above is INVISIBLE to user.\n"
+                      "Now answer the question. Remember that the thinking above is INVISIBLE to user, " + \
+                      "and you are PROHIBITED to mentioned to user about the existence of Thinking section. You are ALLOWED to reiterate points from thinking section to user if necessary."
 
             # add ending token
             prompt += self.get_conversation_end_token()

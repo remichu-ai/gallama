@@ -33,3 +33,6 @@ class AgentWithThinking(BaseModel):
 
 class MixtureOfAgents(BaseModel):
     agent_list: List[Union[str, AgentWithThinking]]
+
+class StopModelByPort(BaseModel):
+    port: int
