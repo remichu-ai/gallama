@@ -124,7 +124,10 @@ class ChatMLQuery(BaseModel):
     # thinking_template: Optional[str] = test_thinking
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
-    return_thinking: Optional[Literal[False, True, "separate"]] = Field(default=False, description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field")
+    return_thinking: Optional[Literal[False, True, "separate"]] = Field(
+        default=False,
+        description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field. If used together with artifact, True will return as separate."
+    )
 
     # not yet supported options from here # TODO
     max_tokens: Optional[int] = None

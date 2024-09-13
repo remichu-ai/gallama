@@ -2,6 +2,8 @@ import time
 import sys
 import httpx
 import uuid
+
+from audiotools.ml import BaseModel
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +11,7 @@ from fastapi.responses import JSONResponse
 from collections import defaultdict
 from typing import Union
 from gallama.data_classes.data_class import ModelParser, ModelObjectResponse, ModelObject, ModelDownloadSpec
-from gallama.data_classes import ModelRequest, ModelInstanceInfo,  ModelInfo, AgentWithThinking
+from gallama.data_classes import ModelRequest, ModelInstanceInfo,  ModelInfo, AgentWithThinking, StopModelByPort
 from gallama.server_engine import download_model_from_hf, handle_mixture_of_agent_request, create_options_response
 from typing import List, Dict, Optional
 from gallama.config import ConfigManager
@@ -79,7 +81,9 @@ strict_mode = False
 # List of endpoints to exclude from API gateway redirection
 EXCLUDED_ENDPOINTS = [
     "/add_model", "/remove_model", "/list_models", "/list_available_models",
-    "/v1/add_model", "/v1/remove_model", "/v1/list_models", "/v1/list_available_models"
+    "/v1/add_model", "/v1/remove_model", "/v1/list_models", "/v1/list_available_models",
+    "/list_models", "/v1/list_models"
+    "/v1/remove_model_by_port","/remove_model_by_port",
     "/v1/models", "/task_status"
 ]
 EMBEDDING_SUBPATHS = []     # No overwriting at the moment
@@ -328,6 +332,55 @@ async def stop_model_instance(model: str, port: int):
         log_model_status(models, custom_logger=logger)   # Log status after removing a model instance
 
 
+@manager_app.post("/v1/stop_model_by_port")
+@manager_app.post("/stop_model_by_port")
+async def stop_model_by_port(request: StopModelByPort):
+    model_to_remove = None
+    instance_to_remove = None
+
+    # Find the model and instance by port
+    for model, model_data in models.items():
+        instance = next((inst for inst in model_data.instances if inst.port == request.port), None)
+        if instance:
+            model_to_remove = model
+            instance_to_remove = instance
+            break
+
+    if not model_to_remove or not instance_to_remove:
+        logger.warning(f"Attempted to stop non-existent instance on port {request.port}")
+        return
+
+    try:
+        process = psutil.Process(instance_to_remove.pid)
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except psutil.TimeoutExpired:
+            logger.warning(f"Instance on port {request.port} did not terminate gracefully. Forcing kill.")
+            process.kill()
+
+        if process.is_running():
+            logger.error(f"Failed to kill process for instance on port {request.port}")
+        else:
+            logger.info(f"Successfully stopped instance on port {request.port}")
+    except psutil.NoSuchProcess:
+        logger.warning(f"Process for instance on port {request.port} no longer exists")
+    except Exception as e:
+        logger.exception(f"Error stopping instance on port {request.port}: {str(e)}")
+    finally:
+        # Remove the instance from the model
+        models[model_to_remove].instances = [
+            inst for inst in models[model_to_remove].instances if inst.port != request.port
+        ]
+
+        # If no instances remain, remove the model entirely
+        if not models[model_to_remove].instances:
+            del models[model_to_remove]
+
+        logger.info(f"Cleaned up instance on port {request.port}")
+        log_model_status(models, custom_logger=logger)  # Log status after removal
+
+
 async def get_model_from_body(request: Request) -> str:
     try:
         body = await request.json()
@@ -359,16 +412,17 @@ async def periodic_health_check():
                     # Implement recovery logic here (e.g., restart the instance)
 
 
+# Proposed fix:
 async def load_models(model_request, task_id):
     task_status[task_id] = "loading"
     try:
-        if isinstance(model_request, List):
-            for model in model_request:
-                await model_load_queue.put(model)
-                logger.info(f"Model {model} instance queued for loading")
-        else:
-            await model_load_queue.put(model_request)
-            logger.info(f"Model {model_request} instance queued for loading")
+        models_to_load = model_request if isinstance(model_request, List) else [model_request]
+        for model in models_to_load:
+            await model_load_queue.put(model)
+            logger.info(f"Model {model} instance queued for loading")
+
+        # Wait for all models to be loaded
+        await model_load_queue.join()
 
         task_status[task_id] = "completed"
     except Exception as e:
@@ -413,8 +467,9 @@ async def remove_model(model_request: ModelRequest):
     return {"message": f"All instances of model {model_request.model_id} removal initiated"}
 
 
-@manager_app.get("/list_models")
-@manager_app.get("/v1/list_models")
+
+@manager_app.get("/v1/list_loaded_models")
+@manager_app.get("/list_loaded_models")
 async def list_models():
     return {name: {"instances": [{"port": inst.port, "status": inst.status} for inst in model.instances]}
             for name, model in models.items()}
