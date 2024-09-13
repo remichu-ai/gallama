@@ -2,8 +2,6 @@ import time
 import sys
 import httpx
 import uuid
-
-from audiotools.ml import BaseModel
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
