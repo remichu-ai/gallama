@@ -217,6 +217,7 @@ class ChatGenerator(Model):
                 gen_type="thinking",
                 gen_queue=queue_group,
                 temperature=query.temperature,
+                prefix_strings=f"<{thinking.root_tag}>",
                 stop_words=thinking.root_key_stop_words,
             )
             thinking_response, _ = await get_response_from_queue(thinking_queue)
