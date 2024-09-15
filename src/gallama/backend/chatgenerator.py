@@ -19,7 +19,6 @@ from lmformatenforcer import JsonSchemaParser, RegexParser
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from concurrent.futures import ThreadPoolExecutor
 
-
 try:
     from exllamav2 import (
         ExLlamaV2Cache,
@@ -57,9 +56,7 @@ except:
     build_token_enforcer_tokenizer_data_llama_cpp = None
     LogitsProcessorList = None
 
-
 assert ExLlamaV2Cache or LogitsProcessorList, "Please install ExllamaV2 or LLama CPP Python as backend"
-
 
 # experimental support for formatron
 try:
@@ -69,7 +66,6 @@ try:
 except:
     FormatterBuilder = None
     create_formatter_filter = None
-
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
 
@@ -94,6 +90,7 @@ class QueueContext:
 
 class FormatEnforcer:
     """ this class will help to create filter for generation enforcement"""
+
     def __init__(self):
         pass
 
@@ -107,8 +104,8 @@ class FormatEnforcer:
         else:
             return "lm_enforcer"
 
-
-    def regex(self, regex_pattern: str, filter_engine: Literal["formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
+    def regex(self, regex_pattern: str, filter_engine: Literal[
+        "formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
 
         # set the filter engine to use
         if not filter_engine:
@@ -125,8 +122,8 @@ class FormatEnforcer:
             f.append_line(f"{_regex}")
             return f
 
-
-    def json(self, pydantic_model, filter_engine: Literal["formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
+    def json(self, pydantic_model, filter_engine: Literal[
+        "formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
         """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
 
         # set the filter engine to use
@@ -134,7 +131,7 @@ class FormatEnforcer:
             filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
 
         # create filter if engine is lm_enforcer
-        if filter_engine == "lm_enforcer" or filter_engine == "formatron":      # TODO currently formatron and nested pydantic model is having issue
+        if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
             json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
             return JsonSchemaParser(json_schema)
 
@@ -143,8 +140,6 @@ class FormatEnforcer:
         #     f = FormatterBuilder()
         #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
         #     return f
-
-
 
 
 class ChatGenerator(Model):
@@ -166,7 +161,8 @@ class ChatGenerator(Model):
         chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
         return await chat_method(query=query, prompt_eng=prompt_eng, gen_queue=gen_queue)
 
-    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None, quiet=False):
+    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None,
+                       quiet=False):
         return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue, quiet=quiet)
 
     def validate_token_length(self, token_length):
@@ -174,7 +170,6 @@ class ChatGenerator(Model):
         # if max_seq_len == None meaning there is no token length yet
         if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
-
 
     async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
 
@@ -217,6 +212,7 @@ class ChatGenerator(Model):
                 gen_type="thinking",
                 gen_queue=queue_group,
                 temperature=query.temperature,
+                top_p=query.top_p,
                 prefix_strings=f"<{thinking.root_tag}>",
                 stop_words=thinking.root_key_stop_words,
             )
@@ -243,6 +239,7 @@ class ChatGenerator(Model):
                 prompt,
                 gen_queue=queue_group,
                 temperature=query.temperature,
+                top_p=query.top_p,
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 # stop_words=query.stop_words,
@@ -285,6 +282,7 @@ class ChatGenerator(Model):
             gen_queue=gen_queue,
             **{
                 'temperature': query.temperature,
+                'top_p': query.top_p,
                 'formatter': formatter_regex,
                 'stop_words': stop_words_to_use,
                 'max_tokens': query.max_tokens,
@@ -324,6 +322,7 @@ class ChatGenerator(Model):
             prompt,
             gen_queue=tool_thinking_queue,
             temperature=query.temperature,
+            top_p=query.top_p,
             stop_words=TOOL_THINKING.root_key_stop_words,
             prefix_strings=f"<{TOOL_THINKING.root_tag}>",
             # formatter=formatter_regex  # no longer enforce format
@@ -331,7 +330,6 @@ class ChatGenerator(Model):
 
         # evaluate tool usage necessity
         tool_thinking_response, _ = await get_response_from_queue(tool_thinking_queue)
-
 
         # see if llm able to generate the xml format correctly
         try:
@@ -381,6 +379,7 @@ class ChatGenerator(Model):
                 prompt,
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
+                top_p=query.top_p,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 formatter=formatter_regex  # no longer enforce format
@@ -456,6 +455,7 @@ arg_dict = """
                 gen_queue=gen_queue,
                 gen_type=GenStart(gen_type="tool"),
                 temperature=query.temperature,
+                top_p=query.top_p,
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 prefix_strings=['{\n "functions_calling": ['],
                 formatter=formatter_json,
@@ -526,6 +526,7 @@ arg_dict = """
     def _get_exllama_gen_settings(
             self,
             temperature: float = 0.01,
+            top_p: float = 0.8,
             **kwargs,
     ):
         # settings
@@ -533,7 +534,7 @@ arg_dict = """
         settings.temperature = temperature
         settings.min_temp = 0.15
         settings.top_k = 50
-        settings.top_p = 0.8
+        settings.top_p = top_p
         settings.min_p = 0.05
         settings.token_repetition_penalty = 1.1
         settings.token_frequency_penalty = 0.05
@@ -558,19 +559,20 @@ arg_dict = """
         return None
 
     async def generate(
-        self,
-        prompt: str,
-        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-        # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = "text",
-        temperature: float = 0.01,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
-        stop_words: Union[List[str], str] = None,
-        prefix_strings: Optional[Union[str, List[str]]] = None,
-        banned_strings: list[str] | None = None,
-        max_tokens: int = None,
-        quiet=False,
-        **kwargs,
+            self,
+            prompt: str,
+            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+            # the generated result will be store to this queue
+            gen_type: Union[str, GenStart] = "text",
+            temperature: float = 0.01,
+            top_p: float = 0.8,
+            formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+            stop_words: Union[List[str], str] = None,
+            prefix_strings: Optional[Union[str, List[str]]] = None,
+            banned_strings: list[str] | None = None,
+            max_tokens: int = None,
+            quiet=False,
+            **kwargs,
     ) -> (str, GenerationStats):
 
         # ensure that generator is initialized
@@ -598,7 +600,7 @@ arg_dict = """
         # for async generator, create it as part of the generate job
 
         # get generation setting
-        settings = self._get_exllama_gen_settings(temperature)
+        settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
         # convert prompt to token id
         input_ids = self.tokenizer.encode(prompt)
@@ -607,9 +609,9 @@ arg_dict = """
         # format enforcer
         filters = []
         if formatter:
-            if isinstance(formatter, TokenEnforcerTokenizerData):      # lm format enforcer
+            if isinstance(formatter, TokenEnforcerTokenizerData):  # lm format enforcer
                 filters = [ExLlamaV2TokenEnforcerFilter(formatter, self.pipeline.lm_enforcer_tokenizer_data)]
-            elif FormatterBuilder and isinstance(formatter, FormatterBuilder):   # formatron
+            elif FormatterBuilder and isinstance(formatter, FormatterBuilder):  # formatron
                 filters = [create_formatter_filter(self.model, self.tokenizer, formatter)]
             else:
                 raise "Format enforcer is not correctly initialized"
@@ -637,8 +639,8 @@ arg_dict = """
         max_tokens_to_use = min(
             self.max_seq_len - len(input_ids[0]),
             max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]),
-            4096
-        )
+                                                     4096
+                                                     )
 
         job = ExLlamaV2DynamicJobAsync(
             generator=self.pipeline.generator,
@@ -665,7 +667,7 @@ arg_dict = """
             gen_type_str = gen_type
             gen_type = GenStart(gen_type=gen_type)
         else:
-            gen_type_str = gen_type.text_type        # get out the generation type in str format
+            gen_type_str = gen_type.text_type  # get out the generation type in str format
 
         for g_queue in gen_queue_list:
             g_queue.get_queue().put_nowait(gen_type)
@@ -768,13 +770,14 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         for item in sync_generator:
             yield item
 
-    def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list):
+    def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list,
+                                 top_p=0.8):
         generator = self.pipeline.generator(
             prompt=prompt,
             logits_processor=logits_processor,
             max_tokens=max_tokens,
             temperature=temperature,
-            top_p=0.95,
+            top_p=top_p,
             min_p=0.05,
             stop=stop,
             repeat_penalty=1.1,
@@ -791,21 +794,21 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         return generate_text
 
     async def generate(
-        self,
-        prompt: str,
-        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-        # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-        temperature: float = 0.01,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
-        stop_words: Union[List[str], str] = None,
-        prefix_strings: Optional[Union[str, List[str]]] = None,
-        banned_strings: list[str] | None = None,
-        max_tokens: int = None,
-        quiet=False,
-        **kwargs,
+            self,
+            prompt: str,
+            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+            # the generated result will be store to this queue
+            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+            temperature: float = 0.01,
+            top_p: float = 0.8,
+            formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+            stop_words: Union[List[str], str] = None,
+            prefix_strings: Optional[Union[str, List[str]]] = None,
+            banned_strings: list[str] | None = None,
+            max_tokens: int = None,
+            quiet=False,
+            **kwargs,
     ):
-
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -860,8 +863,8 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         max_tokens_to_use = min(
             self.max_seq_len - len(input_ids),
             max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids),
-            4096
-        )
+                                                     4096
+                                                     )
 
         # kickstart the generation and let down stream know gen type
         if isinstance(gen_type, str):
@@ -876,7 +879,7 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             generate_text = await loop.run_in_executor(
                 pool,
                 self._run_generator_and_queue,
-                prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list
+                prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list, top_p
             )
 
         duration = time.time() - start_time
@@ -892,4 +895,3 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
                 g_queue.get_queue().put_nowait(GenEnd())
 
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)
-
