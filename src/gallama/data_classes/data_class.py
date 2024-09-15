@@ -85,19 +85,19 @@ class ToolForce(BaseModel):
         extra = "forbid"  # This will prevent extra keys in the dictionary
 
 
-test_thinking = """
-<plan>
-  <task>Brief task summary</task>
-  <structure>
-    <c1>[text]: Acknowledge question and introduce answer</c1>
-    <c2>[artifact]: Main content (e.g., code)</c2>
-    <c3>[text]: Explain or elaborate on c2</c3>
-    <c4>[artifact]: Additional content if needed</c4>
-    <c5>[text]: Explain or elaborate on c4</c5>
-    <!-- Add more pairs if needed -->
-  </structure>
-</plan>
-"""
+# test_thinking = """
+# <plan>
+#   <task>Brief task summary</task>
+#   <structure>
+#     <c1>[text]: Acknowledge question and introduce answer</c1>
+#     <c2>[artifact]: Main content (e.g., code)</c2>
+#     <c3>[text]: Explain or elaborate on c2</c3>
+#     <c4>[artifact]: Additional content if needed</c4>
+#     <c5>[text]: Explain or elaborate on c4</c5>
+#     <!-- Add more pairs if needed -->
+#   </structure>
+# </plan>
+# """
 
 class ChatMLQuery(BaseModel):
     class ResponseFormat(BaseModel):
@@ -109,6 +109,7 @@ class ChatMLQuery(BaseModel):
     model: Optional[str] = "Mixtral-8x7B"
     messages: List[BaseMessage]
     temperature: Optional[float] = 0.01
+    top_p: float = 0.85
     stream: Optional[bool] = False
     tools: Optional[List[ToolSpec]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
@@ -131,7 +132,6 @@ class ChatMLQuery(BaseModel):
 
     # not yet supported options from here # TODO
     max_tokens: Optional[int] = None
-    top_p: float = 1
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[int, float]] = {}
     top_logprob: int = None
