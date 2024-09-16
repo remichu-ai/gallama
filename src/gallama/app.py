@@ -154,6 +154,7 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             query=query,
             prompt_eng=prompt_eng,
             gen_queue=gen_queue,
+            request=request,
         ))
 
         # send the response to client
@@ -162,18 +163,18 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             if query.artifact == "No":     # not using artefact
                 return EventSourceResponse(
                     chat_completion_response_stream(
-                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use, request=request,
                     ))
             else:
                 return EventSourceResponse(
                     chat_completion_response_artifact_stream(
-                        query=query, gen_queue=gen_queue, model_name=model_name_to_use
+                        query=query, gen_queue=gen_queue, model_name=model_name_to_use, request=request,
                     ))
         else:
             if query.artifact == "No":     # not using artefact
-                return await chat_completion_response(query=query, gen_queue=gen_queue, model_name=model_name_to_use)
+                return await chat_completion_response(query=query, gen_queue=gen_queue, model_name=model_name_to_use, request=request,)
             else:
-                return await chat_completion_response_artifact(query=query, gen_queue=gen_queue, model_name=model_name_to_use)
+                return await chat_completion_response_artifact(query=query, gen_queue=gen_queue, model_name=model_name_to_use, request=request,)
     except HTTPException as e:
         logger.error(e)
         return e
@@ -197,13 +198,14 @@ async def generate(request: Request, query: GenerateQuery):
         prompt=query.prompt,
         max_tokens=query.max_tokens,
         gen_queue=gen_queue,
+        request=request,
     ))
 
     if query.stream:
         # EventSourceResponse take iterator so need to handle at here
-        return EventSourceResponse(completion_response_stream(request, gen_queue, model_name=model_name_to_use))
+        return EventSourceResponse(completion_response_stream(request, gen_queue, model_name=model_name_to_use, request=request,))
     else:
-        return await completion_response(gen_queue, model_name=model_name_to_use)
+        return await completion_response(gen_queue, model_name=model_name_to_use, request=request,)
 
 
 @router.post("/v1/embeddings")
@@ -350,7 +352,8 @@ async def startup_event():
                 stream=False,
                 max_tokens=200,
                 gen_queue=gen_queue,
-                quiet=True
+                quiet=True,
+                request=None,
             )
 
     gen_queue = None

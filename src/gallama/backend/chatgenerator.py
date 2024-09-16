@@ -6,7 +6,7 @@ import uuid
 import weakref
 from typing import List, Union, Literal, Optional
 from pydantic import BaseModel, Field
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from .model import Model
 from gallama.data_classes.data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
 from .tools import Tools, create_function_models_v2
@@ -98,11 +98,14 @@ class FormatEnforcer:
     def get_default_engine() -> Literal["formatron", "lm_enforcer"]:
         """ this function will select the format enforcer engine to use if not selected by user"""
 
-        # use formatron if it is available
-        if FormatterBuilder:
-            return "formatron"
-        else:
-            return "lm_enforcer"
+        # # use formatron if it is available
+        # if FormatterBuilder:
+        #     return "formatron"
+        # else:
+        #     return "lm_enforcer"
+
+        return "lm_enforcer"
+
 
     def regex(self, regex_pattern: str, filter_engine: Literal[
         "formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
@@ -157,13 +160,20 @@ class ChatGenerator(Model):
         # format enforcer
         self.formatter = FormatEnforcer()
 
-    async def chat(self, query: ChatMLQuery, prompt_eng, gen_queue: GenQueue):
+    async def chat(self, query: ChatMLQuery, prompt_eng, gen_queue: GenQueue, request: Request):
         chat_method = self.chat_with_tool if query.tools or query.tool_choice != "none" else self.chat_no_tool
-        return await chat_method(query=query, prompt_eng=prompt_eng, gen_queue=gen_queue)
+        return await chat_method(query=query, prompt_eng=prompt_eng, gen_queue=gen_queue, request=request)
 
-    async def chat_raw(self, prompt: str, gen_queue: asyncio.Queue, stream: bool = False, max_tokens: int = None,
-                       quiet=False):
-        return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue, quiet=quiet)
+    async def chat_raw(
+        self,
+        prompt: str,
+        gen_queue: asyncio.Queue,
+        request: Request,
+        stream: bool = False,
+        max_tokens: int = None,
+        quiet=False,
+    ):
+        return await self.generate(prompt, max_tokens=max_tokens, gen_queue=gen_queue, quiet=quiet, request=request)
 
     def validate_token_length(self, token_length):
         # TODO to find max_seq_len for llama cpp from Model
@@ -171,7 +181,7 @@ class ChatGenerator(Model):
         if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
-    async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
+    async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue, request: Request):
 
         prompt = prompt_eng.get_prompt(
             query,
@@ -215,6 +225,7 @@ class ChatGenerator(Model):
                 top_p=query.top_p,
                 prefix_strings=f"<{thinking.root_tag}>",
                 stop_words=thinking.root_key_stop_words,
+                request=request,
             )
             thinking_response, _ = await get_response_from_queue(thinking_queue)
 
@@ -242,6 +253,7 @@ class ChatGenerator(Model):
                 top_p=query.top_p,
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
+                request=request,
                 # stop_words=query.stop_words,
             )
 
@@ -287,11 +299,12 @@ class ChatGenerator(Model):
                 'stop_words': stop_words_to_use,
                 'max_tokens': query.max_tokens,
                 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
-                'banned_strings': banned_strings
+                'banned_strings': banned_strings,
+                'request': request,
             }
         )
 
-    async def chat_with_tool(self, query: ChatMLQuery, prompt_eng, gen_queue):
+    async def chat_with_tool(self, query: ChatMLQuery, prompt_eng, gen_queue, request: Request):
         # use_tool marker
         use_tool_bool = False  # this will be set to True if tool is used
         fall_back_bool = False  # this will decide if fallback generation with regex enforcement is required
@@ -325,6 +338,7 @@ class ChatGenerator(Model):
             top_p=query.top_p,
             stop_words=TOOL_THINKING.root_key_stop_words,
             prefix_strings=f"<{TOOL_THINKING.root_tag}>",
+            request=request,
             # formatter=formatter_regex  # no longer enforce format
         )
 
@@ -380,6 +394,7 @@ class ChatGenerator(Model):
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
                 top_p=query.top_p,
+                request=request,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 formatter=formatter_regex  # no longer enforce format
@@ -460,6 +475,7 @@ arg_dict = """
                 prefix_strings=['{\n "functions_calling": ['],
                 formatter=formatter_json,
                 max_tokens=query.max_tokens,
+                request=request,
             )
 
         # NOT USE TOOL
@@ -475,6 +491,7 @@ arg_dict = """
                     temperature=query.temperature,
                     prefix_strings=query.prefix_strings,
                     max_tokens=query.max_tokens,
+                    request=request,
                 )
             else:
                 # tool choice is forced -> return empty tool calling
@@ -559,20 +576,21 @@ arg_dict = """
         return None
 
     async def generate(
-            self,
-            prompt: str,
-            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-            # the generated result will be store to this queue
-            gen_type: Union[str, GenStart] = "text",
-            temperature: float = 0.01,
-            top_p: float = 0.8,
-            formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
-            stop_words: Union[List[str], str] = None,
-            prefix_strings: Optional[Union[str, List[str]]] = None,
-            banned_strings: list[str] | None = None,
-            max_tokens: int = None,
-            quiet=False,
-            **kwargs,
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        request: Optional[Request] = None,
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = "text",
+        temperature: float = 0.01,
+        top_p: float = 0.8,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
+        max_tokens: int = None,
+        quiet=False,
+        **kwargs,
     ) -> (str, GenerationStats):
 
         # ensure that generator is initialized
@@ -638,9 +656,7 @@ arg_dict = """
         # logger.info(f"job_id: {self.pipeline.generator.jobs}")
         max_tokens_to_use = min(
             self.max_seq_len - len(input_ids[0]),
-            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]),
-                                                     4096
-                                                     )
+            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
 
         job = ExLlamaV2DynamicJobAsync(
             generator=self.pipeline.generator,
@@ -676,6 +692,15 @@ arg_dict = """
         async for result in job:
             if eos:
                 await job.cancel()
+                break
+
+            if request:
+                is_disconnected = await request.is_disconnected()
+                if is_disconnected:
+                    logger.info("User disconnected")
+                    await job.cancel()
+                    break
+
             # print(result.get("text", ""))
             # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
             # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
@@ -794,20 +819,21 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         return generate_text
 
     async def generate(
-            self,
-            prompt: str,
-            gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-            # the generated result will be store to this queue
-            gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
-            temperature: float = 0.01,
-            top_p: float = 0.8,
-            formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
-            stop_words: Union[List[str], str] = None,
-            prefix_strings: Optional[Union[str, List[str]]] = None,
-            banned_strings: list[str] | None = None,
-            max_tokens: int = None,
-            quiet=False,
-            **kwargs,
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        request: Request,
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        temperature: float = 0.01,
+        top_p: float = 0.8,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
+        max_tokens: int = None,
+        quiet=False,
+        **kwargs,
     ):
 
         if not quiet:
