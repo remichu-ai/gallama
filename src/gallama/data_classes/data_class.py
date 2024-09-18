@@ -114,6 +114,7 @@ class ChatMLQuery(BaseModel):
     tools: Optional[List[ToolSpec]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
     tool_call_id: Optional[str] = None
+    max_tokens: Optional[int] = None
 
     # not part of openai api
     leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the generated response")
@@ -131,7 +132,6 @@ class ChatMLQuery(BaseModel):
     )
 
     # not yet supported options from here # TODO
-    max_tokens: Optional[int] = None
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[int, float]] = {}
     top_logprob: int = None

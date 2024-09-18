@@ -181,6 +181,15 @@ class ChatGenerator(Model):
         if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
+    # helper function
+    async def check_disconnection(self, request: Request, job):
+        while True:
+            if await request.is_disconnected():
+                logger.info("User disconnected")
+                await job.cancel()
+                break
+            await asyncio.sleep(1)  # Check every second
+
     async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue, request: Request):
 
         prompt = prompt_eng.get_prompt(
@@ -688,78 +697,93 @@ arg_dict = """
         for g_queue in gen_queue_list:
             g_queue.get_queue().put_nowait(gen_type)
 
-        # start the generation
-        async for result in job:
-            if eos:
-                await job.cancel()
-                break
+        # Create a task to check for disconnection
+        disconnect_check_task = None
+        if request:
+            disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job))
 
-            if request:
-                is_disconnected = await request.is_disconnected()
-                if is_disconnected:
-                    logger.info("User disconnected")
+        try :
+            # start the generation
+            async for result in job:
+                if eos:
                     await job.cancel()
                     break
 
-            # print(result.get("text", ""))
-            # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
-            # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
-            # outputs pertaining to the single job started above, and it will all go straight to the console.
-            # assert result["job"] == job
+                # if request:
+                #     is_disconnected = await request.is_disconnected()
+                #     if is_disconnected:
+                #         logger.info("User disconnected")
+                #         await job.cancel()
+                #         break
 
-            # Prefilling/ingesting the prompt may happen over multiple iterations, during which the result will have
-            # a "stage" value of "prefill". We can ignore those results and only use the "streaming" results that will
-            # contain the actual output.
-            # if result["stage"] == "streaming":
 
-            # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
-            # grab the output text stream.
-            # generate_text += result.get("text", "")
-            # logger.info(f'{datetime.now()} {result.get("text", "")}')
 
-            chunk = GenText(content=result.get("text", ""), text_type=gen_type_str)
-            for g_queue in gen_queue_list:
-                g_queue.get_queue().put_nowait(chunk)
+                # print(result.get("text", ""))
+                # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
+                # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
+                # outputs pertaining to the single job started above, and it will all go straight to the console.
+                # assert result["job"] == job
 
-            # logger.info(result.get("text", ""))
-            # logger.info(self.tokenizer.encode(result.get("text", "")))
-            # The "streaming" stage also emits the EOS signal when it occurs. If present, it will accompany a
-            # summary of the job. Print the last packet here to illustrate.
-            if result["eos"]:
-                eos = True
+                # Prefilling/ingesting the prompt may happen over multiple iterations, during which the result will have
+                # a "stage" value of "prefill". We can ignore those results and only use the "streaming" results that will
+                # contain the actual output.
+                # if result["stage"] == "streaming":
 
-                # if the stop word occurred is from the stop_words and not model result token -> include in result
-                if stop_words and result.get("held") and result.get("held").get("text"):
-                    ending_string = result["held"]["text"].rstrip()
+                # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
+                # grab the output text stream.
+                # generate_text += result.get("text", "")
+                # logger.info(f'{datetime.now()} {result.get("text", "")}')
 
-                    if ending_string:
-                        # find the stop word that was used to end string
-                        stop_word_used = self.get_stop_word(ending_string, stop_words)
-
-                        if stop_word_used:
-                            # end_string is custom token -> return
-                            chunk = GenText(content=stop_word_used, text_type=gen_type_str)
-                            for g_queue in gen_queue_list:
-                                g_queue.get_queue().put_nowait(chunk)
-                        else:
-                            # ending token is model eos token
-                            pass
-
-                gen_stats = GenerationStats(
-                    input_tokens_count=result["prompt_tokens"],
-                    output_tokens_count=result["new_tokens"],
-                    time_to_first_token=result["time_prefill"],
-                    time_generate=result["time_generate"],
-                )
-
+                chunk = GenText(content=result.get("text", ""), text_type=gen_type_str)
                 for g_queue in gen_queue_list:
-                    if g_queue.include_GenStats:
-                        g_queue.get_queue().put_nowait(gen_stats)
+                    g_queue.get_queue().put_nowait(chunk)
 
-                # this to signal the end of generation
-                for g_queue in gen_queue_list:
-                    if g_queue.include_GenEnd:
-                        g_queue.get_queue().put_nowait(GenEnd())
+                # logger.info(result.get("text", ""))
+                # logger.info(self.tokenizer.encode(result.get("text", "")))
+                # The "streaming" stage also emits the EOS signal when it occurs. If present, it will accompany a
+                # summary of the job. Print the last packet here to illustrate.
+                if result["eos"]:
+                    eos = True
+
+                    # if the stop word occurred is from the stop_words and not model result token -> include in result
+                    if stop_words and result.get("held") and result.get("held").get("text"):
+                        ending_string = result["held"]["text"].rstrip()
+
+                        if ending_string:
+                            # find the stop word that was used to end string
+                            stop_word_used = self.get_stop_word(ending_string, stop_words)
+
+                            if stop_word_used:
+                                # end_string is custom token -> return
+                                chunk = GenText(content=stop_word_used, text_type=gen_type_str)
+                                for g_queue in gen_queue_list:
+                                    g_queue.get_queue().put_nowait(chunk)
+                            else:
+                                # ending token is model eos token
+                                pass
+
+                    gen_stats = GenerationStats(
+                        input_tokens_count=result["prompt_tokens"],
+                        output_tokens_count=result["new_tokens"],
+                        time_to_first_token=result["time_prefill"],
+                        time_generate=result["time_generate"],
+                    )
+
+                    for g_queue in gen_queue_list:
+                        if g_queue.include_GenStats:
+                            g_queue.get_queue().put_nowait(gen_stats)
+
+                    # this to signal the end of generation
+                    for g_queue in gen_queue_list:
+                        if g_queue.include_GenEnd:
+                            g_queue.get_queue().put_nowait(GenEnd())
+        finally:
+            if disconnect_check_task:
+                disconnect_check_task.cancel()
+                try:
+                    await disconnect_check_task
+                except asyncio.CancelledError:
+                    pass
 
 
 class ChatGeneratorLlamaCpp(ChatGenerator):
