@@ -30,7 +30,7 @@ import asyncio
 
 async def get_response_from_queue(
     gen_queue: GenQueue,
-    request: Request,
+    request: Request = None,
 ):
     """ function to get the text generated in queue to be used for other part of the library"""
     response = ""
@@ -41,9 +41,10 @@ async def get_response_from_queue(
     genStats = None
     while not eos:
         try:
-            if await request.is_disconnected():
-                logger.info("Request disconnected, stopping queue processing")
-                break
+            if request is not None:
+                if await request.is_disconnected():
+                    logger.info("Request disconnected, stopping queue processing")
+                    break
 
             result = gen_queue.get_nowait()
 
