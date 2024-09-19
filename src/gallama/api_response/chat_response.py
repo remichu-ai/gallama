@@ -41,10 +41,10 @@ async def get_response_from_queue(
     genStats = None
     while not eos:
         try:
-            if request is not None:
-                if await request.is_disconnected():
-                    logger.info("Request disconnected, stopping queue processing")
-                    break
+            # if request is not None:
+            #     if await request.is_disconnected():
+            #         logger.info("Request disconnected, stopping queue processing")
+            #         break
 
             result = gen_queue.get_nowait()
 
@@ -91,9 +91,9 @@ async def chat_completion_response_stream(
         #     logger.info(f"Queue size: {queue_size}")
         #     last_log_time = current_time
 
-        if await request.is_disconnected():
-            logger.info("Request disconnected, stopping queue processing")
-            break
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
 
         accumulated_text = ""
         accumulated_thinking = ""
@@ -255,9 +255,9 @@ async def chat_completion_response(
     eos = False
     while not eos:
         try:
-            if await request.is_disconnected():
-                logger.info("Request disconnected, stopping queue processing")
-                break
+            # if await request.is_disconnected():
+            #     logger.info("Request disconnected, stopping queue processing")
+            #     break
 
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":
@@ -422,9 +422,9 @@ async def completion_response_stream(
     eos = False
     gen_stats = None
     while not eos:
-        if await request.is_disconnected():
-            logger.info("Request disconnected, stopping queue processing")
-            break
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
 
         accumulated_text = ""
         try:
@@ -506,9 +506,9 @@ async def chat_completion_response_artifact_stream(
         accumulated_text = ""
         accumulated_thinking = ""
 
-        if await request.is_disconnected():
-            logger.info("Request disconnected, stopping queue processing")
-            break
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
 
         try:
             # Collect all available items from the queue
@@ -658,9 +658,9 @@ async def chat_completion_response_artifact(
 
     while not eos:
         try:
-            if await request.is_disconnected():
-                logger.info("Request disconnected, stopping queue processing")
-                break
+            # if await request.is_disconnected():
+            #     logger.info("Request disconnected, stopping queue processing")
+            #     break
 
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":

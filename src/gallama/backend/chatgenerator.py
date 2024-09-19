@@ -31,9 +31,10 @@ try:
     )
     from exllamav2.generator.filters import ExLlamaV2PrefixFilter
     from lmformatenforcer.integrations.exllamav2 import (
-        ExLlamaV2TokenEnforcerFilter,
+        ExLlamaV2TokenEnforcerFilter,         # TODO to uncomment this after LMFE take in the changes from turboderp
         build_token_enforcer_tokenizer_data
     )
+    # from .inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter   # TODO to remove this after LMFE take in the changes from turboderp
 except:
     ExLlamaV2Cache = None
     ExLlamaV2Cache_Q4 = None
@@ -102,7 +103,8 @@ class FormatEnforcer:
         # if FormatterBuilder:
         #     return "formatron"
         # else:
-        #     return "lm_enforcer"
+        #     return "formatron"
+        #     # return "lm_enforcer"
 
         return "lm_enforcer"
 
@@ -134,15 +136,16 @@ class FormatEnforcer:
             filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
 
         # create filter if engine is lm_enforcer
-        if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
+        # if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
+        if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
             json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
             return JsonSchemaParser(json_schema)
 
-        # # create filter if engine is formatron
-        # if filter_engine == "formatron":
-        #     f = FormatterBuilder()
-        #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
-        #     return f
+        # create filter if engine is formatron
+        if filter_engine == "formatron":
+            f = FormatterBuilder()
+            f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
+            return f
 
 
 class ChatGenerator(Model):
@@ -182,13 +185,39 @@ class ChatGenerator(Model):
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
     # helper function
-    async def check_disconnection(self, request: Request, job):
-        while True:
-            if await request.is_disconnected():
-                logger.info("User disconnected")
-                await job.cancel()
-                break
-            await asyncio.sleep(1)  # Check every second
+    async def check_disconnection(self, request: Request, job,
+                                  gen_queue_list: Union[GenQueue, QueueContext, List[QueueContext]]):
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("User disconnected")
+                    await job.cancel()
+
+                    # add GenEnd to signal the end of generation
+                    chunk = GenEnd()
+                    for g_queue in gen_queue_list:
+                        try:
+                            await g_queue.get_queue().put(chunk)
+                        except Exception as e:
+                            logger.error(f"Error putting GenEnd into queue: {str(e)}")
+
+                    # break the while loop
+                    break
+
+                # Use asyncio.wait_for to implement a timeout
+                try:
+                    await asyncio.wait_for(asyncio.sleep(1), timeout=1.1)
+                except asyncio.TimeoutError:
+                    # This allows us to check for cancellation more frequently
+                    pass
+
+        except asyncio.CancelledError:
+            logger.info("Disconnection check was cancelled")
+        except Exception as e:
+            logger.error(f"An error occurred in check_disconnection: {str(e)}")
+        finally:
+            logger.info("Exiting check_disconnection")
+
 
     async def chat_no_tool(self, query: ChatMLQuery, prompt_eng, gen_queue, request: Request):
 
@@ -636,7 +665,7 @@ arg_dict = """
         # format enforcer
         filters = []
         if formatter:
-            if isinstance(formatter, TokenEnforcerTokenizerData):  # lm format enforcer
+            if isinstance(formatter, TokenEnforcerTokenizerData) or isinstance(formatter, JsonSchemaParser):  # lm format enforcer
                 filters = [ExLlamaV2TokenEnforcerFilter(formatter, self.pipeline.lm_enforcer_tokenizer_data)]
             elif FormatterBuilder and isinstance(formatter, FormatterBuilder):  # formatron
                 filters = [create_formatter_filter(self.model, self.tokenizer, formatter)]
@@ -700,7 +729,7 @@ arg_dict = """
         # Create a task to check for disconnection
         disconnect_check_task = None
         if request:
-            disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job))
+            disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list))
 
         try :
             # start the generation
@@ -708,15 +737,6 @@ arg_dict = """
                 if eos:
                     await job.cancel()
                     break
-
-                # if request:
-                #     is_disconnected = await request.is_disconnected()
-                #     if is_disconnected:
-                #         logger.info("User disconnected")
-                #         await job.cancel()
-                #         break
-
-
 
                 # print(result.get("text", ""))
                 # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
@@ -733,7 +753,7 @@ arg_dict = """
                 # grab the output text stream.
                 # generate_text += result.get("text", "")
                 # logger.info(f'{datetime.now()} {result.get("text", "")}')
-
+                logger.info(result.get("text", ""))
                 chunk = GenText(content=result.get("text", ""), text_type=gen_type_str)
                 for g_queue in gen_queue_list:
                     g_queue.get_queue().put_nowait(chunk)
@@ -784,6 +804,9 @@ arg_dict = """
                     await disconnect_check_task
                 except asyncio.CancelledError:
                     pass
+
+            if job and not eos:
+                await job.cancel()
 
 
 class ChatGeneratorLlamaCpp(ChatGenerator):
