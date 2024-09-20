@@ -29,8 +29,8 @@ import asyncio
 
 
 async def get_response_from_queue(
-    # request: Request,     # TODO add request cancellation
     gen_queue: GenQueue,
+    request: Request = None,
 ):
     """ function to get the text generated in queue to be used for other part of the library"""
     response = ""
@@ -41,6 +41,11 @@ async def get_response_from_queue(
     genStats = None
     while not eos:
         try:
+            # if request is not None:
+            #     if await request.is_disconnected():
+            #         logger.info("Request disconnected, stopping queue processing")
+            #         break
+
             result = gen_queue.get_nowait()
 
             if isinstance(result, GenText):
@@ -64,6 +69,7 @@ async def chat_completion_response_stream(
     query: ChatMLQuery,
     gen_queue: GenQueue,
     model_name: str,
+    request: Request,
 ) -> AsyncIterator[dict]:
     unique_id = get_response_uid()
     created = int(time.time())
@@ -85,6 +91,10 @@ async def chat_completion_response_stream(
         #     logger.info(f"Queue size: {queue_size}")
         #     last_log_time = current_time
 
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
+
         accumulated_text = ""
         accumulated_thinking = ""
 
@@ -92,9 +102,11 @@ async def chat_completion_response_stream(
             # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
-                if isinstance(item, GenText) and item.text_type=="text":
+                if isinstance(item, GenText) and (item.text_type=="text"):
                     accumulated_text += item.content
-                if isinstance(item, GenText) and item.text_type=="thinking":
+                elif isinstance(item, GenText) and (item.text_type=="tool"):
+                    accumulated_text += item.content
+                elif isinstance(item, GenText) and item.text_type=="thinking":
                     accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
@@ -231,6 +243,7 @@ async def chat_completion_response(
     # response: str,
     # gen_stats: GenerationStats,
     model_name: str,
+    request: Request,
     # mode: Literal["text", "tool"] = "text"
 ) -> ChatCompletionResponse:
 
@@ -244,8 +257,15 @@ async def chat_completion_response(
     eos = False
     while not eos:
         try:
+            # if await request.is_disconnected():
+            #     logger.info("Request disconnected, stopping queue processing")
+            #     break
+
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":
+                response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="tool":
                 response += result.content
                 response_all += result.content
             elif isinstance(result, GenText) and result.text_type=="thinking":
@@ -366,38 +386,51 @@ async def chat_completion_response(
     return response_obj
 
 
-async def completion_response(gen_queue: GenQueue, model_name: str) -> CompletionResponse:
-    response, gen_stats = await get_response_from_queue(gen_queue)
+async def completion_response(
+    gen_queue: GenQueue,
+    model_name: str,
+    request: Request,
+) -> CompletionResponse:
+    response, gen_stats = await get_response_from_queue(gen_queue, request=request)
 
-    completion_response = CompletionResponse(
-        model=model_name,
-        choices=[
-            CompletionChoice(
-                text=response.strip(),
-                index=0,
-                logprobs=None,
-                finish_reason="stop"  # You may want to determine this based on actual finish reason
+    if response:
+        completion_response = CompletionResponse(
+            model=model_name,
+            choices=[
+                CompletionChoice(
+                    text=response.strip(),
+                    index=0,
+                    logprobs=None,
+                    finish_reason="stop"  # You may want to determine this based on actual finish reason
+                )
+            ],
+            usage=UsageResponse(
+                prompt_tokens=gen_stats.input_tokens_count if gen_stats else 0,
+                completion_tokens=gen_stats.output_tokens_count if gen_stats else 0,
+                total_tokens=gen_stats.total_tokens_count if gen_stats else 0
             )
-        ],
-        usage=UsageResponse(
-            prompt_tokens=gen_stats.input_tokens_count if gen_stats else 0,
-            completion_tokens=gen_stats.output_tokens_count if gen_stats else 0,
-            total_tokens=gen_stats.total_tokens_count if gen_stats else 0
         )
-    )
 
-    # Use model_dump() and json.dumps() instead of json() method
-    logger.info(
-        f"----------------------LLM API Response---------------\n{json.dumps(completion_response.model_dump(), indent=2)}")
-    return completion_response
+        # Use model_dump() and json.dumps() instead of json() method
+        logger.info(
+            f"----------------------LLM API Response---------------\n{json.dumps(completion_response.model_dump(), indent=2)}")
+        return completion_response
 
 
-async def completion_response_stream(request: Request, gen_queue: GenQueue, model_name: str) -> AsyncIterator:
+async def completion_response_stream(
+    request: Request,
+    gen_queue: GenQueue,
+    model_name: str
+) -> AsyncIterator:
     unique_id = get_response_uid()
     full_response = ""
     eos = False
     gen_stats = None
     while not eos:
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
+
         accumulated_text = ""
         try:
             while True:
@@ -456,6 +489,7 @@ async def chat_completion_response_artifact_stream(
     query: ChatMLQuery,
     gen_queue: GenQueue,
     model_name: str,
+    request: Request,
 ) -> AsyncIterator[dict]:
     unique_id = get_response_uid()
     created = int(time.time())
@@ -477,13 +511,19 @@ async def chat_completion_response_artifact_stream(
         accumulated_text = ""
         accumulated_thinking = ""
 
+        # if await request.is_disconnected():
+        #     logger.info("Request disconnected, stopping queue processing")
+        #     break
+
         try:
             # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
                 if isinstance(item, GenText) and item.text_type=="text":
                     accumulated_text += item.content
-                if isinstance(item, GenText) and item.text_type=="thinking":
+                if isinstance(item, GenText) and item.text_type=="tool":
+                    accumulated_text += item.content
+                elif isinstance(item, GenText) and item.text_type=="thinking":
                     accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
@@ -612,6 +652,7 @@ async def chat_completion_response_artifact(
     query: ChatMLQuery,
     gen_queue: GenQueue,
     model_name: str,
+    request: Request,
 ) -> ChatCompletionResponse:
     response = ""
     response_thinking = ""
@@ -624,8 +665,15 @@ async def chat_completion_response_artifact(
 
     while not eos:
         try:
+            # if await request.is_disconnected():
+            #     logger.info("Request disconnected, stopping queue processing")
+            #     break
+
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":
+                response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="tool":
                 response += result.content
                 response_all += result.content
             elif isinstance(result, GenText) and result.text_type=="thinking":
