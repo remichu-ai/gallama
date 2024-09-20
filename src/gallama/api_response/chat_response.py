@@ -102,9 +102,11 @@ async def chat_completion_response_stream(
             # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
-                if isinstance(item, GenText) and item.text_type=="text":
+                if isinstance(item, GenText) and (item.text_type=="text"):
                     accumulated_text += item.content
-                if isinstance(item, GenText) and item.text_type=="thinking":
+                elif isinstance(item, GenText) and (item.text_type=="tool"):
+                    accumulated_text += item.content
+                elif isinstance(item, GenText) and item.text_type=="thinking":
                     accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
@@ -261,6 +263,9 @@ async def chat_completion_response(
 
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":
+                response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="tool":
                 response += result.content
                 response_all += result.content
             elif isinstance(result, GenText) and result.text_type=="thinking":
@@ -516,7 +521,9 @@ async def chat_completion_response_artifact_stream(
                 item = gen_queue.get_nowait()
                 if isinstance(item, GenText) and item.text_type=="text":
                     accumulated_text += item.content
-                if isinstance(item, GenText) and item.text_type=="thinking":
+                if isinstance(item, GenText) and item.text_type=="tool":
+                    accumulated_text += item.content
+                elif isinstance(item, GenText) and item.text_type=="thinking":
                     accumulated_thinking += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
@@ -664,6 +671,9 @@ async def chat_completion_response_artifact(
 
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":
+                response += result.content
+                response_all += result.content
+            elif isinstance(result, GenText) and result.text_type=="tool":
                 response += result.content
                 response_all += result.content
             elif isinstance(result, GenText) and result.text_type=="thinking":

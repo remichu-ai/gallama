@@ -373,7 +373,7 @@ class GenEnd(BaseModel):
 class GenText(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    text_type: Literal["text", "thinking"] = "text"
+    text_type: Literal["text", "thinking", "tool"] = "text"
     content: str = Field(description='text or thinking')
     @classmethod
     def __instancecheck__(cls, instance):
