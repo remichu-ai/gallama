@@ -141,16 +141,16 @@ class FormatEnforcer:
             filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
 
         # create filter if engine is lm_enforcer
-        # if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
-        if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
+        if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
+        # if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
             json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
             return JsonSchemaParser(json_schema)
 
-        # create filter if engine is formatron
-        if filter_engine == "formatron":
-            f = FormatterBuilder()
-            f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
-            return f
+        # # create filter if engine is formatron
+        # if filter_engine == "formatron":
+        #     f = FormatterBuilder()
+        #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
+        #     return f
 
 
 class ChatGenerator(Model):
