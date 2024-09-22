@@ -104,14 +104,14 @@ class FormatEnforcer:
     def get_default_engine() -> Literal["formatron", "lm_enforcer"]:
         """ this function will select the format enforcer engine to use if not selected by user"""
 
-        # # use formatron if it is available
-        # if FormatterBuilder:
-        #     return "formatron"
-        # else:
-        #     return "formatron"
-        #     # return "lm_enforcer"
+        # use formatron if it is available
+        if FormatterBuilder:
+            return "formatron"
+        else:
+            # return "formatron"
+            return "lm_enforcer"
 
-        return "lm_enforcer"
+        # return "lm_enforcer"
 
 
     def regex(self, regex_pattern: str, filter_engine: Literal[
