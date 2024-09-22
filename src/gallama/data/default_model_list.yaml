@@ -397,41 +397,70 @@ yi-1.5-34B:
       branch: ['main']
       quant: [8.0]
       backend: exllama
-reflection-llama-3.1-70B:
-  remark: "v3.1"
-  default_quant: 4.0
+qwen-2.5-72B:
+  remark: "v2.5"
+  default_quant: 4.25
   default_cache_quant: Q4
-  prompt_template: Llama3.1
+  prompt_template: Qwen2
   repo:
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-2.25bpw-h6-exl2"
-      branch: ['main']
-      quant: [2.25]
+    - repo: "bartowski/Qwen2.5-72B-Instruct-exl2"
+      branch: ['2_2', '3_0', '3.5', '4_25', '5_0', '6_5', '8_0']
+      quant: [2.2, 3.0, 3.5, 4.25, 5.0, 6.5, 8.0]
       backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-2.4bpw-h6-exl2"
-      branch: ['main']
-      quant: [2.4]
-      backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-3.5bpw-h6-exl2"
-      branch: ['main']
-      quant: [3.5]
-      backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-4.0bpw-h6-exl2"
-      branch: ['main']
-      quant: [4.0]
-      backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-4.65bpw-h6-exl2"
+    - repo: "LoneStriker/Qwen2.5-72B-Instruct-4.65bpw-h6-exl2"
       branch: ['main']
       quant: [4.65]
       backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-5.0bpw-h6-exl2"
+qwen-2.5-32B:
+  remark: "v2.5"
+  default_quant: 4.65
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-3.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [3.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-4.65bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.65]
+      backend: exllama
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-5.0bpw-h6-exl2"
       branch: ['main']
       quant: [5.0]
       backend: exllama
-    - repo: "LoneStriker/Reflection-Llama-3.1-70B-6.0bpw-h6-exl2"
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-6.0bpw-h6-exl2"
       branch: ['main']
       quant: [6.0]
       backend: exllama
-
+    - repo: "LoneStriker/Qwen2.5-32B-Instruct-8.0bpw-h8-exl2"
+      branch: ['main']
+      quant: [8.0]
+      backend: exllama
+qwen-2.5-14B:
+  remark: "v2.5"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-14B-Instruct-exl2"
+      branch: ['3_0', '3.5', '4_25', '5_0', '6_5', '8_0']
+      quant: [3.0, 3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
+qwen-2.5-7B:
+  remark: "v2.5"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-7B-Instruct-exl2"
+      branch: ['3.5', '4_25', '5_0', '6_5', '8_0']
+      quant: [3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
 
 # embedding model from here
 multilingual-e5-large-instruct:
