@@ -1,0 +1,12 @@
+<tool_usage_plan>
+  <available_tools>{fstring_available_tools}</available_tools>
+  <query_summary>Briefly summarize the user's request</query_summary>
+  <tool_selection>
+    <chosen_tool>Name of the most suitable tool</chosen_tool>
+    <reason>Concise reason for choosing this tool</reason>
+  </tool_selection>
+  <usage_approach>
+    <arguments>Specify key arguments as "argument_name: value" with brief justification</arguments>
+    <!-- Add more argument entries as needed -->
+  </usage_approach>
+</tool_usage_plan>

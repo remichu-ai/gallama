@@ -9,4 +9,9 @@
     <justification>Super brief explanation for the final decision whether tool usage is needed or not</justification>
     <is_tool_needed>Yes/No</is_tool_needed>
   </final_decision>
+  <if_tool_used>
+    <!-- Only update this portion if tool is used -->
+    <arguments>Specify key arguments as "argument_name: value" with brief justification</arguments>
+    <!-- Add more argument entries as needed -->
+  </if_tool_used>
 </tool_necessity_evaluation>

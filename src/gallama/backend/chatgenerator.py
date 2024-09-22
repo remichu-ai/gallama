@@ -36,6 +36,10 @@ try:
         build_token_enforcer_tokenizer_data
     )
     from .inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp # TODO to remove this after LMFE take in the changes from turboderp
+
+    if version('exllamav2') == '0.2.1' or version('exllamav2') == '0.2.2':
+        raise "Please use exllamav2 version 0.2.0 or 0.2.3 (not yet release). There is some bug with v0.2.1 and 0.2.2"
+
 except:
     ExLlamaV2Cache = None
     ExLlamaV2Cache_Q4 = None
@@ -70,7 +74,7 @@ except:
     create_formatter_filter = None
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
-
+TOOL_FORCE_THINKING = THINKING_TEMPLATE["tool_forced_evaluation"]
 
 @dataclass
 class QueueContext:
@@ -357,7 +361,12 @@ class ChatGenerator(Model):
 
         # substitute the actual list of tool to the thinking template
         tool_thinking_queue = GenQueue()
-        tool_thinking_formatted = TOOL_THINKING.xml.format_map(
+
+        tool_thinking_to_use = TOOL_THINKING
+        if query.tool_choice != "auto":
+            tool_thinking_to_use = TOOL_FORCE_THINKING
+
+        tool_thinking_formatted = tool_thinking_to_use.xml.format_map(
             {"fstring_available_tools": tool_handler.tool_name_list}
         )
 
@@ -375,8 +384,8 @@ class ChatGenerator(Model):
             gen_queue=tool_thinking_queue,
             temperature=query.temperature,
             top_p=query.top_p,
-            stop_words=TOOL_THINKING.root_key_stop_words,
-            prefix_strings=f"<{TOOL_THINKING.root_tag}>",
+            stop_words=tool_thinking_to_use.root_key_stop_words,
+            prefix_strings=f"<{tool_thinking_to_use.root_tag}>",
             request=request,
             # formatter=formatter_regex  # no longer enforce format
         )
@@ -385,31 +394,35 @@ class ChatGenerator(Model):
         tool_thinking_response, _ = await get_response_from_queue(tool_thinking_queue)
 
         # see if llm able to generate the xml format correctly
-        try:
-            # parse the xml object
-            tool_thinking_response_dict = Thinking.parse_xml_to_dict(tool_thinking_response)
-            tool_decision = tool_thinking_response_dict[TOOL_THINKING.root_tag]["final_decision"][
-                "is_tool_needed"]  # TODO implement a less hardcoding way
-            if tool_decision.lower().strip() == "yes":
-                use_tool_bool = True
-            elif tool_decision.lower().strip() == "no":
-                use_tool_bool = False
-            else:
-                # the format was not enforce, to perform fall back check
-                fall_back_bool = True
+        if query.tool_choice != "auto":
+            use_tool_bool = True
+        else:
+            try:
+                # parse the xml object
+                tool_thinking_response_dict = Thinking.parse_xml_to_dict(tool_thinking_response)
+                tool_decision = tool_thinking_response_dict[tool_thinking_to_use.root_tag]["final_decision"][
+                    "is_tool_needed"]  # TODO implement a less hardcoding way
 
-        except Exception as e:
-            logger.error(f"XML parsing failed: {e}")
-            # Fallback: check for the presence of Yes/No in the raw XML
-            yes_pattern = r'<is_tool_needed>\s*Yes\s*</is_tool_needed>'
-            no_pattern = r'<is_tool_needed>\s*No\s*</is_tool_needed>'
+                if tool_decision.lower().strip() == "yes":
+                    use_tool_bool = True
+                elif tool_decision.lower().strip() == "no":
+                    use_tool_bool = False
+                else:
+                    # the format was not enforce, to perform fall back check
+                    fall_back_bool = True
 
-            if re.search(yes_pattern, tool_thinking_response, re.IGNORECASE):
-                use_tool_bool = True
-            elif re.search(no_pattern, tool_thinking_response, re.IGNORECASE):
-                use_tool_bool = False
-            else:
-                fall_back_bool = True
+            except Exception as e:
+                logger.error(f"XML parsing failed: {e}")
+                # Fallback: check for the presence of Yes/No in the raw XML
+                yes_pattern = r'<is_tool_needed>\s*Yes\s*</is_tool_needed>'
+                no_pattern = r'<is_tool_needed>\s*No\s*</is_tool_needed>'
+
+                if re.search(yes_pattern, tool_thinking_response, re.IGNORECASE):
+                    use_tool_bool = True
+                elif re.search(no_pattern, tool_thinking_response, re.IGNORECASE):
+                    use_tool_bool = False
+                else:
+                    fall_back_bool = True
 
         logger.info(tool_thinking_response)
 
