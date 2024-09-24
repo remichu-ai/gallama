@@ -28,7 +28,12 @@ Ability to download exl2 model from Hugging Face via CLI for popular models.
 Example as following to download llama-3.1 8B at 4.0bpw (4 bit per weight quantization)
 
 ```shell
-gallama download llama-3.1-8B:4.0
+gallama download qwen-2.5-32B:4.0
+```
+
+By default, it will download `exllama` version. For model with `gguf` available, you can download it by set the `backend`
+```shell
+gallama download qwen-2.5-32B:4.0 --backend=llama_cpp
 ```
 
 After download, you can run the model with:
