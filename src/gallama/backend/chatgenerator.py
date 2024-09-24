@@ -101,25 +101,31 @@ class FormatEnforcer:
         pass
 
     @staticmethod
-    def get_default_engine() -> Literal["formatron", "lm_enforcer"]:
+    def get_default_engine(backend:str = "exllama") -> Literal["formatron", "lm_enforcer"]:
         """ this function will select the format enforcer engine to use if not selected by user"""
 
-        # use formatron if it is available
-        if FormatterBuilder:
-            return "formatron"
-        else:
-            # return "formatron"
+        # formatron doesnt support llama cpp at the moment
+        if backend == "llama_cpp":
             return "lm_enforcer"
+        elif backend == "exllama":
+            # use formatron if it is available if it is exllama
+            if FormatterBuilder:
+                return "formatron"
+            else:
+                # return "formatron"
+                return "lm_enforcer"
+        else:
+            raise "Invalid backend"
 
         # return "lm_enforcer"
 
 
     def regex(self, regex_pattern: str, filter_engine: Literal[
-        "formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
-
+        "formatron", "lm_enforcer"] = None, backend: str = "exllama") -> FormatterBuilder | TokenEnforcerTokenizerData:
+        logger.info(backend)
         # set the filter engine to use
         if not filter_engine:
-            filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
+            filter_engine = FormatEnforcer.get_default_engine(backend=backend)  # if engine is specified, use it
 
         # create filter if engine is lm_enforcer
         if filter_engine == "lm_enforcer":
@@ -133,24 +139,24 @@ class FormatEnforcer:
             return f
 
     def json(self, pydantic_model, filter_engine: Literal[
-        "formatron", "lm_enforcer"] = None) -> FormatterBuilder | TokenEnforcerTokenizerData:
+        "formatron", "lm_enforcer"] = None, backend: str = "exllama") -> FormatterBuilder | TokenEnforcerTokenizerData:
         """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
 
         # set the filter engine to use
         if not filter_engine:
-            filter_engine = FormatEnforcer.get_default_engine()  # if engine is specified, use it
+            filter_engine = FormatEnforcer.get_default_engine(backend=backend)  # if engine is specified, use it
 
         # create filter if engine is lm_enforcer
-        # if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
-        if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
+        if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
+        # if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
             json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
             return JsonSchemaParser(json_schema)
 
-        # create filter if engine is formatron
-        if filter_engine == "formatron":
-            f = FormatterBuilder()
-            f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
-            return f
+        # # create filter if engine is formatron
+        # if filter_engine == "formatron":
+        #     f = FormatterBuilder()
+        #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
+        #     return f
 
 
 class ChatGenerator(Model):
@@ -232,9 +238,9 @@ class ChatGenerator(Model):
         )
 
         formatter_prefix_regex = self.formatter.regex(
-            query.regex_prefix_pattern) if query.regex_prefix_pattern else None
+            query.regex_prefix_pattern, backend=self.backend) if query.regex_prefix_pattern else None
 
-        formatter_regex = self.formatter.regex(query.regex_pattern) if query.regex_pattern else None
+        formatter_regex = self.formatter.regex(query.regex_pattern, backend=self.backend) if query.regex_pattern else None
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
@@ -439,7 +445,7 @@ class ChatGenerator(Model):
             # perform generation with tool thinking to evaluate if it is necessity
             tool_thinking_queue_fallback = GenQueue()
 
-            formatter_regex = self.formatter.regex('(needed|not needed)')
+            formatter_regex = self.formatter.regex('(needed|not needed)', backend=self.backend)
 
             await self.generate(
                 prompt,
@@ -482,7 +488,7 @@ class ChatGenerator(Model):
             # # get format enforcer
             # formatter = JsonSchemaParser(answer_format_schema)
 
-            formatter_json = self.formatter.json(pydantic_model=ToolCalling)
+            formatter_json = self.formatter.json(pydantic_model=ToolCalling, backend=self.backend)
 
             # Experiment feature, formulate function calling as python programming. Which is more natural than a random Json output as part of conversation
             tool_as_code_prompt = """
@@ -843,6 +849,8 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         # refer Model class for details of variable available
         self.__dict__.update(llm_base.__dict__)
         self.pipeline = self._get_pipeline()
+        # format enforcer
+        self.formatter = FormatEnforcer()
 
     class LLamaCppPipeline:
         """ class to hold objects required for Exllama V2 text generation"""
@@ -868,9 +876,10 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             yield item
 
     def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list,
-                                 top_p=0.8):
+                                 top_p=0.8, prefix_strings=None, stop_word_to_return="", gen_type_str: str="text"):
         generator = self.pipeline.generator(
             prompt=prompt,
+            #suffix=prefix_strings,
             logits_processor=logits_processor,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -883,20 +892,28 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
 
         generate_text = ""
         for chunk in generator:
-            chunk_text = GenText(content=chunk['choices'][0]['text'])
+            chunk_text = GenText(content=chunk['choices'][0]['text'], text_type=gen_type_str)
+            generate_text += chunk_text.content
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk_text)
+
+        # return stop_word if there is
+        if stop_word_to_return:
+            chunk_text = GenText(content=stop_word_to_return, text_type=gen_type_str)
             generate_text += chunk_text.content
             for g_queue in gen_queue_list:
                 g_queue.get_queue().put_nowait(chunk_text)
 
         return generate_text
 
+    # llama cpp
     async def generate(
         self,
         prompt: str,
         gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
         request: Request,
         # the generated result will be store to this queue
-        gen_type: Union[str, GenStart] = GenStart(gen_type="text"),
+        gen_type: Union[str, GenStart] = "text",
         temperature: float = 0.01,
         top_p: float = 0.8,
         formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
@@ -906,7 +923,7 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         max_tokens: int = None,
         quiet=False,
         **kwargs,
-    ):
+    ) -> (str, GenerationStats):
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -947,9 +964,14 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
         start_time = time.time()
 
         # find stop conditions
+        stop_word_to_return = ""
         if stop_words:
             if isinstance(stop_words, str):
+                stop_word_to_return = stop_words
                 stop_words = [stop_words]
+
+            elif isinstance(stop_words, list):
+                stop_word_to_return = stop_words[0]
 
             if not self.eos_token_str:
                 raise Exception("EOS token not set in model_config")
@@ -965,10 +987,21 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
                                                      )
 
         # kickstart the generation and let down stream know gen type
+        # kick-start the generation and let down stream know gen type
         if isinstance(gen_type, str):
+            gen_type_str = gen_type
             gen_type = GenStart(gen_type=gen_type)
+        else:
+            gen_type_str = gen_type.gen_type  # get out the generation type in str format
+
         for g_queue in gen_queue_list:
             g_queue.get_queue().put_nowait(gen_type)
+
+        # Create a task to check for disconnection
+        disconnect_check_task = None
+        if request:
+            disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list))
+
 
         # llama cpp python generator is not async, hence running fake async..
         # Run the synchronous generator in a separate thread
@@ -977,7 +1010,8 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             generate_text = await loop.run_in_executor(
                 pool,
                 self._run_generator_and_queue,
-                prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list, top_p
+                prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
+                top_p, prefix_strings, stop_word_to_return, gen_type_str
             )
 
         duration = time.time() - start_time

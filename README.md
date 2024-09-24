@@ -504,4 +504,5 @@ Customize the model launch using various parameters. Available parameters for th
    ```shell
    gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B tp=True"
    ```
-
+8. Others
+   If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
