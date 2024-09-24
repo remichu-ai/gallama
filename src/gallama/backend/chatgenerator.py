@@ -998,10 +998,6 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
             g_queue.get_queue().put_nowait(gen_type)
 
         # Create a task to check for disconnection
-        disconnect_check_task = None
-        if request:
-            disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list))
-
 
         # llama cpp python generator is not async, hence running fake async..
         # Run the synchronous generator in a separate thread
