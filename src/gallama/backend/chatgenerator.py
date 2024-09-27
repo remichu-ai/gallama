@@ -408,12 +408,15 @@ class ChatGenerator(Model):
         # USE TOOL
         if use_tool_bool:
             # create the pydantic schema to enforce generation
-            tool_combined_pydantic = create_function_models_v2(tool_handler.tool_dict)
+            # tool_combined_pydantic = create_function_models_v2(tool_handler.tool_dict)
+            #
+            # class ToolCalling(ClassSchema):
+            #     """ The format to call one or multiple tools """
+            #     functions_calling: List[Union[tuple(tool_combined_pydantic)]] = []
 
             class ToolCalling(ClassSchema):
                 """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic)]] = []
-
+                functions_calling: List[Union[tuple(tool_handler.tools_list_formatron)]] = []
 
             # class ItemModel(BaseModel):
             #     Use: Literal['Yes', 'No']
