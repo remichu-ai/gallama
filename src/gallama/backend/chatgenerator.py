@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from fastapi import HTTPException, Request
 from .model import Model
 from gallama.data_classes.data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
-from .tools import Tools, create_function_models_v2
+from .tools import Tools, create_function_models_v2, create_function_models_formatron
 from dataclasses import dataclass
 from gallama.utils.utils import get_token_length
 from gallama.logger.logger import logger
@@ -19,6 +19,17 @@ from lmformatenforcer import JsonSchemaParser, RegexParser
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
+from .format_enforcer import FormatEnforcer
+from formatron.schemas.pydantic import ClassSchema
+
+try:
+    from formatron.formatter import FormatterBuilder
+    from formatron.integrations.exllamav2 import create_formatter_filter
+
+except:
+    FormatterBuilder = None
+    create_formatter_filter = None
+
 
 try:
     from exllamav2 import (
@@ -64,14 +75,6 @@ except:
 
 assert ExLlamaV2Cache or LogitsProcessorList, "Please install ExllamaV2 or LLama CPP Python as backend"
 
-# experimental support for formatron
-try:
-    from formatron.formatter import FormatterBuilder
-    from formatron.integrations.exllamav2 import create_formatter_filter
-
-except:
-    FormatterBuilder = None
-    create_formatter_filter = None
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
 TOOL_FORCE_THINKING = THINKING_TEMPLATE["tool_forced_evaluation"]
@@ -92,71 +95,6 @@ class QueueContext:
 
     def get_queue(self) -> GenQueue | None:
         return self.gen_queue()
-
-
-class FormatEnforcer:
-    """ this class will help to create filter for generation enforcement"""
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def get_default_engine(backend:str = "exllama") -> Literal["formatron", "lm_enforcer"]:
-        """ this function will select the format enforcer engine to use if not selected by user"""
-
-        # formatron doesnt support llama cpp at the moment
-        if backend == "llama_cpp":
-            return "lm_enforcer"
-        elif backend == "exllama":
-            # use formatron if it is available if it is exllama
-            if FormatterBuilder:
-                return "formatron"
-            else:
-                # return "formatron"
-                return "lm_enforcer"
-        else:
-            raise "Invalid backend"
-
-        # return "lm_enforcer"
-
-
-    def regex(self, regex_pattern: str, filter_engine: Literal[
-        "formatron", "lm_enforcer"] = None, backend: str = "exllama") -> FormatterBuilder | TokenEnforcerTokenizerData:
-        logger.info(backend)
-        # set the filter engine to use
-        if not filter_engine:
-            filter_engine = FormatEnforcer.get_default_engine(backend=backend)  # if engine is specified, use it
-
-        # create filter if engine is lm_enforcer
-        if filter_engine == "lm_enforcer":
-            return RegexParser(regex_pattern)
-
-        # create filter if engine is formatron
-        if filter_engine == "formatron":
-            f = FormatterBuilder()
-            _regex = f.regex(regex_pattern, capture_name='regex')
-            f.append_line(f"{_regex}")
-            return f
-
-    def json(self, pydantic_model, filter_engine: Literal[
-        "formatron", "lm_enforcer"] = None, backend: str = "exllama") -> FormatterBuilder | TokenEnforcerTokenizerData:
-        """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
-
-        # set the filter engine to use
-        if not filter_engine:
-            filter_engine = FormatEnforcer.get_default_engine(backend=backend)  # if engine is specified, use it
-
-        # create filter if engine is lm_enforcer
-        if filter_engine == "lm_enforcer" or filter_engine == "formatron":  # TODO currently formatron and nested pydantic model is having issue
-        # if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
-            json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model.model_json_schema())
-            return JsonSchemaParser(json_schema)
-
-        # # create filter if engine is formatron
-        # if filter_engine == "formatron":
-        #     f = FormatterBuilder()
-        #     f.append_line(f"{f.json(pydantic_model, capture_name='json')}")
-        #     return f
 
 
 class ChatGenerator(Model):
@@ -238,9 +176,9 @@ class ChatGenerator(Model):
         )
 
         formatter_prefix_regex = self.formatter.regex(
-            query.regex_prefix_pattern, backend=self.backend) if query.regex_prefix_pattern else None
+            query.regex_prefix_pattern, backend=self.backend, preference=query.guided_decoding_backend) if query.regex_prefix_pattern else None
 
-        formatter_regex = self.formatter.regex(query.regex_pattern, backend=self.backend) if query.regex_pattern else None
+        formatter_regex = self.formatter.regex(query.regex_pattern, backend=self.backend, preference=query.guided_decoding_backend) if query.regex_pattern else None
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
@@ -445,7 +383,7 @@ class ChatGenerator(Model):
             # perform generation with tool thinking to evaluate if it is necessity
             tool_thinking_queue_fallback = GenQueue()
 
-            formatter_regex = self.formatter.regex('(needed|not needed)', backend=self.backend)
+            formatter_regex = self.formatter.regex('(needed|not needed)', backend=self.backend, preference=query.guided_decoding_backend)
 
             await self.generate(
                 prompt,
@@ -470,25 +408,24 @@ class ChatGenerator(Model):
         # USE TOOL
         if use_tool_bool:
             # create the pydantic schema to enforce generation
-            tool_combined_pydantic = create_function_models_v2(tool_handler.tool_dict)
+            tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
 
-            class ToolCalling(BaseModel):
+            class ToolCalling_LMFE(ClassSchema):
                 """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic)]] = Field(
-                    description='the list of functions to call in chronological order',
-                    default=[]
-                )
+                functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
 
-            # class ItemModel(BaseModel):
-            #     Use: Literal['Yes', 'No']
-            #     reason: str
+            # create the pydantic schema to enforce generation for formatron which use ClassSchema
+            tool_combined_pydantic_formatron = create_function_models_formatron(tool_handler.tool_dict_formatron)
+            class ToolCalling_formatron(ClassSchema):
+                """ The format to call one or multiple tools """
+                functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
 
-            # answer_format_schema = tool_handler.replace_refs_with_definitions_v2(ToolCalling.schema())
-            #
-            # # get format enforcer
-            # formatter = JsonSchemaParser(answer_format_schema)
-
-            formatter_json = self.formatter.json(pydantic_model=ToolCalling, backend=self.backend)
+            formatter_json = self.formatter.json(
+                pydantic_model_lmfe=ToolCalling_LMFE,
+                pydantic_model_formatron=ToolCalling_formatron,
+                backend=self.backend,
+                preference = query.guided_decoding_backend
+            )
 
             # Experiment feature, formulate function calling as python programming. Which is more natural than a random Json output as part of conversation
             tool_as_code_prompt = """
@@ -782,11 +719,13 @@ arg_dict = """
 
                     # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
                     # grab the output text stream.
-                    # generate_text += result.get("text", "")
                     # logger.info(f'{datetime.now()} {result.get("text", "")}')
-                    chunk = GenText(content=result.get("text", ""), text_type=gen_type_str)
+                    chunk_text = result.get("text", "")
+                    chunk = GenText(content=chunk_text, text_type=gen_type_str)
                     for g_queue in gen_queue_list:
-                        g_queue.get_queue().put_nowait(chunk)
+                        if chunk_text not in self.eos_token_str_set:        # formatron return eos token
+                            # generate_text += result.get("text", "")
+                            g_queue.get_queue().put_nowait(chunk)
 
                     # logger.info(result.get("text", ""))
                     # logger.info(self.tokenizer.encode(result.get("text", "")))

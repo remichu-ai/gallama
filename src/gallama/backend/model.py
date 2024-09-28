@@ -82,6 +82,7 @@ class Model:
         # TODO, to auto detect
         # get the eos_token_str by merging the default config with anything set by user
         self.eos_token_str = list(set(model_config.get("eos_token_list", []) + eos_token_list_from_prompt_template))
+        self.eos_token_str_set = set(self.eos_token_str)    # set for some more efficient operation
         self.eos_token_ids = self.generate_eos_tokens_id()
 
 

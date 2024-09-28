@@ -1,13 +1,16 @@
 from pydantic import BaseModel, Field, ValidationError, create_model
 from typing import Literal, Type, Union, Optional, List, Any, Dict
+from formatron.schemas.pydantic import ClassSchema, Schema
 
 
 class Tools:
     def __init__(self, prompt_eng, tools, tool_choice):
         self.prompt_eng = prompt_eng
         self.tools = tools
-        self.tools_list = self.create_pydantic_model_from_tools(self.tools)
+        self.tools_list = self.create_pydantic_model_from_tools(self.tools, mode="pydantic_v2")
+        self.tools_list_formatron = self.create_pydantic_model_from_tools(self.tools, mode="formatron")
         self.tool_dict = {tool.schema()['title']: tool for tool in self.tools_list}
+        self.tool_dict_formatron = {tool.schema()['title']: tool for tool in self.tools_list_formatron}
         self.answer_format = None
         self.json_parser = None
         self.tool_choice = tool_choice
@@ -125,7 +128,33 @@ class Tools:
         return model
 
     @staticmethod
-    def create_pydantic_model_from_tools(tools: list):
+    def create_class_schema(function_info: dict) -> Type[ClassSchema]:
+        parameters = function_info['parameters']
+        properties = parameters.get('properties', {})
+        required_properties = set(parameters.get('required', []))
+
+        attributes = {}
+        for prop_name, prop_info in properties.items():
+            field_type = Tools.type_from_json_schema(prop_info)
+            field_description = prop_info.get('description', None)
+
+            if prop_name in required_properties:
+                attributes[prop_name] = (field_type, Field(description=field_description))
+            else:
+                attributes[prop_name] = (Optional[field_type], Field(default=None, description=field_description))
+
+        namespace = {'__annotations__': {}}
+        for attr_name, (attr_type, field_info) in attributes.items():
+            namespace['__annotations__'][attr_name] = attr_type
+            namespace[attr_name] = field_info
+
+        model = type(function_info['name'], (ClassSchema,), namespace)
+        model.__doc__ = function_info.get('description', '')
+
+        return model
+
+    @staticmethod
+    def create_pydantic_model_from_tools(tools: list, mode: Literal["pydantic_v2", "formatron", "pydantic_v1"]="pydantic_v2"):
         """
         this function create a list of pydantic model based on
         tool_list in the API call
@@ -133,7 +162,14 @@ class Tools:
         models = []
         for tool in tools:
             function_info = tool.dict()['function']
-            model = Tools.create_pydantic_model_v2(function_info)
+            if mode == "pydantic_v2":
+                model = Tools.create_pydantic_model_v2(function_info)
+            elif mode == "formatron":
+                model = Tools.create_class_schema(function_info)
+            elif mode == "pydantic_v1":
+                model = Tools.create_pydantic_model_v1(function_info)
+            else:
+                raise ValueError(f"Unsupported mode: {mode}")
             models.append(model)
 
         return models
@@ -234,5 +270,27 @@ def create_function_models_v2(functions: Dict[str, Type[BaseModel]]) -> List[Typ
             arguments=(arg_model, Field(...)),
             __config__=Config
         )
+        function_model_list.append(NewModel)
+    return function_model_list
+
+
+def create_function_models_formatron(functions: Dict[str, Type[ClassSchema]]) -> List[Type[ClassSchema]]:
+    """Create a list of ClassSchema models for the function schemas passed in via OpenAI request call."""
+    function_model_list: List[Type[ClassSchema]] = []
+    for func_name, arg_model in functions.items():
+        class Config:
+            arbitrary_types_allowed = True
+
+        # Create a new ClassSchema subclass
+        class NewModel(ClassSchema):
+            name: Literal[func_name] = Field(...)
+            arguments: arg_model = Field(...)
+
+            class Config:
+                arbitrary_types_allowed = True
+
+        # Set the name of the class to match the function name
+        NewModel.__name__ = func_name.title()
+
         function_model_list.append(NewModel)
     return function_model_list
