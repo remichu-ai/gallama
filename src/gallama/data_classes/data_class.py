@@ -121,14 +121,16 @@ class ChatMLQuery(BaseModel):
     prefix_strings: Optional[Union[str, List[str]]] = Field(default=None, description="String or list of strings to start the generation with. Can not be used together with regex_prefix_pattern")
     regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
-    stop_words: Optional[List[str]] = None
+    stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
     thinking_template: Optional[str] = None
-    # thinking_template: Optional[str] = test_thinking
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
-    #thinking_template: Optional[str] = DEFAULT_THINKING     # the xml template for thinking
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,
         description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field. If used together with artifact, True will return as separate."
+    )
+    guided_decoding_backend: Optional[Literal["auto", "formatron", "lm-format-enforcer"]] = Field(
+        default="auto",
+        description="guided decoding backend. auto will choose the most suitable. If the selected backend is not working for specific llm backend (e.g. formatrong not working with llama cpp), selection will be auto"
     )
 
     # not yet supported options from here # TODO
@@ -140,7 +142,7 @@ class ChatMLQuery(BaseModel):
     response_format: Optional[ResponseFormat] = None
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
-
+    parallel_tool_calls: bool = True            # default let the model handle and can not toggle
 
     @validator('regex_pattern', 'regex_prefix_pattern')
     def validate_regex(cls, v):

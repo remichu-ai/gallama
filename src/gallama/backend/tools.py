@@ -10,6 +10,7 @@ class Tools:
         self.tools_list = self.create_pydantic_model_from_tools(self.tools, mode="pydantic_v2")
         self.tools_list_formatron = self.create_pydantic_model_from_tools(self.tools, mode="formatron")
         self.tool_dict = {tool.schema()['title']: tool for tool in self.tools_list}
+        self.tool_dict_formatron = {tool.schema()['title']: tool for tool in self.tools_list_formatron}
         self.answer_format = None
         self.json_parser = None
         self.tool_choice = tool_choice
@@ -269,5 +270,27 @@ def create_function_models_v2(functions: Dict[str, Type[BaseModel]]) -> List[Typ
             arguments=(arg_model, Field(...)),
             __config__=Config
         )
+        function_model_list.append(NewModel)
+    return function_model_list
+
+
+def create_function_models_formatron(functions: Dict[str, Type[ClassSchema]]) -> List[Type[ClassSchema]]:
+    """Create a list of ClassSchema models for the function schemas passed in via OpenAI request call."""
+    function_model_list: List[Type[ClassSchema]] = []
+    for func_name, arg_model in functions.items():
+        class Config:
+            arbitrary_types_allowed = True
+
+        # Create a new ClassSchema subclass
+        class NewModel(ClassSchema):
+            name: Literal[func_name] = Field(...)
+            arguments: arg_model = Field(...)
+
+            class Config:
+                arbitrary_types_allowed = True
+
+        # Set the name of the class to match the function name
+        NewModel.__name__ = func_name.title()
+
         function_model_list.append(NewModel)
     return function_model_list
