@@ -257,9 +257,6 @@ async def chat_completion_response(
     eos = False
     while not eos:
         try:
-            # if await request.is_disconnected():
-            #     logger.info("Request disconnected, stopping queue processing")
-            #     break
 
             result = gen_queue.get_nowait()
             if isinstance(result, GenText) and result.text_type=="text":

@@ -4,8 +4,7 @@ import re
 import asyncio
 import uuid
 import weakref
-from typing import List, Union, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import List, Union, Literal, Optional, AsyncGenerator
 from fastapi import HTTPException, Request
 from .model import Model
 from gallama.data_classes.data_class import GenerationStats, GenEnd, GenText, GenQueue, ChatMLQuery, GenStart
@@ -21,6 +20,10 @@ from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from .format_enforcer import FormatEnforcer
 from formatron.schemas.pydantic import ClassSchema
+from .transformers_streamer import AsyncTextIteratorStreamer
+from threading import Thread
+from functools import partial
+
 
 try:
     from formatron.formatter import FormatterBuilder
@@ -75,6 +78,11 @@ except:
 
 assert ExLlamaV2Cache or LogitsProcessorList, "Please install ExllamaV2 or LLama CPP Python as backend"
 
+
+try:
+    import transformers
+except:
+    transformers = None
 
 TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
 TOOL_FORCE_THINKING = THINKING_TEMPLATE["tool_forced_evaluation"]
@@ -623,8 +631,8 @@ arg_dict = """
             filters = []
             if formatter:
                 if isinstance(formatter, TokenEnforcerTokenizerData) or isinstance(formatter, JsonSchemaParser):  # lm format enforcer
-                    exllamva_version = version('exllamav2')
-                    if exllamva_version<='0.2.0':
+                    exllama_version = version('exllamav2')
+                    if exllama_version<='0.2.0':
                         filters = [ExLlamaV2TokenEnforcerFilter(
                             character_level_parser=formatter,
                             tokenizer_data=self.pipeline.lm_enforcer_tokenizer_data
@@ -948,6 +956,328 @@ class ChatGeneratorLlamaCpp(ChatGenerator):
                 prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
                 top_p, prefix_strings, stop_word_to_return, gen_type_str
             )
+
+        duration = time.time() - start_time
+
+        gen_stats = GenerationStats()
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenStats:
+                g_queue.get_queue().put_nowait(gen_stats)
+
+        # this to signal the end of generation
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenEnd:
+                g_queue.get_queue().put_nowait(GenEnd())
+
+        logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)
+
+
+class ChatGeneratorTransformers(ChatGenerator):
+    def __init__(
+            self,
+            llm_base: Model,
+    ):
+        # unpack all variables from llm_base
+        # refer Model class for details of variable available
+        self.__dict__.update(llm_base.__dict__)
+        self.pipeline = self._get_pipeline()
+        # format enforcer
+        self.formatter = FormatEnforcer()
+
+    class TransformersPipeline:
+        """ class to hold objects required for Exllama V2 text generation"""
+
+        def __init__(
+                self,
+                generator,
+                lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
+        ):
+            self.generator = generator
+            #self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
+
+    def _get_pipeline(self):
+        #lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+
+        return self.TransformersPipeline(
+            generator=self.model.generate,
+            # lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
+            lm_enforcer_tokenizer_data=None,    # TODO https://github.com/noamgat/lm-format-enforcer/blob/main/samples/colab_llama2_enforcer.ipynb
+        )
+
+    async def _async_generator(self, sync_generator):
+        for item in sync_generator:
+            yield item
+
+    def _run_generator_and_queue_async(
+        self,
+        prompt,
+        streamer: transformers.TextIteratorStreamer,
+        logits_processor,
+        max_tokens,
+        temperature,
+        stop,
+        gen_queue_list,
+        top_p=0.8,
+        prefix_strings=None,
+        stop_word_to_return="",
+        gen_type_str: str="text",
+    ):
+        # tokenize the prompt
+        input_ids = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
+        # create generation config
+        generation_config = transformers.GenerationConfig(
+            max_new_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop_strings=stop,
+            repetition_penalty=1.1,
+            do_sample=True,
+        )
+
+        # # create streamer
+        # streamer=transformers.TextIteratorStreamer(
+        #     tokenizer=self.tokenizer,
+        #     skip_prompt=True,
+        #     skip_special_tokens=True,
+        # )
+
+
+        # # generate text
+        # generator = self.pipeline.generator(
+        #     **input_ids,
+        #     generation_config=generation_config,
+        #     streamer=streamer,
+        #     tokenizer=self.tokenizer,
+        # )
+
+        # # Run the model's generate function in a separate thread
+        # await asyncio.to_thread(self.pipeline.generator,
+        #     **input_ids,
+        #     generation_config=generation_config,
+        #     streamer=streamer,
+        #     tokenizer=self.tokenizer,
+        # )
+
+        thread = Thread(
+            target=self.model.generate,
+            # args=(**input_ids),
+            kwargs={
+                **input_ids,
+                'generation_config': generation_config,
+                'streamer' : streamer,
+                'tokenizer': self.tokenizer,
+            }
+        )
+        thread.start()
+
+        return streamer
+        # # Stream the generated text
+        # for new_text in streamer:
+        #     yield new_text
+
+
+    # llama cpp
+    async def generate(
+        self,
+        prompt: str,
+        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
+        request: Request,
+        # the generated result will be store to this queue
+        gen_type: Union[str, GenStart] = "text",
+        temperature: float = 0.01,
+        top_p: float = 0.8,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        stop_words: Union[List[str], str] = None,
+        prefix_strings: Optional[Union[str, List[str]]] = None,
+        banned_strings: list[str] | None = None,
+        max_tokens: int = None,
+        quiet=False,
+        **kwargs,
+    ) -> (str, GenerationStats):
+
+        if not quiet:
+            logger.info("----------------------Prompt---------------\n" + prompt)
+            logger.debug("----------------------temperature---------\n" + str(temperature))
+
+
+        # make gen_queue to List[QueueContext] for standardize downstream handling
+        gen_queue_list = None
+        if isinstance(gen_queue, QueueContext):
+            gen_queue_list = [gen_queue]
+        elif isinstance(gen_queue, GenQueue):
+            gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+        elif isinstance(gen_queue, list):
+            gen_queue_list = gen_queue
+            # TODO add validation
+            # if any(not isinstance(g_queue, QueueContext) for g_queue in gen_queue_list):
+            #     raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+        else:
+            raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+
+        # convert prompt to token id
+        input_ids = self.tokenizer(prompt, return_tensors="pt")     # TODO
+        #self.validate_token_length(len(input_ids))
+
+        # format enforcer
+        logits_processors = None
+        if formatter:
+            logits_processors = LogitsProcessorList([
+                build_llamacpp_logits_processor(
+                    llm=self.pipeline.lm_enforcer_tokenizer_data,
+                    character_level_parser=formatter,
+                )
+            ])
+
+        start_time = time.time()
+
+        # find stop conditions
+        stop_word_to_return = ""
+        if stop_words:
+            if isinstance(stop_words, str):
+                stop_word_to_return = stop_words
+                stop_words = [stop_words]
+
+            elif isinstance(stop_words, list):
+                stop_word_to_return = stop_words[0]
+
+            if not self.eos_token_str:
+                raise Exception("EOS token not set in model_config")
+            stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
+            logger.debug("stop_words: " + str(stop_conditions))
+        else:
+            stop_conditions = self.eos_token_str
+
+        max_tokens_to_use = min(
+            self.max_seq_len - len(input_ids),
+            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids),
+                                                     4096
+                                                     )
+
+        # kickstart the generation and let down stream know gen type
+        if isinstance(gen_type, str):
+            gen_type_str = gen_type
+            gen_type = GenStart(gen_type=gen_type)
+        else:
+            gen_type_str = gen_type.gen_type  # get out the generation type in str format
+
+        for g_queue in gen_queue_list:
+            g_queue.get_queue().put_nowait(gen_type)
+
+        # Create a task to check for disconnection
+        # pass
+
+
+        # # create streamer
+        # streamer=transformers.TextIteratorStreamer(
+        #     tokenizer=self.tokenizer,
+        #     skip_prompt=True,
+        #     skip_special_tokens=True,
+        # )
+
+        # llama cpp python generator is not async, hence running fake async..
+        # Run the synchronous generator in a separate thread
+        generate_text = ""
+        # async def generate_and_stream():
+        #     nonlocal generate_text
+        #
+        #     # Run the generator in a separate thread
+        #     await loop.run_in_executor(
+        #         None,
+        #         self._run_generator_and_queue,
+        #         prompt, streamer, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
+        #         top_p, prefix_strings, stop_word_to_return, gen_type_str
+        #     )
+
+        # loop = asyncio.get_event_loop()
+        # with ThreadPoolExecutor() as pool:
+        #     await loop.run_in_executor(
+        #         None,
+        #         self._run_generator_and_queue,
+        #         prompt, streamer, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
+        #         top_p, prefix_strings, stop_word_to_return, gen_type_str
+        #     )
+
+        # thread = Thread(
+        #     target=self._run_generator_and_queue,
+        #     args=(prompt, streamer, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
+        #             top_p, prefix_strings, stop_word_to_return, gen_type_str)
+        #         )
+        # thread.start()
+
+        # create streamer
+        streamer=transformers.TextIteratorStreamer(
+            tokenizer=self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+        )
+
+        # # Run model.generate using asyncio.create_task to avoid blocking
+        # streamer = self._run_generator_and_queue_async(
+        #     prompt=prompt,
+        #     logits_processor=None,
+        #     max_tokens=max_tokens_to_use,
+        #     temperature=temperature,
+        #     stop=stop_conditions,
+        #     gen_queue_list=gen_queue_list,
+        #     top_p=top_p,
+        #     prefix_strings="",
+        #     stop_word_to_return="",
+        #     gen_type_str=gen_type_str,
+        #     streamer=streamer
+        # )
+
+        # tokenize the prompt
+        input_ids = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
+        # create generation config
+        generation_config = transformers.GenerationConfig(
+            max_new_tokens=max_tokens_to_use,
+            temperature=temperature,
+            top_p=top_p,
+            stop_strings=stop_words,
+            repetition_penalty=1.1,
+            do_sample=True,
+        )
+
+        thread = Thread(
+            target=self.model.generate,
+            # args=(**input_ids),
+            kwargs={
+                **input_ids,
+                'generation_config': generation_config,
+                'streamer' : streamer,
+                'tokenizer': self.tokenizer,
+            }
+        )
+        thread.start()
+
+        logger.info(max_tokens_to_use)
+        generate_text = ""
+        for chunk in streamer:
+            logger.info(chunk)
+            chunk_text = GenText(content=chunk, text_type=gen_type_str)
+            generate_text += chunk
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk_text)
+
+        # Wait for the generation thread to finish
+        # thread.join()
+
+        if stop_word_to_return:
+            chunk_text = GenText(content=stop_word_to_return, text_type=gen_type_str)
+            generate_text += chunk_text.content
+            for g_queue in gen_queue_list:
+                g_queue.get_queue().put_nowait(chunk_text)
+
+
+        # loop = asyncio.get_running_loop()
+
+
+
+        start_time = time.time()
+        # await generate_and_stream()
+
 
         duration = time.time() - start_time
 

@@ -32,6 +32,7 @@ def update_model_yaml(
     prompt_template: str,
     quant: str,
     cache_quant: str = None,
+    transformers_args: Dict = None,     # additional argument for transformers loading
     config_manager: ConfigManager = ConfigManager()
 ):
     config = config_manager.configs      # the default list of model
@@ -44,6 +45,9 @@ def update_model_yaml(
         'prompt_template': prompt_template,
         'quant': quant,
     }
+
+    if transformers_args:
+        config[model_name]["transformers_args"] = transformers_args
 
     # Optional update cache quant
     if cache_quant is not None:
@@ -118,15 +122,30 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
             )
             logger.info(f"Download complete. Model saved in {download_dir}")
 
-            update_model_yaml(
-                model_name=model_name,
-                model_path=str(download_dir),
-                backend=backend,
-                prompt_template=model_config.get('prompt_template', None),
-                quant=quant,
-                cache_quant=model_config.get('default_cache_quant', "Q4"),
-                config_manager=config_manager,
-            )
+            # for transformer model, we might need to keep the transformers_args if any
+            if backend == "transformers":
+                transformers_args = repo_info.get('transformers_args', None)
+                update_model_yaml(
+                    model_name=f"{model_name}_transformers",
+                    model_path=str(download_dir),
+                    backend=backend,
+                    prompt_template=model_config.get('prompt_template', None),
+                    transformers_args=transformers_args,
+                    quant=quant,
+                    cache_quant=model_config.get('default_cache_quant', "Q4"),
+                    config_manager=config_manager,
+                )
+
+            else:
+                update_model_yaml(
+                    model_name=model_name,
+                    model_path=str(download_dir),
+                    backend=backend,
+                    prompt_template=model_config.get('prompt_template', None),
+                    quant=quant,
+                    cache_quant=model_config.get('default_cache_quant', "Q4"),
+                    config_manager=config_manager,
+                )
 
         return {"status": "success", "message": f"Model downloaded and configured: {model_name}"}
     except Exception as e:
