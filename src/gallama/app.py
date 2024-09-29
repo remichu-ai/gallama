@@ -31,6 +31,8 @@ from gallama.api_response.chat_response import (
     chat_completion_response_artifact_stream,
     chat_completion_response_artifact
 )
+import concurrent.futures
+from functools import partial
 from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
 from gallama.logger.logger import get_logger
@@ -162,6 +164,19 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             gen_queue=gen_queue,
             request=request,
         ))
+
+
+        # partial_func = partial(llm.chat,
+        #     query=query,
+        #     prompt_eng=prompt_eng,
+        #     gen_queue=gen_queue,
+        #     request=request
+        # )
+        # with concurrent.futures.ThreadPoolExecutor() as pool:
+        #     await asyncio.get_running_loop().run_in_executor(
+        #         executor=pool,
+        #         func=partial_func,
+        #     )
 
         # send the response to client
         if query.stream:
