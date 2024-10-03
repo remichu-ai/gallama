@@ -81,7 +81,7 @@ class Model:
         assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # load model and tokenizer; cache is for exllamav2
-        self.model, self.tokenizer, self.cache, self.draft_model, self.draft_cache = self.load_model()
+        self.model, self.tokenizer, self.cache, self.draft_model, self.draft_cache, self.processor = self.load_model()
 
         # TODO, to auto detect
         # get the eos_token_str by merging the default config with anything set by user
@@ -91,7 +91,7 @@ class Model:
 
 
     def load_model(self):
-        model, tokenizer, cache, draft_model, draft_cache = None, None, None, None, None
+        model, tokenizer, cache, draft_model, draft_cache, processor = None, None, None, None, None, None
 
         if self.backend=="exllama":
             model, tokenizer, cache = self.load_model_exllama(
@@ -131,7 +131,8 @@ class Model:
             )
 
         elif self.backend=="transformers":
-            model, tokenizer, cache = self.load_model_transformers(
+            # processor is for multimodal
+            model, tokenizer, cache, processor = self.load_model_transformers(
                 model_id=self.model_id,
                 backend=self.backend,
                 max_seq_len=self.max_seq_len,
@@ -147,7 +148,7 @@ class Model:
         else:
             raise "Invalid backend"
 
-        return model, tokenizer, cache, draft_model, draft_cache
+        return model, tokenizer, cache, draft_model, draft_cache, processor
 
     @staticmethod
     def is_flash_attention_installed() -> (bool, str):
@@ -284,6 +285,7 @@ class Model:
 
         cache = None  # in case not a backend with separate cache like llama cpp
         tokenizer = None
+        processor = None
 
         # helper function for dynamic class loading
         def get_class(class_string):
@@ -292,7 +294,7 @@ class Model:
             return getattr(module, class_name)
 
         # arguments for model loading
-        model_args = {
+        model_kargs = {
             'pretrained_model_name_or_path': self.model_id,
             'torch_dtype' : "auto",
             'device_map': "auto",
@@ -305,12 +307,16 @@ class Model:
         # check if flash attention enabled
         flash_installed, flash_version = self.is_flash_attention_installed()
         if flash_installed:
-            model_args["attn_implementation"]  = "flash_attention_2"
+            model_kargs["attn_implementation"]  = "flash_attention_2"
 
 
         # determine the class to use for loading
         if self.transformers_args.get('model_class'):
             model_class = get_class(self.transformers_args['model_class'])
+
+            model_extra_kwargs = self.transformers_args.get('model_class_extra_kwargs')
+            if model_extra_kwargs:
+                model_kargs.update(model_extra_kwargs)      # update any extra argument
         else:
             model_class = transformers.AutoModelForCausalLM
 
@@ -319,12 +325,20 @@ class Model:
         else:
             tokenizer_class = transformers.AutoTokenizer
 
+        if self.transformers_args.get('processor_class'):
+            processor_class = get_class(self.transformers_args['processor_class'])
+        else:
+            processor_class = None
+
         # TODO to add equivalent support for all exllama option
         # currently speculative decoding not supported by model specific for LLama CPP python
         if isinstance(gpus, str) and gpus == "auto":
-            logger.info(model_args)
-            model = model_class.from_pretrained(**model_args)
+            logger.info(model_kargs)
+            model = model_class.from_pretrained(**model_kargs)
             tokenizer = tokenizer_class.from_pretrained(**tokenizer_args)
+            if processor_class:
+                processor = processor_class.from_pretrained(**tokenizer_args)
+
         # elif isinstance(gpus, list):  # user specify the gpus split
         #     model = Llama(
         #         model_path=self.model_id,
@@ -340,10 +354,14 @@ class Model:
             raise ValueError("Device map should be either 'auto', 'gpu' split")
 
         # set max_seq_len based on model
-        self.max_seq_len = model.config.max_position_embeddings
+        try:
+            self.max_seq_len = model.config.max_position_embeddings
+        except:
+            # for llama 3.2
+            self.max_seq_len = model.config.text_config.max_position_embeddings
 
 
-        return model, tokenizer, cache
+        return model, tokenizer, cache, processor
 
 
     @property

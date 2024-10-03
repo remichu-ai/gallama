@@ -25,7 +25,8 @@ from lmformatenforcer.integrations.transformers import build_transformers_prefix
 from threading import Thread
 from functools import partial
 import concurrent.futures
-
+from qwen_vl_utils import process_vision_info
+from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
 
 try:
     from formatron.formatter import FormatterBuilder
@@ -216,6 +217,7 @@ class ChatGenerator(Model):
 
             await self.generate(
                 prompt,
+                messages=query.messages,
                 gen_type="thinking",
                 gen_queue=queue_group,
                 temperature=query.temperature,
@@ -245,6 +247,7 @@ class ChatGenerator(Model):
 
             await self.generate(
                 prompt,
+                messages=query.messages,
                 gen_queue=queue_group,
                 temperature=query.temperature,
                 top_p=query.top_p,
@@ -288,6 +291,7 @@ class ChatGenerator(Model):
 
         await self.generate(
             prompt=prompt,
+            messages=query.messages,
             gen_queue=gen_queue,
             **{
                 'temperature': query.temperature,
@@ -335,6 +339,7 @@ class ChatGenerator(Model):
 
         await self.generate(
             prompt,
+            messages=query.messages,
             gen_queue=tool_thinking_queue,
             temperature=query.temperature,
             top_p=query.top_p,
@@ -397,6 +402,7 @@ class ChatGenerator(Model):
 
             await self.generate(
                 prompt,
+                messages=query.messages,
                 gen_queue=tool_thinking_queue_fallback,
                 temperature=query.temperature,
                 top_p=query.top_p,
@@ -472,6 +478,7 @@ arg_dict = """
             # generate
             await self.generate(
                 prompt,
+                messages=query.messages,
                 gen_queue=gen_queue,
                 gen_type=GenStart(gen_type="tool"),
                 temperature=query.temperature,
@@ -491,6 +498,7 @@ arg_dict = """
                 # Normal generation
                 await self.generate(
                     prompt,
+                    messages=query.messages,
                     gen_queue=gen_queue,
                     gen_type=GenStart(gen_type="text"),
                     temperature=query.temperature,
@@ -1036,8 +1044,9 @@ class ChatGeneratorTransformers(ChatGenerator):
         )
 
         # Create streamer
-        streamer = transformers.TextIteratorStreamer(
-            tokenizer=self.tokenizer,
+        # streamer = transformers.TextIteratorStreamer(
+        streamer = CustomTextIteratorStreamer(
+            tokenizer=self.processor if self.processor else self.tokenizer,
             skip_prompt=True,
             skip_special_tokens=True,
         )
@@ -1049,7 +1058,7 @@ class ChatGeneratorTransformers(ChatGenerator):
                 **input_ids,
                 'generation_config': generation_config,
                 'streamer': streamer,
-                'tokenizer': self.tokenizer,
+                'tokenizer': self.processor if self.processor else self.tokenizer,
                 'logits_processor': logits_processor,
                 'prefix_allowed_tokens_fn': prefix_allowed_tokens_fn,
             }
@@ -1096,6 +1105,7 @@ class ChatGeneratorTransformers(ChatGenerator):
         banned_strings: list[str] | None = None,
         max_tokens: int = None,
         quiet=False,
+        messages: List = None,  # query.message for multimodal
         **kwargs,
     ) -> (str, GenerationStats):
 
@@ -1118,8 +1128,35 @@ class ChatGeneratorTransformers(ChatGenerator):
         else:
             raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
 
+        # vision support
+        image_inputs, video_inputs = None, None
+        if messages:
+            messages_as_dicts = [message.dict() for message in messages]
+
+            # convert OpenAI to qwen format -> TODO find more generalized method
+            for one_message in messages_as_dicts:
+                if isinstance(one_message["content"], list):
+                    for message in one_message["content"]:
+                        if message.get("type") == "image_url":
+                            message["type"] = "image"
+                            message["image"] = message["image_url"]["url"]
+                            message.pop("image_url", None)
+
+            image_inputs, video_inputs = process_vision_info(messages_as_dicts)
+
         # convert prompt to token id
-        input_ids = self.tokenizer(prompt, return_tensors="pt")     # TODO
+        if image_inputs is None and video_inputs is None:
+            input_ids = self.tokenizer(prompt, return_tensors="pt")
+        else:   # multimodal
+            input_ids = self.processor(
+                text=[prompt],
+                images=image_inputs,
+                #videos=video_inputs,       # TODO currently Llama doesnt support videos, comment out for now.
+                #padding=True,
+                add_special_tokens=False,
+                return_tensors="pt",
+            )
+
         self.validate_token_length(len(input_ids))
 
         # format enforcer

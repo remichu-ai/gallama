@@ -585,7 +585,16 @@ qwen-2-VL-2B:
       backend: transformers
       transformers_args:
         model_class: "transformers.Qwen2VLForConditionalGeneration"
-        tokenizer_class: "transformers.AutoProcessor"
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
+    - repo: "Qwen/Qwen2-VL-2B-Instruct"
+      branch: ['main']
+      quant: [16.0]
+      backend: transformers
+      transformers_args:
+        model_class: "transformers.Qwen2VLForConditionalGeneration"
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
 qwen-2-VL-7B:
   default_quant: 4.0
   default_cache_quant: Q4
@@ -597,7 +606,16 @@ qwen-2-VL-7B:
       backend: transformers
       transformers_args:
         model_class: "transformers.Qwen2VLForConditionalGeneration"
-        tokenizer_class: "transformers.AutoProcessor"
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
+    - repo: "Qwen/Qwen2-VL-7B-Instruct"
+      branch: ['main']
+      quant: [16.0]
+      backend: transformers
+      transformers_args:
+        model_class: "transformers.Qwen2VLForConditionalGeneration"
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
 qwen-2-VL-72B:
   default_quant: 4.0
   default_cache_quant: Q4
@@ -609,9 +627,32 @@ qwen-2-VL-72B:
       backend: transformers
       transformers_args:
         model_class: "transformers.Qwen2VLForConditionalGeneration"
-        tokenizer_class: "transformers.AutoProcessor"
-
-
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
+    - repo: "Qwen/Qwen2-VL-72B-Instruct-AWQ"
+      branch: ['main']
+      quant: [16.0]
+      backend: transformers
+      transformers_args:
+        model_class: "transformers.Qwen2VLForConditionalGeneration"
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
+llama-3.2-Vision-11B:
+  remark: "v3.1"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Llama3.2-VL
+  repo:
+    - repo: "unsloth/Llama-3.2-11B-Vision-Instruct"
+      branch: ['main']
+      quant: [4.0]
+      backend: transformers
+      transformers_args:
+        model_class: "transformers.MllamaForConditionalGeneration"
+        model_class_extra_kwargs:
+          attn_implementation: "sdpa"     # flash attention not supported yet
+        tokenizer_class: "transformers.AutoTokenizer"
+        processor_class: "transformers.AutoProcessor"
 
 # embedding model from here
 multilingual-e5-large-instruct:

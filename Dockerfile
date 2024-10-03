@@ -66,6 +66,7 @@ RUN pip install https://github.com/turboderp/exllamav2/releases/download/v0.1.8/
 #RUN pip install git+https://github.com/huggingface/transformers
 RUN pip install git+https://github.com/huggingface/transformers@21fac7abba2a37fae86106f87fcf9974fd1e3830
 #git clone https://github.com/PanQiWei/AutoGPTQ.git && cd AutoGPTQ
+#INSTALL_KERNELS=1 pip install git+https://github.com/casper-hansen/AutoAWQ.git
 #pip install -vvv --no-build-isolation -e .
 RUN pip install gallama
 
