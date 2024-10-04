@@ -566,6 +566,63 @@ qwen-2.5-7B:
       quant: [8.0]
       url: https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/blob/main/Qwen2.5-7B-Instruct-Q8_0.gguf
       backend: llama_cpp
+qwen-2.5-3B:
+  remark: "v2.5"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [8.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q8_0.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [6.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q6_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [5.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q5_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q4_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [3.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q3_K_XL.gguf
+      backend: llama_cpp
+qwen-2.5-1.5B:
+  remark: "v2.5"
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [8.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q8_0.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [6.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q6_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [5.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q5_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q4_K_L.gguf
+      backend: llama_cpp
 
 # embedding model from here
 multilingual-e5-large-instruct:
