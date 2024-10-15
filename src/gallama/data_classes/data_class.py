@@ -1,10 +1,12 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
 from typing import Optional, Literal, List, Dict, Union, Any, Type
 import asyncio
+import os
 import uuid
 import time
 import torch
 import re
+import base64
 
 
 class TextTag(BaseModel):
@@ -36,9 +38,75 @@ class ToolCall(BaseModel):
     index: Optional[int] = None
 
 
+class MultiModalTextContent(BaseModel):
+    type: Literal["text"]
+    text: str = ""
+
+
+class MultiModalImageContent(BaseModel):
+    class ImageDetail(BaseModel):
+        url: str = Field(description="URL, file path, or Data URI of the image")
+        detail: Optional[Literal["low", "high"]] = "high"
+
+        @validator('url')
+        def validate_image_url(cls, v):
+            if v.startswith('data:image/'):
+                return cls.validate_data_uri(v)
+            elif v.startswith('file://'):
+                return cls.validate_local_file(v)
+            elif v.startswith(('http://', 'https://')):
+                return cls.validate_http_url(v)
+            else:
+                raise ValueError("Invalid image reference format")
+
+        @classmethod
+        def validate_data_uri(cls, v):
+            data_uri_pattern = r'^data:image/(\w+);base64,(.+)$'
+            match = re.match(data_uri_pattern, v)
+            if not match:
+                raise ValueError("Invalid Data URI format")
+
+            image_format, base64_data = match.groups()
+            try:
+                decoded = base64.b64decode(base64_data)
+                headers = {
+                    'jpeg': b'\xff\xd8\xff',
+                    'png': b'\x89PNG\r\n\x1a\n',
+                    'gif': b'GIF87a',
+                    'gif': b'GIF89a',
+                    'webp': b'RIFF'
+                }
+                if not any(decoded.startswith(header) for header in headers.values()):
+                    raise ValueError("Invalid image format")
+            except base64.binascii.Error:
+                raise ValueError("Invalid base64 string")
+            return v
+
+        @classmethod
+        def validate_local_file(cls, v):
+            file_path = v[7:]  # Remove 'file://' prefix
+            if not os.path.isfile(file_path):
+                raise ValueError("File does not exist")
+            valid_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp']
+            if not any(file_path.lower().endswith(ext) for ext in valid_extensions):
+                raise ValueError("Invalid image file extension")
+            return v
+
+        @classmethod
+        def validate_http_url(cls, v):
+            try:
+                HttpUrl(v)
+            except ValueError:
+                raise ValueError("Invalid HTTP URL")
+            return v
+
+    type: Literal["image_url"]
+    image_url: ImageDetail
+
+
 class BaseMessage(BaseModel):
     role: Literal['system', 'user', 'assistant', 'tool']
-    content: Optional[str] = ""
+    content: Optional[Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]] = ""
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
 
@@ -429,6 +497,8 @@ class ModelParser(BaseModel):
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
 
+    # transformers specific
+    transformers_args: Optional[Dict] = None
 
 
     # dont allow non recognizable option
@@ -606,7 +676,7 @@ class ModelDownloadSpec(BaseModel):
     """ dataclass for model download"""
     model_name: str
     quant: Optional[float] = None
-    backend: Literal["exllama", "llama_cpp", "embedding"] = "exllama"
+    backend: Literal["exllama", "llama_cpp", "embedding", "transformers"] = "exllama"
 
     # disable protected_namespaces due to it field use model_ in the name
     model_config = ConfigDict(extra="forbid", protected_namespaces=())

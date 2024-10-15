@@ -63,7 +63,11 @@ RUN pip install flash-attn==2.6.3 --no-build-isolation
 #RUN cd exllamav2 && pip install -r requirements.txt && pip install .
 RUN pip install -r requirements.txt
 RUN pip install https://github.com/turboderp/exllamav2/releases/download/v0.1.8/exllamav2-0.1.8+cu121.torch2.3.1-cp311-cp311-linux_x86_64.whl
-
+#RUN pip install git+https://github.com/huggingface/transformers
+RUN pip install git+https://github.com/huggingface/transformers@21fac7abba2a37fae86106f87fcf9974fd1e3830
+#git clone https://github.com/PanQiWei/AutoGPTQ.git && cd AutoGPTQ
+#INSTALL_KERNELS=1 pip install git+https://github.com/casper-hansen/AutoAWQ.git
+#pip install -vvv --no-build-isolation -e .
 RUN pip install gallama
 
 # Clean up

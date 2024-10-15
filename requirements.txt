@@ -1,7 +1,10 @@
 packaging
 ninja
 torch>=2.2.0
+torchvision
 accelerate
+autoawq
+optimum
 pydantic
 pytest
 httpx
@@ -25,3 +28,4 @@ httpx
 psutil
 formatron>=0.4.4
 referencing
+qwen_vl_utils

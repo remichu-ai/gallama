@@ -1,7 +1,7 @@
 import json
 import yaml
-from typing import List, Dict
-from gallama.data_classes.data_class import BaseMessage, ChatMLQuery, ToolCall
+from typing import List, Dict, Union
+from gallama.data_classes.data_class import BaseMessage, ChatMLQuery, ToolCall, MultiModalTextContent, MultiModalImageContent
 from pydantic import BaseModel
 from copy import deepcopy
 from gallama.utils.utils import parse_xml_to_dict
@@ -76,6 +76,15 @@ class PromptEngine:
 
     def get_tool_call_end_token(self):
         return self.model_prompt.get("tool_call_start", "")
+
+    def get_vision_start_token(self):
+        return self.model_prompt.get("vision_start", "")
+
+    def get_vision_end_token(self):
+        return self.model_prompt.get("vision_end", "")
+
+    def get_image_pad_token(self):
+        return self.model_prompt.get("image_pad", "")
 
     def _get_role_token(self, role, token_type: str):
         if token_type == "start":
@@ -233,6 +242,37 @@ class PromptEngine:
         # logger.debug("overall regroup:\n" + str(regrouped_msg))
         return regrouped_msg
 
+    def convert_multimodal_content_list_to_string(self, content: List[Union[MultiModalTextContent, MultiModalImageContent]]) -> str:
+        """
+        convert multimodal content list to string
+        e.g.
+            "content": [
+                {
+                    "type": "image",
+                    "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+                },
+                {
+                    "type": "text",
+                    "text": "Describe this image."
+                },
+            ]
+        to:
+            <|vision_start|><|image_pad|><|vision_end|>Describe this image.
+        """
+
+        content_str = ""
+
+        for chunk in content:
+            if isinstance(chunk, MultiModalTextContent):
+                content_str += chunk.text
+            elif isinstance(chunk, MultiModalImageContent):
+                content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
+            else:
+                raise ValueError("Unexpected content type ")
+
+        return content_str
+
+
     def get_prompt(
         self,
         query: ChatMLQuery,
@@ -273,6 +313,7 @@ class PromptEngine:
         # End of Thinking Example.
         # """).strip()
 
+        msg_list_copy = []
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
 
@@ -280,7 +321,17 @@ class PromptEngine:
         if query.artifact != "No":
             prompt += ARTIFACT_SYSTEM_PROMPT
 
-        msg_groups = self._regroup_msg(query.messages)
+        # standardize multimodal message
+        for message in query.messages:
+            if isinstance(message.content, list):
+                msg_copy = deepcopy(message)
+                msg_copy.content = self.convert_multimodal_content_list_to_string(msg_copy.content)
+                msg_list_copy.append(deepcopy(msg_copy))
+            else:
+                msg_list_copy.append(deepcopy(message))
+
+        # group message together for the same role
+        msg_groups = self._regroup_msg(msg_list_copy)
 
         # concat all msg
         for idx, msg_group in enumerate(msg_groups):

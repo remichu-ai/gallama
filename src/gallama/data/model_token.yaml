@@ -70,6 +70,28 @@ Llama3.1:
   leading_prompt_token: '\n<|start_header_id|>assistant<|end_header_id|>\n'
   eos_token_list: ["<|begin_of_text|>","<|end_of_text|>", "<|start_header_id|>", "<|end_header_id|>", "<|eom_id|>", "<|eot_id|>"]
 
+Llama3.2-VL:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: '<|begin_of_text|>'
+  conversation_end: '\n'
+  system_start: '\n<|start_header_id|>system<|end_header_id|>\n'
+  system_end: '<|eot_id|>\n'
+  user_start: '\n<|start_header_id|>user<|end_header_id|>\n'
+  user_end: '<|eot_id|>\n'
+  assistant_start: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  assistant_end: '<|eot_id|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: '\n<|python_tag|>\n'
+  tool_result_end: '<|eom_id|>\n'
+  vision_start: ''
+  vision_end: ''
+  image_pad: '<|image|>'
+  video_pad: ''
+  leading_prompt_token: '\n<|start_header_id|>assistant<|end_header_id|>\n'
+  eos_token_list: ["<|begin_of_text|>","<|end_of_text|>", "<|start_header_id|>", "<|end_header_id|>", "<|eom_id|>", "<|eot_id|>"]
+
 Qwen2:
   system_msg_enabled: true
   tool_enabled: false
@@ -85,6 +107,28 @@ Qwen2:
   tool_end: ''
   tool_result_start: ''
   tool_result_end: ''
+  leading_prompt_token: '<|im_start|>assistant\n'
+  eos_token_list: ["<|im_end|>", "<|endoftext|>", "<|im_start|>"]
+
+Qwen2-VL:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: ''
+  conversation_end: '\n'
+  system_start: '<|im_start|>system\n'
+  system_end: '<|im_end|>\n'
+  user_start: '<|im_start|>user\n'
+  user_end: '<|im_end|>\n'
+  assistant_start: '<|im_start|>assistant\n'
+  assistant_end: '<|im_end|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  vision_start: '<|vision_start|>'
+  vision_end: '<|vision_end|>'
+  image_pad: '<|image_pad|>'
+  video_pad: '<|video_pad|>'
   leading_prompt_token: '<|im_start|>assistant\n'
   eos_token_list: ["<|im_end|>", "<|endoftext|>", "<|im_start|>"]
 

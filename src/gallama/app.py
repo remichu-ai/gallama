@@ -31,6 +31,8 @@ from gallama.api_response.chat_response import (
     chat_completion_response_artifact_stream,
     chat_completion_response_artifact
 )
+import concurrent.futures
+from functools import partial
 from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
 from gallama.logger.logger import get_logger
@@ -51,6 +53,11 @@ try:
 except:
     # optional dependency
     ExLlamaV2Cache_TP = None
+
+try:
+    from gallama.backend.chatgenerator import ChatGeneratorTransformers
+except:
+    ChatGeneratorTransformers =  None
 
 
 # Add this after your imports to clear logging from 3rd party module
@@ -150,12 +157,26 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             logger.info(f"thinking is used with returnThinking set to {query.return_thinking}")
 
         # start the generation task
-        asyncio.create_task(llm.chat(
+        asyncio.create_task(
+            llm.chat(
             query=query,
             prompt_eng=prompt_eng,
             gen_queue=gen_queue,
             request=request,
         ))
+
+
+        # partial_func = partial(llm.chat,
+        #     query=query,
+        #     prompt_eng=prompt_eng,
+        #     gen_queue=gen_queue,
+        #     request=request
+        # )
+        # with concurrent.futures.ThreadPoolExecutor() as pool:
+        #     await asyncio.get_running_loop().run_in_executor(
+        #         executor=pool,
+        #         func=partial_func,
+        #     )
 
         # send the response to client
         if query.stream:
@@ -279,6 +300,7 @@ def load_model(model_spec: ModelParser):
         chat_generator_dict = {
             "exllama": ChatGenerator,
             "llama_cpp": ChatGeneratorLlamaCpp,
+            "transformers": ChatGeneratorTransformers,
         }
 
         chatGenerator_to_use = chat_generator_dict[llm_base.backend]

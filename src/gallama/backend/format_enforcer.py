@@ -25,7 +25,7 @@ class FormatEnforcer:
 
     @staticmethod
     def get_default_engine(
-        backend:str = "exllama",
+        backend: Literal["exllama", "llama_cpp", "transformers"] = "exllama",
         preference: Literal["auto", "formatron", "lm-format-enforcer"] = "auto",
     ) -> Literal["formatron", "lm_enforcer"]:
         """ this function will select the format enforcer engine to use if not selected by user"""
@@ -36,7 +36,7 @@ class FormatEnforcer:
         # formatron doesnt support llama cpp at the moment
         if backend == "llama_cpp":
             return "lm_enforcer"
-        elif backend == "exllama":
+        elif backend == "exllama" or backend=="transformers":
             # use formatron if it is available if it is exllama
             if preference == "auto":
                 if FormatterBuilder:
@@ -60,7 +60,7 @@ class FormatEnforcer:
         regex_pattern: str,
         filter_engine: Literal[
         "formatron", "lm_enforcer"] = None,
-        backend: str = "exllama",
+        backend: Literal["exllama", "llama_cpp", "transformers"] = "exllama",
         preference: Literal["auto", "formatron", "lm-format-enforcer"] = "auto",
     ) -> FormatterBuilder | TokenEnforcerTokenizerData:
 
@@ -85,7 +85,7 @@ class FormatEnforcer:
         pydantic_model_lmfe: BaseModel,
         pydantic_model_formatron: ClassSchema,
         filter_engine: Literal["formatron", "lm_enforcer"] = None,
-        backend: Literal["llama_cpp", "exllama"] = "exllama",
+        backend: Literal["llama_cpp", "exllama", "transformers"] = "exllama",
         preference: Literal["auto", "formatron", "lm-format-enforcer"] = "auto",
     ) -> FormatterBuilder | TokenEnforcerTokenizerData:
         """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
