@@ -442,7 +442,6 @@ qwen-2.5-72B:
       url: https://huggingface.co/bartowski/Qwen2.5-72B-Instruct-GGUF/tree/main/Qwen2.5-72B-Instruct-Q8_0
       backend: llama_cpp
 qwen-2.5-32B:
-  remark: "v2.5"
   default_quant: 4.65
   default_cache_quant: Q4
   prompt_template: Qwen2
@@ -497,7 +496,6 @@ qwen-2.5-32B:
       url: https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/blob/main/Qwen2.5-32B-Instruct-Q8_0.gguf
       backend: llama_cpp
 qwen-2.5-14B:
-  remark: "v2.5"
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Qwen2
@@ -536,7 +534,6 @@ qwen-2.5-14B:
       quant: [4.0]
       backend: transformers
 qwen-2.5-7B:
-  remark: "v2.5"
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Qwen2
@@ -570,15 +567,70 @@ qwen-2.5-7B:
       quant: [8.0]
       url: https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/blob/main/Qwen2.5-7B-Instruct-Q8_0.gguf
       backend: llama_cpp
+qwen-2.5-3B:
+  default_quant: 6.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [8.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q8_0.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [6.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q6_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [5.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q5_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q4_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
+      branch: ['main']
+      quant: [3.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/blob/main/Qwen2.5-3B-Instruct-Q3_K_XL.gguf
+      backend: llama_cpp
     - repo: "Qwen/Qwen2.5-7B-Instruct-AWQ"
       branch: ['main']
       quant: [4.0]
       backend: transformers
+
+qwen-2.5-1.5B:
+  default_quant: 6.0
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [8.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q8_0.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [6.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q6_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [5.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q5_K_L.gguf
+      backend: llama_cpp
+    - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
+      branch: ['main']
+      quant: [4.0]
+      url: https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/main/Qwen2.5-1.5B-Instruct-Q4_K_L.gguf
+      backend: llama_cpp
+
 qwen-2-VL-2B:
   default_quant: 4.0
   default_cache_quant: Q4
-  prompt_template: Qwen2
-  repo:
+  prompt_template: Qwen2-VL
     - repo: "Qwen/Qwen2-VL-2B-Instruct-AWQ"
       branch: ['main']
       quant: [4.0]
@@ -598,7 +650,7 @@ qwen-2-VL-2B:
 qwen-2-VL-7B:
   default_quant: 4.0
   default_cache_quant: Q4
-  prompt_template: Qwen2
+  prompt_template: Qwen2-VL
   repo:
     - repo: "Qwen/Qwen2-VL-7B-Instruct-AWQ"
       branch: ['main']
@@ -619,7 +671,7 @@ qwen-2-VL-7B:
 qwen-2-VL-72B:
   default_quant: 4.0
   default_cache_quant: Q4
-  prompt_template: Qwen2
+  prompt_template: Qwen2-VL
   repo:
     - repo: "Qwen/Qwen2-VL-72B-Instruct-AWQ"
       branch: ['main']
@@ -653,6 +705,7 @@ llama-3.2-Vision-11B:
           attn_implementation: "sdpa"     # flash attention not supported yet
         tokenizer_class: "transformers.AutoTokenizer"
         processor_class: "transformers.AutoProcessor"
+
 
 # embedding model from here
 multilingual-e5-large-instruct:
