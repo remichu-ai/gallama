@@ -606,6 +606,7 @@ qwen-2.5-1.5B:
   default_quant: 6.0
   default_cache_quant: Q4
   prompt_template: Qwen2
+  repo:
     - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
       branch: ['main']
       quant: [8.0]
@@ -631,6 +632,7 @@ qwen-2-VL-2B:
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Qwen2-VL
+  repo:
     - repo: "Qwen/Qwen2-VL-2B-Instruct-AWQ"
       branch: ['main']
       quant: [4.0]

@@ -1058,7 +1058,7 @@ class ChatGeneratorTransformers(ChatGenerator):
                 **input_ids,
                 'generation_config': generation_config,
                 'streamer': streamer,
-                'tokenizer': self.processor if self.processor else self.tokenizer,
+                'tokenizer': self.tokenizer,
                 'logits_processor': logits_processor,
                 'prefix_allowed_tokens_fn': prefix_allowed_tokens_fn,
             }
