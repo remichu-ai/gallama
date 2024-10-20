@@ -168,6 +168,9 @@ class ToolForce(BaseModel):
 # """
 
 class ChatMLQuery(BaseModel):
+    # Configure the model to forbid extra fields
+    model_config = ConfigDict(extra="forbid")
+
     class ResponseFormat(BaseModel):
         type: Literal["text", "json_object"]
 
