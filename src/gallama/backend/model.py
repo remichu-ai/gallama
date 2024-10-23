@@ -3,6 +3,8 @@ import torch
 from typing import List, Dict
 from gallama.logger.logger import logger
 from gallama.data_classes.data_class import ModelParser
+from importlib import import_module
+import transformers
 
 try:
     from exllamav2 import (
@@ -67,6 +69,8 @@ class Model:
         self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
 
+        # transformers specific arguments
+        self.transformers_args = model_config.get("transformers_args") or {}
 
         # draft model is via cli only
         self.draft_model_id = draft_model_config.get("model_id")
@@ -77,7 +81,7 @@ class Model:
         assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # load model and tokenizer; cache is for exllamav2
-        self.model, self.tokenizer, self.cache, self.draft_model, self.draft_cache = self.load_model()
+        self.model, self.tokenizer, self.cache, self.draft_model, self.draft_cache, self.processor = self.load_model()
 
         # TODO, to auto detect
         # get the eos_token_str by merging the default config with anything set by user
@@ -87,7 +91,7 @@ class Model:
 
 
     def load_model(self):
-        model, tokenizer, cache, draft_model, draft_cache = None, None, None, None, None
+        model, tokenizer, cache, draft_model, draft_cache, processor = None, None, None, None, None, None
 
         if self.backend=="exllama":
             model, tokenizer, cache = self.load_model_exllama(
@@ -123,10 +127,36 @@ class Model:
                 gpus=self.gpus,
                 reserve_vram=self._reserve_vram,
                 tensor_parallel=self.tensor_parallel,
-                draf_model_id=self.draft_model_id
+                draft_model_id=self.draft_model_id
             )
 
-        return model, tokenizer, cache, draft_model, draft_cache
+        elif self.backend=="transformers":
+            # processor is for multimodal
+            model, tokenizer, cache, processor = self.load_model_transformers(
+                model_id=self.model_id,
+                backend=self.backend,
+                max_seq_len=self.max_seq_len,
+                cache_size=self.cache_size,
+                cache_quant=self.cache_quant,
+                gpus=self.gpus,
+                reserve_vram=self._reserve_vram,
+                tensor_parallel=self.tensor_parallel,
+                draft_model_id=self.draft_model_id
+            )
+
+
+        else:
+            raise "Invalid backend"
+
+        return model, tokenizer, cache, draft_model, draft_cache, processor
+
+    @staticmethod
+    def is_flash_attention_installed() -> (bool, str):
+        try:
+            import flash_attn
+            return True, flash_attn.__version__
+        except ImportError:
+            return False, None
 
 
     def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False):
@@ -198,7 +228,7 @@ class Model:
 
 
     def load_model_llama_cpp(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None,
-                           tensor_parallel=False, draf_model_id=None):
+                           tensor_parallel=False, draft_model_id=None):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
 
@@ -236,6 +266,102 @@ class Model:
         tokenizer = model
 
         return model, tokenizer, cache
+
+
+    def load_model_transformers(
+        self,
+        model_id,
+        backend,
+        cache_size,
+        cache_quant,
+        gpus,
+        reserve_vram,
+        max_seq_len=None,
+        tensor_parallel=False,
+        draft_model_id=None
+    ):
+        """This function return the model and its tokenizer"""
+        logger.info("Loading model: " + model_id)
+
+        cache = None  # in case not a backend with separate cache like llama cpp
+        tokenizer = None
+        processor = None
+
+        # helper function for dynamic class loading
+        def get_class(class_string):
+            module_name, class_name = class_string.rsplit('.', 1)
+            module = import_module(module_name)
+            return getattr(module, class_name)
+
+        # arguments for model loading
+        model_kargs = {
+            'pretrained_model_name_or_path': self.model_id,
+            'torch_dtype' : "auto",
+            'device_map': "auto",
+        }
+
+        tokenizer_args = {
+            'pretrained_model_name_or_path': self.model_id,
+        }
+
+        # check if flash attention enabled
+        flash_installed, flash_version = self.is_flash_attention_installed()
+        if flash_installed:
+            model_kargs["attn_implementation"]  = "flash_attention_2"
+
+
+        # determine the class to use for loading
+        if self.transformers_args.get('model_class'):
+            model_class = get_class(self.transformers_args['model_class'])
+
+            model_extra_kwargs = self.transformers_args.get('model_class_extra_kwargs')
+            if model_extra_kwargs:
+                model_kargs.update(model_extra_kwargs)      # update any extra argument
+        else:
+            model_class = transformers.AutoModelForCausalLM
+
+        if self.transformers_args.get('tokenizer_class'):
+            tokenizer_class = get_class(self.transformers_args['tokenizer_class'])
+        else:
+            tokenizer_class = transformers.AutoTokenizer
+
+        if self.transformers_args.get('processor_class'):
+            processor_class = get_class(self.transformers_args['processor_class'])
+        else:
+            processor_class = None
+
+        # TODO to add equivalent support for all exllama option
+        # currently speculative decoding not supported by model specific for LLama CPP python
+        if isinstance(gpus, str) and gpus == "auto":
+            logger.info(model_kargs)
+            model = model_class.from_pretrained(**model_kargs)
+            tokenizer = tokenizer_class.from_pretrained(**tokenizer_args)
+            if processor_class:
+                processor = processor_class.from_pretrained(**tokenizer_args)
+
+        # elif isinstance(gpus, list):  # user specify the gpus split
+        #     model = Llama(
+        #         model_path=self.model_id,
+        #         n_gpu_layers=-1,
+        #         seed=1,
+        #         n_ctx=self.max_seq_len if self.max_seq_len else 0,  # Uncomment to increase the context window
+        #         flash_attn=True,
+        #         offload_kqv=True,
+        #         tensor_split=gpus,
+        #         # draf_model_id=draf_model_id,
+        #     )
+        else:
+            raise ValueError("Device map should be either 'auto', 'gpu' split")
+
+        # set max_seq_len based on model
+        try:
+            self.max_seq_len = model.config.max_position_embeddings
+        except:
+            # for llama 3.2
+            self.max_seq_len = model.config.text_config.max_position_embeddings
+
+
+        return model, tokenizer, cache, processor
 
 
     @property

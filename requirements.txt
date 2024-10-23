@@ -1,7 +1,10 @@
 packaging
 ninja
 torch>=2.2.0
+torchvision
 accelerate
+autoawq
+optimum
 pydantic
 pytest
 httpx
@@ -16,7 +19,7 @@ lxml
 infinity-emb
 colorama
 zmq
-transformers
+#git+https://github.com/huggingface/transformers.git@c42b3223db0fc24ff9a694f19e6c78faf3ac58a1#egg=transformers
 pyyaml
 rich
 pyzmq
@@ -25,3 +28,4 @@ httpx
 psutil
 formatron>=0.4.4
 referencing
+qwen_vl_utils
