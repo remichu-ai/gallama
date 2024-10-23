@@ -18,6 +18,7 @@ Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a re
    Head down to the installation guide at the bottom of this page.
    Then check out the [Examples_Notebook.ipynb](https://github.com/remichu-ai/gallama/blob/main/examples/Examples_Notebook.ipynb) in the examples folder
    A simple python streamlit frontend chat UI code is included in the examples folder [streamlit](https://github.com/remichu-ai/gallama/blob/main/examples/streamlit_chatbot.py)
+   Or checkout [GallamaUI](https://github.com/remichu-ai/gallamaUI.git) 
 
 # Features
 
@@ -50,35 +51,38 @@ gallama list available
 
 **LLM Models**
 
-| Model           | Backend    | Available Quantizations (bpw)                                                 |
-|-----------------|------------|-------------------------------------------------------------------------------|
-| llama-3.1-8B    | exllama    | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                               |
-|                 | llama_cpp  | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                      |
-| llama-3.1-70B   | exllama    | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`                               |
-|                 | llama_cpp  | `3.0`, `4.0`, `5.0`                                                           |
-| mistral         | exllama    | `2.8`, `3.0`, `4.0`, `4.5`, `5.0`, `6.0`                                      |
-|                 | llama_cpp  | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                      |
-| mistral-large   | exllama    | `2.3`, `2.5`, `2.75`, `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `4.5`, `4.75`, `5.0`, `6.0` |
-| mistral-nemo    | exllama    | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                        |
-|                 | llama_cpp  | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
-| codestral       | exllama    | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                     |
-|                 | llama_cpp  | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                      |
-| gemma-2-9B      | exllama    | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `5.5`, `6.0`, `8.0`                 |
-| gemma-2-27B     | exllama    | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                               |
-| qwen-2-1.5B     | exllama    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
-|                 | llama_cpp  | `4.0`, `5.0`, `6.0`, `8.0`                                                    |
-| qwen-2-7B       | exllama    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
-| qwen-2-72B      | exllama    | `3.0`, `3.5`, `4.0`, `4.25`, `4.65`, `5.0`, `6.0`, `8.0`                      |
-|                 | llama_cpp  | `2.0`, `3.0`, `4.0`                                                           |
-| yi-1.5-34B      | exllama    | `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `5.0`, `6.0`, `6.5`, `8.0`               |
-| qwen-2.5-72B    | exllama    | `2.2`, `3.0`, `3.5`, `4.25`, `4.65`, `5.0`, `6.5`, `8.0`                      |
-|                 | llama_cpp  | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                      |
-| qwen-2.5-32B    | exllama    | `3.0`, `4.0`, `4.65`, `5.0`, `6.0`, `8.0`                                     |
-|                 | llama_cpp  | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
-| qwen-2.5-14B    | exllama    | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                     |
-|                 | llama_cpp  | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
-| qwen-2.5-7B     | exllama    | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                            |
-|                 | llama_cpp  | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                             |
+| Model         | Backend      | Available Quantizations (bpw)                                                          |
+|---------------|--------------|----------------------------------------------------------------------------------------|
+| llama-3.1-8B  | exllama      | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                        |
+|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
+| llama-3.1-70B | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`                                        |
+|               | llama_cpp    | `3.0`, `4.0`, `5.0`                                                                    |
+| mistral       | exllama      | `2.8`, `3.0`, `4.0`, `4.5`, `5.0`, `6.0`                                               |
+|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
+| mistral-large | exllama      | `2.3`, `2.5`, `2.75`, `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `4.5`, `4.75`, `5.0`, `6.0` |
+| mistral-nemo  | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                 |
+|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| codestral     | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
+|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
+| gemma-2-9B    | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `5.5`, `6.0`, `8.0`                          |
+| gemma-2-27B   | exllama      | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                        |
+| qwen-2-1.5B   | exllama      | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+|               | llama_cpp    | `4.0`, `5.0`, `6.0`, `8.0`                                                             |
+| qwen-2-7B     | exllama      | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| qwen-2-72B    | exllama      | `3.0`, `3.5`, `4.0`, `4.25`, `4.65`, `5.0`, `6.0`, `8.0`                               |
+|               | llama_cpp    | `2.0`, `3.0`, `4.0`                                                                    |
+| yi-1.5-34B    | exllama      | `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `5.0`, `6.0`, `6.5`, `8.0`                        |
+| qwen-2.5-72B  | exllama      | `2.2`, `3.0`, `3.5`, `4.25`, `4.65`, `5.0`, `6.5`, `8.0`                               |
+|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
+| qwen-2.5-32B  | exllama      | `3.0`, `4.0`, `4.65`, `5.0`, `6.0`, `8.0`                                              |
+|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| qwen-2.5-14B  | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
+|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| qwen-2.5-7B   | exllama      | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                                     |
+|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| qwen-2-VL-2B  | transformers | `4.0`, `16.0`                                                                          |
+| qwen-2-VL-7B  | transformers | `4.0`, `16.0`                                                                          |
+| qwen-2-VL-72B | transformers | `4.0`, `16.0`                                                                          |
 
 
 **Embedding Models:**
@@ -527,3 +531,29 @@ Customize the model launch using various parameters. Available parameters for th
    ```
 8. Others
    If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
+
+# NEW - Vision Model
+
+From `gallama` version 0.0.7, there is experimental support for Vision model. Currently only Qwen 2 VL series of model is supported.
+Currently, both exllamaV2 and llama.cpp do not support Vision model yet. Hence, this is achieved by running `transformers` with the use of awq for quantization.
+
+As of this release, the transformers build in pip is not yet updated with bugfix for Qwen 2 VL, hence you will need to install the latest code from github.
+This is already be handled in the requirements.txt.
+
+After installation you can download by following commands (choose a version that fit your VRAM):
+```shell
+# 2B model
+gallama download qwen-2-VL-2B:4.0 --backend=transformers
+gallama run qwen-2-VL-2B_transformers
+
+# 7B model
+gallama download qwen-2-VL-7B:4.0 --backend=transformers
+gallama run qwen-2-VL-7B_transformers
+
+# 72B model
+gallama download qwen-2-VL-72B:4.0 --backend=transformers
+gallama run qwen-2-VL-72B_transformers
+```
+
+If you need an UI to run it, check out Gallama UI:
+![alt_text](https://github.com/remichu-ai/gallamaUI/blob/main/doc/gen.gif)
