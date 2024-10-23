@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gallama"
 version = "0.0.7"
-description = "An oppinionated Llama Server engine with focus on agentic task"
+description = "An opinionated Llama Server engine with a focus on agentic tasks"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
 readme = "README.md"
@@ -29,9 +29,6 @@ exclude = ["tests*"]
 [tool.setuptools.package-data]
 "gallama" = ["data/*", "data/*/*"]
 
-[options.package_data]
-"*" = ["*.yml"]
-
 [tool.setuptools]
 include-package-data = true
 
@@ -44,3 +41,9 @@ profile = "black"
 
 [tool.mypy]
 ignore_missing_imports = true
+
+project.dependencies = [
+    "transformers @ git+https://github.com/huggingface/transformers.git@c42b3223db0fc24ff9a694f19e6c78faf3ac58a1"
+]
+
+
