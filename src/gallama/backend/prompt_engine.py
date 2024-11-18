@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
 from ..data import ARTIFACT_SYSTEM_PROMPT
-
+import uuid
 
 class PromptEngine:
     def __init__(self, prompt_format: str):
@@ -242,7 +242,11 @@ class PromptEngine:
         # logger.debug("overall regroup:\n" + str(regrouped_msg))
         return regrouped_msg
 
-    def convert_multimodal_content_list_to_string(self, content: List[Union[MultiModalTextContent, MultiModalImageContent]]) -> str:
+    def convert_multimodal_content_list_to_string(
+        self,
+        content: List[Union[MultiModalTextContent, MultiModalImageContent]],
+        exllama_vision_token: bool = False,     # to use placeholder token for exllama for not. TODO - refractor
+    ) -> str:
         """
         convert multimodal content list to string
         e.g.
@@ -266,7 +270,11 @@ class PromptEngine:
             if isinstance(chunk, MultiModalTextContent):
                 content_str += chunk.text
             elif isinstance(chunk, MultiModalImageContent):
-                content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
+                if not exllama_vision_token:
+                    content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
+                else:
+                    # use a standard token as place holder, TODO - refractor
+                    content_str += "{{IMG-" + f"{uuid.uuid4().hex}" + "}}"
             else:
                 raise ValueError("Unexpected content type ")
 
@@ -282,6 +290,7 @@ class PromptEngine:
         use_thinking: bool = True,
         thinking_template: str = None,
         thinking_response: str = None,
+        exllama_vision_token: bool = False,    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
         #prompt_mode: Literal["auto"]
     ) -> str:
 
@@ -325,7 +334,10 @@ class PromptEngine:
         for message in query.messages:
             if isinstance(message.content, list):
                 msg_copy = deepcopy(message)
-                msg_copy.content = self.convert_multimodal_content_list_to_string(msg_copy.content)
+                msg_copy.content = self.convert_multimodal_content_list_to_string(
+                    content=msg_copy.content,
+                    exllama_vision_token=exllama_vision_token,
+                )
                 msg_list_copy.append(deepcopy(msg_copy))
             else:
                 msg_list_copy.append(deepcopy(message))

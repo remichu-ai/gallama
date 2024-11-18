@@ -4,6 +4,7 @@ import re
 import asyncio
 import uuid
 import weakref
+from logging import raiseExceptions
 from typing import List, Union, Literal, Optional, AsyncGenerator
 from fastapi import HTTPException, Request
 from .model import Model
@@ -27,6 +28,7 @@ from functools import partial
 import concurrent.futures
 from qwen_vl_utils import process_vision_info
 from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
+from ..utils.utils import get_image
 
 try:
     from formatron.formatter import FormatterBuilder
@@ -184,6 +186,7 @@ class ChatGenerator(Model):
         prompt = prompt_eng.get_prompt(
             query,
             thinking_template=query.thinking_template,
+            exllama_vision_token=(self.backend=="exllama")
         )
 
         formatter_prefix_regex = self.formatter.regex(
@@ -233,6 +236,7 @@ class ChatGenerator(Model):
                 query,
                 thinking_template=query.thinking_template,
                 thinking_response=thinking_response,
+                exllama_vision_token=(self.backend=="exllama")
             )
 
         # 1st response if there is regex to match the regex pattern
@@ -334,6 +338,7 @@ class ChatGenerator(Model):
             pydantic_tool_dict=tool_handler.tool_dict,
             thinking_template=tool_thinking_formatted,
             answer_format_schema=False,
+            exllama_vision_token=(self.backend == "exllama")
             # leading_prompt=leading_prompt,
         )
 
@@ -472,6 +477,7 @@ arg_dict = """
                     'Now i will convert my answer above into "functions_calling" format by continuing this continue this code.\n'
                     f"{tool_as_code_prompt}"
                 ),
+                exllama_vision_token=(self.backend=="exllama"),
             )
             logger.info(prompt)
 
@@ -492,7 +498,10 @@ arg_dict = """
 
         # NOT USE TOOL
         if not use_tool_bool:
-            prompt = prompt_eng.get_prompt(query)
+            prompt = prompt_eng.get_prompt(
+                query,
+                exllama_vision_token=(self.backend == "exllama"),
+            )
 
             if query.tool_choice == "auto":
                 # Normal generation
@@ -603,9 +612,29 @@ arg_dict = """
         banned_strings: list[str] | None = None,
         max_tokens: int = None,
         quiet=False,
+        messages: List = None,  # query.message for multimodal
         **kwargs,
     ) -> (str, GenerationStats):
         try:
+
+            def extract_uuid_strings(text):
+                """
+                Extract all strings matching the format '{{IMG-<uuid-like-hex>}}'
+
+                Args:
+                    text (str): Input string to search for matching patterns
+
+                Returns:
+                    list: List of all matching strings found in the input text
+                """
+                # Pattern to match strings like '{{IMG-<uuid-hex>}}'
+                pattern = r'\{\{IMG-[0-9a-f]{32}\}\}'
+
+                # Find all matching occurrences in the text
+                matches = re.findall(pattern, text)
+
+                return matches
+
             # ensure that generator is initialized
             if self.pipeline is None:
                 self.pipeline = await self._get_pipeline_async()
@@ -633,8 +662,56 @@ arg_dict = """
             # get generation setting
             settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
+            # vision support
+            # convert image token together with image
+            image_inputs, video_inputs = None, None
+            image_list = []     # a list to store the images
+            vision_required = False     # to mark if vision chat is required for this message
+            if messages:
+                messages_as_dicts = [message.dict() for message in messages]
+
+                for one_message in messages_as_dicts:
+                    if isinstance(one_message["content"], list):
+                        for message in one_message["content"]:
+                            if message.get("type") == "image_url":
+                                vision_required = True
+                                image_list.append(message["image_url"]["url"])
+
+            image_embeddings = None
+            if vision_required and self.processor:
+                image_token_list = extract_uuid_strings(prompt)     # extract all the placeholder token used for img placeholder
+
+                assert len(image_token_list) == len(
+                    image_list), f"Mismatch in image tokens and images: {len(image_token_list)} tokens vs {len(image_list)} images"
+
+                # Convert image(s) to embeddings
+                image_embeddings = [
+                    self.processor.get_image_embeddings(
+                        model=self.model,
+                        tokenizer=self.tokenizer,
+                        image=img,
+                        text_alias=alias,
+                    )
+                    for (alias, img) in zip(image_token_list, [get_image(url=url) for url in image_list])
+                ]
+            elif vision_required and not self.processor:
+                raise Exception("This model do not support vision")
+            else:
+                # vision not required
+                pass
+
             # convert prompt to token id
-            input_ids = self.tokenizer.encode(prompt)
+            if vision_required:
+                input_ids = self.tokenizer.encode(
+                    prompt,
+                    encode_special_tokens=True,
+                    embeddings = image_embeddings,
+                )
+            else:
+                input_ids = self.tokenizer.encode(
+                    prompt,
+                )
+
             self.validate_token_length(len(input_ids[0]))
 
             # format enforcer
@@ -682,17 +759,26 @@ arg_dict = """
                 self.max_seq_len - len(input_ids[0]),
                 max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
 
+            # for backward support for older version without vision
+            argument_list = {
+                "generator" : self.pipeline.generator,
+                "input_ids" : input_ids,
+                "max_new_tokens" : max_tokens_to_use,
+                "gen_settings" : settings,
+                "stop_conditions" : stop_conditions,  # self.eos_token_id if self.eos_token_id else None,
+                "banned_strings" : banned_strings,
+                "decode_special_tokens" : True,
+                "filters" : filters,
+                "token_healing" : True,
+                "identifier" : job_id,
+            }
+
+            # add image embedding
+            if vision_required:
+                argument_list["embeddings"] = image_embeddings
+
             job = ExLlamaV2DynamicJobAsync(
-                generator=self.pipeline.generator,
-                input_ids=input_ids,
-                max_new_tokens=max_tokens_to_use,
-                gen_settings=settings,
-                stop_conditions=stop_conditions,  # self.eos_token_id if self.eos_token_id else None,
-                banned_strings=banned_strings,
-                decode_special_tokens=True,
-                filters=filters,
-                token_healing=True,
-                identifier=job_id,
+                **argument_list
             )
 
             # break the pipeline if it takes longer than 1s for 1 iteration
@@ -1134,6 +1220,20 @@ class ChatGeneratorTransformers(ChatGenerator):
             messages_as_dicts = [message.dict() for message in messages]
 
             # convert OpenAI to qwen format -> TODO find more generalized method
+            # OpenAI format for image_url:
+            # {
+            #     "type": "image",
+            #     "image": {
+            #         "image_url": {
+            #             "url": "url here"
+            #         }
+            #     }
+            # }
+            # qwen2 VL format:
+            # {
+            #     "type": "image_url",
+            #     "image_url": "url here"
+            # }
             for one_message in messages_as_dicts:
                 if isinstance(one_message["content"], list):
                     for message in one_message["content"]:
@@ -1141,6 +1241,7 @@ class ChatGeneratorTransformers(ChatGenerator):
                             message["type"] = "image"
                             message["image"] = message["image_url"]["url"]
                             message.pop("image_url", None)
+
 
             image_inputs, video_inputs = process_vision_info(messages_as_dicts)
 

@@ -4,6 +4,10 @@ import base64
 import struct
 from lxml import etree
 from pathlib import Path
+from PIL import Image
+import requests
+import os
+from io import BytesIO
 
 # Lazy import for Exllama
 try:
@@ -120,3 +124,29 @@ def get_package_file_path(file_name: str) -> str:
     if not file_path.exists():
         raise FileNotFoundError(f"File {file_name} not found in the gallama package.")
     return str(file_path.resolve())
+
+
+# Util function to get a PIL image from a URL or from a file in the script's directory
+def get_image(
+    file: str = None,
+    url: str =None,     # url of the image or base64 url in this format f"data:image/jpeg;base64,{base64_image}"
+):
+    assert (file or url) and not (file and url)
+
+    if file:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        file_path = os.path.join(script_dir, file)
+        return Image.open(file_path)
+
+    elif url:
+        # Check if url starts with 'data:image' to handle base64 images
+        if url.startswith("data:image"):
+            # Extract the base64 data from the url string
+            base64_data = url.split(",")[1]
+            # Decode the base64 string
+            image_data = base64.b64decode(base64_data)
+            # Open the image from the decoded data
+            return Image.open(BytesIO(image_data))
+        else:
+            # Assume url is a regular URL and fetch it as a stream
+            return Image.open(requests.get(url, stream=True).raw)

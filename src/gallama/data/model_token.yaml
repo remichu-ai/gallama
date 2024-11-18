@@ -185,3 +185,25 @@ Phi3:
   tool_result_end: ''
   leading_prompt_token: '<|assistant|>\n'
   eos_token_list: ["<bos>", "<eos>", "<start_of_turn>", "<end_of_turn>"]
+
+Pixtral:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: '<s>'
+  conversation_end: '\n'
+  system_start: '[INST]user:\n'
+  system_end: ''
+  user_start: '[INST]user:\n'
+  user_end: '[/INST]'
+  assistant_start: 'assistant:\n'
+  assistant_end: '</s>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  vision_start: ''
+  vision_end: ''
+  image_pad: ''
+  video_pad: ''
+  leading_prompt_token: 'assistant:\n'
+  eos_token_list: ["</s>", "[INST]", "<s>", "[/INST]"]

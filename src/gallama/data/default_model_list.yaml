@@ -691,6 +691,47 @@ qwen-2-VL-72B:
         model_class: "transformers.Qwen2VLForConditionalGeneration"
         tokenizer_class: "transformers.AutoTokenizer"
         processor_class: "transformers.AutoProcessor"
+
+# qwen 2.5 Coder
+qwen-2.5-Coder-32B:
+  default_quant: 4.25
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-Coder-32B-Instruct-exl2"
+      branch: ['2_2', '3_0', '3_5', '4_25', '5_0', '6_5', '8_0']
+      quant: [2.2, 3.0, 3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
+qwen-2.5-Coder-14B:
+  default_quant: 4.25
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-Coder-14B-Instruct-exl2"
+      branch: ['3_0', '3.5', '4_25', '5_0', '6_5', '8_0']
+      quant: [3.0, 3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
+qwen-2.5-Coder-7B:
+  default_quant: 4.25
+  default_cache_quant: Q4
+  prompt_template: Qwen2
+  repo:
+    - repo: "bartowski/Qwen2.5-Coder-7B-Instruct-exl2"
+      branch: ['3.5', '4_25', '5_0', '6_5', '8_0']
+      quant: [3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
+
+# pixtral
+pixtral:
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Pixtral
+  repo:
+    - repo: "turboderp/pixtral-12b-exl2"
+      branch: ['2.5bpw', '3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
+      quant: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+      backend: exllama
+
 llama-3.2-Vision-11B:
   remark: "v3.1"
   default_quant: 4.0
@@ -707,6 +748,17 @@ llama-3.2-Vision-11B:
           attn_implementation: "sdpa"     # flash attention not supported yet
         tokenizer_class: "transformers.AutoTokenizer"
         processor_class: "transformers.AutoProcessor"
+
+llama-3.1-nemotron-70B:
+  remark: "v3.1"
+  default_quant: 4.25
+  default_cache_quant: Q4
+  prompt_template: Llama3.1
+  repo:
+    - repo: "bartowski/Llama-3.1-Nemotron-70B-Instruct-HF-exl2"
+      branch: ['2_2', '3_0', '3_5', '4_25', '5_0', '6_5', '8_0']
+      quant: [2.2, 3.0, 3.5, 4.25, 5.0, 6.5, 8.0]
+      backend: exllama
 
 
 # embedding model from here
