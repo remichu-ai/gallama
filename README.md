@@ -22,6 +22,50 @@ Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a re
 
 # Features
 
+# NEW - Vision Model
+
+From `gallama` version 0.0.7, there is experimental support for Vision model. 
+
+Currently, as of v0.0.8, Pixtral is supported via Exllama (>=0.2.4) and Qwen 2 VL series of model is supported via transformers.
+
+After Exllama roll out support for Qwen 2 VL, running model via transformers will be depreciated.
+Currently, both exllamaV2 and llama.cpp do not support Vision model yet. Hence, this is achieved by running `transformers` with the use of awq for quantization.
+
+1. Pixtral
+Currently, Pixtral Exl2 quantization from huggingface https://huggingface.co/turboderp/pixtral-12b-exl2 has a typo in the config file which set the context to 1mio tokens.
+The model support up to 128k token context, hence please set the context accordingly when u load the model
+
+```shell
+# sample
+gallama download pixtral:5.0
+gallama run -id "model_id=pixtral max_seq_len=32768"
+
+```
+
+2. Qwen 2 VL:
+As of this release, the transformers build in pip is not yet updated with bugfix for Qwen 2 VL, hence you will need to install the latest code from github.
+This is already be handled in the requirements.txt, however, getting transformers dependency working can be tricky.
+
+After installation you can download by following commands (choose a version that fit your VRAM):
+```shell
+# 2B model
+gallama download qwen-2-VL-2B:4.0 --backend=transformers
+gallama run qwen-2-VL-2B_transformers
+
+# 7B model
+gallama download qwen-2-VL-7B:4.0 --backend=transformers
+gallama run qwen-2-VL-7B_transformers
+
+# 72B model
+gallama download qwen-2-VL-72B:4.0 --backend=transformers
+gallama run qwen-2-VL-72B_transformers
+```
+
+If you need an UI to run it, check out Gallama UI, it is working with images, however, the support is not perfect at the moment:
+https://github.com/remichu-ai/gallamaUI.git
+![alt_text](https://github.com/remichu-ai/gallamaUI/blob/main/doc/gen.gif)
+
+
 ## Integrated Model downloader
 
 Ability to download exl2 model from Hugging Face via CLI for popular models.
@@ -80,9 +124,19 @@ gallama list available
 |               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
 | qwen-2.5-7B   | exllama      | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                                     |
 |               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
+| qwen-2.5-Coder-32B    | exllama      | `2.2`, `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                       |
+| qwen-2.5-Coder-14B    | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
+| qwen-2.5-Coder-7B     | exllama      | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                                     |
+
+
+**Vision Large Language Models**
+
+| Model         | Backend      | Available Quantizations (bpw)                                                          |
+|---------------|--------------|----------------------------------------------------------------------------------------|
 | qwen-2-VL-2B  | transformers | `4.0`, `16.0`                                                                          |
 | qwen-2-VL-7B  | transformers | `4.0`, `16.0`                                                                          |
 | qwen-2-VL-72B | transformers | `4.0`, `16.0`                                                                          |
+| pixtral               | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                 |
 
 
 **Embedding Models:**
@@ -532,28 +586,3 @@ Customize the model launch using various parameters. Available parameters for th
 8. Others
    If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
 
-# NEW - Vision Model
-
-From `gallama` version 0.0.7, there is experimental support for Vision model. Currently only Qwen 2 VL series of model is supported.
-Currently, both exllamaV2 and llama.cpp do not support Vision model yet. Hence, this is achieved by running `transformers` with the use of awq for quantization.
-
-As of this release, the transformers build in pip is not yet updated with bugfix for Qwen 2 VL, hence you will need to install the latest code from github.
-This is already be handled in the requirements.txt.
-
-After installation you can download by following commands (choose a version that fit your VRAM):
-```shell
-# 2B model
-gallama download qwen-2-VL-2B:4.0 --backend=transformers
-gallama run qwen-2-VL-2B_transformers
-
-# 7B model
-gallama download qwen-2-VL-7B:4.0 --backend=transformers
-gallama run qwen-2-VL-7B_transformers
-
-# 72B model
-gallama download qwen-2-VL-72B:4.0 --backend=transformers
-gallama run qwen-2-VL-72B_transformers
-```
-
-If you need an UI to run it, check out Gallama UI:
-![alt_text](https://github.com/remichu-ai/gallamaUI/blob/main/doc/gen.gif)

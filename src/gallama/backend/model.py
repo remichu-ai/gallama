@@ -25,6 +25,13 @@ except:
     ExLlamaV2Cache_Q8 = None
     ExLlamaV2Config = None
 
+#vision support
+try:
+    from exllamav2 import ExLlamaV2VisionTower
+except:
+    ExLlamaV2VisionTower = None
+
+
 try:
     from llama_cpp import Llama
 except:
@@ -94,7 +101,7 @@ class Model:
         model, tokenizer, cache, draft_model, draft_cache, processor = None, None, None, None, None, None
 
         if self.backend=="exllama":
-            model, tokenizer, cache = self.load_model_exllama(
+            model, tokenizer, cache, processor = self.load_model_exllama(
                 model_id=self.model_id,
                 backend=self.backend,
                 max_seq_len=self.max_seq_len,
@@ -223,8 +230,16 @@ class Model:
             else:
                 raise ValueError("ExllamaV2 was not installed with tensor parallel")
 
+        # load vision processor
+        processor = None
+        if ExLlamaV2VisionTower:
+            try:
+                processor = ExLlamaV2VisionTower(config)
+                processor.load(progress=True)
+            except:
+                processor = None
 
-        return model, tokenizer, cache
+        return model, tokenizer, cache, processor
 
 
     def load_model_llama_cpp(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None,
@@ -353,7 +368,7 @@ class Model:
         else:
             raise ValueError("Device map should be either 'auto', 'gpu' split")
 
-        # set max_seq_len based on model
+        # set max_seq_len based on model    TODO: To find more reliable method
         try:
             self.max_seq_len = model.config.max_position_embeddings
         except:
