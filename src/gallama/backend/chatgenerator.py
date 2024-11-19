@@ -57,7 +57,7 @@ try:
     from .inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp # TODO to remove this after LMFE take in the changes from turboderp
 
     if version('exllamav2') == '0.2.1' or version('exllamav2') == '0.2.2':
-        raise "Please use exllamav2 version 0.2.0 or 0.2.3 (not yet release). There is some bug with v0.2.1 and 0.2.2"
+        raise "Please use exllamav2 version 0.2.0 or 0.2.3. There is some bug with v0.2.1 and 0.2.2 related with format enforcement"
 
 except:
     ExLlamaV2Cache = None
@@ -695,7 +695,10 @@ arg_dict = """
                     for (alias, img) in zip(image_token_list, [get_image(url=url) for url in image_list])
                 ]
             elif vision_required and not self.processor:
-                raise Exception("This model do not support vision")
+                if version('exllamav2') < '0.2.4':
+                    raise Exception(f"Current Exllama version of {version('exllamav2')} do not support Vision model")
+                else:
+                    raise Exception("This model does not support vision")
             else:
                 # vision not required
                 pass
