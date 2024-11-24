@@ -274,7 +274,8 @@ class PromptEngine:
                     content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
                 else:
                     # use a standard token as place holder, TODO - refractor
-                    content_str += "{{IMG-" + f"{uuid.uuid4().hex}" + "}}"
+                    # content_str += "{{IMG-" + f"{uuid.uuid4().hex}" + "}}"
+                    content_str += "{{IMG-PlaceHolderTokenHere}}"   #TODO use a constant instead
             else:
                 raise ValueError("Unexpected content type ")
 

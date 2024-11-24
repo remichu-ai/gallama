@@ -29,6 +29,7 @@ import concurrent.futures
 from qwen_vl_utils import process_vision_info
 from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
 from ..utils.utils import get_image
+from functools import lru_cache
 
 try:
     from formatron.formatter import FormatterBuilder
@@ -597,6 +598,19 @@ arg_dict = """
 
         return None
 
+    @staticmethod
+    @lru_cache(128)     # TODO set this dynamically
+    def get_image_embedding_cached(processor, model, tokenizer, url):
+        img = get_image(url=url)
+
+        return processor.get_image_embeddings(
+            model=model,
+            tokenizer=tokenizer,
+            image=img,
+            text_alias=None,    # passing None will let me model generate its one embedding
+        )
+
+
     async def generate(
         self,
         prompt: str,
@@ -616,24 +630,6 @@ arg_dict = """
         **kwargs,
     ) -> (str, GenerationStats):
         try:
-
-            def extract_uuid_strings(text):
-                """
-                Extract all strings matching the format '{{IMG-<uuid-like-hex>}}'
-
-                Args:
-                    text (str): Input string to search for matching patterns
-
-                Returns:
-                    list: List of all matching strings found in the input text
-                """
-                # Pattern to match strings like '{{IMG-<uuid-hex>}}'
-                pattern = r'\{\{IMG-[0-9a-f]{32}\}\}'
-
-                # Find all matching occurrences in the text
-                matches = re.findall(pattern, text)
-
-                return matches
 
             # ensure that generator is initialized
             if self.pipeline is None:
@@ -679,21 +675,35 @@ arg_dict = """
 
             image_embeddings = None
             if vision_required and self.processor:
-                image_token_list = extract_uuid_strings(prompt)     # extract all the placeholder token used for img placeholder
+                # count the number of image placeholder token
+                image_token = "{{IMG-PlaceHolderTokenHere}}"    # TODO move to a constant
+                image_token_count = prompt.count(image_token)
 
-                assert len(image_token_list) == len(
-                    image_list), f"Mismatch in image tokens and images: {len(image_token_list)} tokens vs {len(image_list)} images"
+                # raise error if the img token count and image to embed not match
+                assert image_token_count == len(
+                    image_list), f"Mismatch in image tokens and images: {image_token_count} tokens vs {len(image_list)} images"
 
                 # Convert image(s) to embeddings
+
                 image_embeddings = [
-                    self.processor.get_image_embeddings(
+                    self.get_image_embedding_cached(
+                        processor=self.processor,
                         model=self.model,
                         tokenizer=self.tokenizer,
-                        image=img,
-                        text_alias=alias,
+                        url=url,
                     )
-                    for (alias, img) in zip(image_token_list, [get_image(url=url) for url in image_list])
+
+                    for url in image_list
                 ]
+                # logger.info(self.get_image_embedding_cached.cache_info())
+
+                # replace embedding
+                for emb in image_embeddings:
+                    prompt = prompt.replace(image_token, emb.text_alias, 1) # replace one token with 1 embedding sequentially
+                    # logger.info(emb.text_alias)
+
+                # logger.info(prompt)
+
             elif vision_required and not self.processor:
                 if version('exllamav2') < '0.2.4':
                     raise Exception(f"Current Exllama version of {version('exllamav2')} do not support Vision model")
