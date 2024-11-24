@@ -24,9 +24,10 @@ Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a re
 
 # NEW - Vision Model
 
-From `gallama` version 0.0.7, there is experimental support for Vision model. 
+As of v0.0.8post1, Qwen 2 VL (Image only, no Video) and Pixtral are supported via Exllama (>=0.2.4). 
 
-Currently, as of v0.0.8, Pixtral is supported via Exllama (>=0.2.4) and Qwen 2 VL series of model is supported via transformers.
+For Pixtral, please install Exllama V2 `v0.2.4` onwards
+For Exllama V2, please install `dev` branch of Exllama V2 as the code is not yet merged to `v0.2.4`.
 
 After Exllama roll out support for Qwen 2 VL, running model via transformers will be depreciated.
 Currently, both exllamaV2 and llama.cpp do not support Vision model yet. Hence, this is achieved by running `transformers` with the use of awq for quantization.
@@ -49,16 +50,16 @@ This is already be handled in the requirements.txt, however, getting transformer
 After installation you can download by following commands (choose a version that fit your VRAM):
 ```shell
 # 2B model
-gallama download qwen-2-VL-2B:4.0 --backend=transformers
-gallama run qwen-2-VL-2B_transformers
+gallama download qwen-2-VL-2B:4.0
+gallama run qwen-2-VL-2B
 
 # 7B model
-gallama download qwen-2-VL-7B:4.0 --backend=transformers
-gallama run qwen-2-VL-7B_transformers
+gallama download qwen-2-VL-7B:4.0
+gallama run qwen-2-VL-7B
 
 # 72B model
-gallama download qwen-2-VL-72B:4.0 --backend=transformers
-gallama run qwen-2-VL-72B_transformers
+gallama download qwen-2-VL-72B:4.0
+gallama run qwen-2-VL-72B
 ```
 
 If you need an UI to run it, check out Gallama UI, it is working with images, however, the support is not perfect at the moment:
@@ -131,12 +132,12 @@ gallama list available
 
 **Vision Large Language Models**
 
-| Model         | Backend      | Available Quantizations (bpw)                                                          |
-|---------------|--------------|----------------------------------------------------------------------------------------|
-| qwen-2-VL-2B  | transformers | `4.0`, `16.0`                                                                          |
-| qwen-2-VL-7B  | transformers | `4.0`, `16.0`                                                                          |
-| qwen-2-VL-72B | transformers | `4.0`, `16.0`                                                                          |
-| pixtral               | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                 |
+| Model         | Backend      | Available Quantizations (bpw)                          |
+|---------------|--------------|--------------------------------------------------------|
+| qwen-2-VL-2B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
+| qwen-2-VL-7B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`                                          |
+| qwen-2-VL-72B | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`                                        |
+| pixtral               | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
 
 
 **Embedding Models:**
