@@ -12,60 +12,66 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Fetch all history for checking version changes
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build twine packaging
+          pip install build twine packaging requests
 
       - name: Build package
         run: python -m build
 
-      # Add step to extract current version
-      - name: Get current version
-        id: current_version
+      # Get current version and package name
+      - name: Get package info
+        id: package_info
         run: |
-          # Try to get version from pyproject.toml first
           if [ -f "pyproject.toml" ]; then
             VERSION=$(grep -Po "(?<=version = \")[^\"]*" pyproject.toml)
-          # Fallback to setup.py
+            PACKAGE_NAME=$(grep -Po "(?<=name = \")[^\"]*" pyproject.toml)
           elif [ -f "setup.py" ]; then
             VERSION=$(python setup.py --version)
+            PACKAGE_NAME=$(python setup.py --name)
           else
             echo "No version file found"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
 
-      # Check if version exists on PyPI
+      # Check PyPI version using API
       - name: Check if version exists on PyPI
         id: check_version
         run: |
-          # Get package name from setup.py or pyproject.toml
-          if [ -f "pyproject.toml" ]; then
-            PACKAGE_NAME=$(grep -Po "(?<=name = \")[^\"]*" pyproject.toml)
-          elif [ -f "setup.py" ]; then
-            PACKAGE_NAME=$(python setup.py --name)
-          else
-            echo "No package configuration found"
-            exit 1
-          fi
+          PACKAGE_NAME="${{ steps.package_info.outputs.package_name }}"
+          VERSION="${{ steps.package_info.outputs.version }}"
           
-          VERSION="${{ steps.current_version.outputs.version }}"
+          echo "Checking version $VERSION for package $PACKAGE_NAME"
           
-          # Check if version already exists on PyPI
-          if pip index versions "$PACKAGE_NAME" 2>/dev/null | grep -q "^$VERSION$"; then
-            echo "Version $VERSION already exists on PyPI"
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Version $VERSION is new"
+          # Use PyPI JSON API to check version
+          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" "https://pypi.org/pypi/$PACKAGE_NAME/json")
+          
+          if [ "$HTTP_STATUS" -eq 200 ]; then
+            # Check if version exists in releases
+            if cat response.json | python -c "import sys, json; data = json.load(sys.stdin); sys.exit(0 if '$VERSION' in data['releases'] else 1)"; then
+              echo "Version $VERSION already exists on PyPI"
+              echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Version $VERSION is new"
+              echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ "$HTTP_STATUS" -eq 404 ]; then
+            # Package doesn't exist on PyPI yet
+            echo "Package not found on PyPI - this is a new package"
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Error checking PyPI API: HTTP status $HTTP_STATUS"
+            exit 1
           fi
 
       - name: Publish to PyPI
@@ -79,4 +85,4 @@ jobs:
       - name: Log skip publication
         if: steps.check_version.outputs.should_publish != 'true'
         run: |
-          echo "Skipping publication to PyPI as version ${{ steps.current_version.outputs.version }} already exists"
+          echo "Skipping publication to PyPI as version ${{ steps.package_info.outputs.version }} already exists"
