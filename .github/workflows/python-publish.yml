@@ -59,35 +59,50 @@ jobs:
               exit(1)
           EOF
 
-      # Check PyPI version using API
+      # Check PyPI version using Python
       - name: Check if version exists on PyPI
         id: check_version
         run: |
-          PACKAGE_NAME="${{ steps.package_info.outputs.package_name }}"
-          VERSION="${{ steps.package_info.outputs.version }}"
+          python - <<EOF >> "$GITHUB_OUTPUT"
+          import requests
+          import sys
+          import os
+          import json
+          from packaging import version as packaging_version
           
-          echo "Checking version $VERSION for package $PACKAGE_NAME"
+          package_name = os.environ['PACKAGE_NAME']
+          current_version = os.environ['VERSION']
           
-          # Use PyPI JSON API to check version
-          HTTP_STATUS=$(curl -s -o response.json -w "%{http_code}" "https://pypi.org/pypi/$PACKAGE_NAME/json")
+          print(f"Checking version {current_version} for package {package_name}")
           
-          if [ "$HTTP_STATUS" -eq 200 ]; then
-            # Check if version exists in releases
-            if cat response.json | python -c "import sys, json; data = json.load(sys.stdin); sys.exit(0 if '$VERSION' in data['releases'] else 1)"; then
-              echo "Version $VERSION already exists on PyPI"
-              echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "Version $VERSION is new"
-              echo "should_publish=true" >> "$GITHUB_OUTPUT"
-            fi
-          elif [ "$HTTP_STATUS" -eq 404 ]; then
-            # Package doesn't exist on PyPI yet
-            echo "Package not found on PyPI - this is a new package"
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Error checking PyPI API: HTTP status $HTTP_STATUS"
-            exit 1
-          fi
+          url = f"https://pypi.org/pypi/{package_name}/json"
+          response = requests.get(url)
+          
+          if response.status_code == 200:
+              data = response.json()
+              releases = data.get('releases', {})
+              
+              # Normalize the version for comparison
+              current_ver = packaging_version.parse(current_version)
+              
+              # Check if version exists
+              if str(current_ver) in releases:
+                  print("Version already exists on PyPI")
+                  print("should_publish=false")
+              else:
+                  print("Version is new")
+                  print("should_publish=true")
+                  
+          elif response.status_code == 404:
+              print("Package not found on PyPI - this is a new package")
+              print("should_publish=true")
+          else:
+              print(f"Error checking PyPI API: HTTP status {response.status_code}")
+              sys.exit(1)
+          EOF
+        env:
+          PACKAGE_NAME: ${{ steps.package_info.outputs.package_name }}
+          VERSION: ${{ steps.package_info.outputs.version }}
 
       - name: Publish to PyPI
         if: steps.check_version.outputs.should_publish == 'true'
