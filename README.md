@@ -44,10 +44,9 @@ gallama run -id "model_id=pixtral max_seq_len=32768"
 ```
 
 2. Qwen 2 VL:
-As of this release, the transformers build in pip is not yet updated with bugfix for Qwen 2 VL, hence you will need to install the latest code from github.
-This is already be handled in the requirements.txt, however, getting transformers dependency working can be tricky.
+For Exllama V2, please install `dev` branch of Exllama V2 as the code is not yet merged to `v0.2.4`.
 
-After installation you can download by following commands (choose a version that fit your VRAM):
+After installation you can download by following commands (choose a version that fit your VRAM), there are other quantization available from 3 to 8bpw.
 ```shell
 # 2B model
 gallama download qwen-2-VL-2B:4.0
