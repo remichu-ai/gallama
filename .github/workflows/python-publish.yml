@@ -31,9 +31,10 @@ jobs:
       - name: Get package info
         id: package_info
         run: |
-          python - <<EOF >> "$GITHUB_OUTPUT"
+          python - <<EOF
           import tomli
           import json
+          import os
           
           try:
               with open("pyproject.toml", "rb") as f:
@@ -50,9 +51,10 @@ jobs:
                   name = data["tool"]["poetry"]["name"]
               else:
                   raise KeyError("Could not find version/name in pyproject.toml")
-                  
-              print(f"version={version}")
-              print(f"package_name={name}")
+              
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+                  print(f"version={version}", file=fh)
+                  print(f"package_name={name}", file=fh)
               
           except Exception as e:
               print(f"Error parsing pyproject.toml: {e}")
@@ -63,7 +65,7 @@ jobs:
       - name: Check if version exists on PyPI
         id: check_version
         run: |
-          python - <<EOF >> "$GITHUB_OUTPUT"
+          python - <<EOF
           import requests
           import sys
           import os
@@ -78,27 +80,29 @@ jobs:
           url = f"https://pypi.org/pypi/{package_name}/json"
           response = requests.get(url)
           
-          if response.status_code == 200:
-              data = response.json()
-              releases = data.get('releases', {})
-              
-              # Normalize the version for comparison
-              current_ver = packaging_version.parse(current_version)
-              
-              # Check if version exists
-              if str(current_ver) in releases:
-                  print("Version already exists on PyPI")
-                  print("should_publish=false")
-              else:
-                  print("Version is new")
-                  print("should_publish=true")
+          # Open the GitHub output file in append mode
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              if response.status_code == 200:
+                  data = response.json()
+                  releases = data.get('releases', {})
                   
-          elif response.status_code == 404:
-              print("Package not found on PyPI - this is a new package")
-              print("should_publish=true")
-          else:
-              print(f"Error checking PyPI API: HTTP status {response.status_code}")
-              sys.exit(1)
+                  # Normalize the version for comparison
+                  current_ver = packaging_version.parse(current_version)
+                  
+                  # Check if version exists
+                  if str(current_ver) in releases:
+                      print("Version already exists on PyPI")
+                      print("should_publish=false", file=fh)
+                  else:
+                      print("Version is new")
+                      print("should_publish=true", file=fh)
+                      
+              elif response.status_code == 404:
+                  print("Package not found on PyPI - this is a new package")
+                  print("should_publish=true", file=fh)
+              else:
+                  print(f"Error checking PyPI API: HTTP status {response.status_code}")
+                  sys.exit(1)
           EOF
         env:
           PACKAGE_NAME: ${{ steps.package_info.outputs.package_name }}
