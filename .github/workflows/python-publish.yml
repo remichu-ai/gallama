@@ -22,27 +22,42 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install build twine packaging requests
+          pip install build twine packaging requests tomli
 
       - name: Build package
         run: python -m build
 
-      # Get current version and package name
+      # Get current version and package name using Python
       - name: Get package info
         id: package_info
         run: |
-          if [ -f "pyproject.toml" ]; then
-            VERSION=$(grep -Po "(?<=version = \")[^\"]*" pyproject.toml)
-            PACKAGE_NAME=$(grep -Po "(?<=name = \")[^\"]*" pyproject.toml)
-          elif [ -f "setup.py" ]; then
-            VERSION=$(python setup.py --version)
-            PACKAGE_NAME=$(python setup.py --name)
-          else
-            echo "No version file found"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          python - <<EOF >> "$GITHUB_OUTPUT"
+          import tomli
+          import json
+          
+          try:
+              with open("pyproject.toml", "rb") as f:
+                  data = tomli.load(f)
+                  
+              # Handle different possible TOML structures
+              if "project" in data:
+                  # PEP 621 metadata
+                  version = data["project"]["version"]
+                  name = data["project"]["name"]
+              elif "tool" in data and "poetry" in data["tool"]:
+                  # Poetry metadata
+                  version = data["tool"]["poetry"]["version"]
+                  name = data["tool"]["poetry"]["name"]
+              else:
+                  raise KeyError("Could not find version/name in pyproject.toml")
+                  
+              print(f"version={version}")
+              print(f"package_name={name}")
+              
+          except Exception as e:
+              print(f"Error parsing pyproject.toml: {e}")
+              exit(1)
+          EOF
 
       # Check PyPI version using API
       - name: Check if version exists on PyPI
