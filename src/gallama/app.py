@@ -3,7 +3,7 @@ import torch
 import gc
 from fastapi import FastAPI, Request, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from gallama.data_classes.data_class import (
+from gallama.data_classes import (
     ChatMLQuery,
     ToolForce,
     GenerateQuery,
@@ -14,7 +14,7 @@ from gallama.data_classes.data_class import (
     EmbeddingRequest
 )
 import argparse
-from gallama.backend.model import Model
+from gallama.backend.model import ModelExllama
 from gallama.backend.prompt_engine import PromptEngine
 from gallama.backend.chatgenerator import ChatGenerator
 import uvicorn
@@ -289,8 +289,14 @@ def load_model(model_spec: ModelParser):
         else:
             draft_model_config = {}
 
+        # model_dict = {
+        #     "exllama": ChatGenerator,
+        #     "llama_cpp": ChatGeneratorLlamaCpp,
+        #     "transformers": ChatGeneratorTransformers,
+        # }
+
         # load LLM model
-        llm_base = Model(
+        llm_base = ModelExllama(
             model_spec=model_spec,
             model_config=model_config,
             draft_model_config=draft_model_config,

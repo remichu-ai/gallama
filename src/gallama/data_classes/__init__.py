@@ -8,5 +8,21 @@ from .server_dataclass import (
 )
 
 from .data_class import (
+    ChatMLQuery,
+    ToolForce,
+    GenerateQuery,
+    ModelObjectResponse,
+    ModelObject,
+    ModelParser,
+    EmbeddingRequest,
     ModelDownloadSpec
+)
+
+from .generation_data_class import (
+    GenerationStats,
+    GenStart,
+    GenEnd,
+    GenQueue,
+    GenText,
+    QueueContext,
 )

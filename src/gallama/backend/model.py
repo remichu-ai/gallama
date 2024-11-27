@@ -77,7 +77,7 @@ class Model:
         self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
 
         # transformers specific arguments
-        self.transformers_args = model_config.get("transformers_args") or {}
+        self.backend_extra_args = model_config.get("backend_extra_args") or {}
 
         # draft model is via cli only
         self.draft_model_id = draft_model_config.get("model_id")
@@ -326,22 +326,22 @@ class Model:
 
 
         # determine the class to use for loading
-        if self.transformers_args.get('model_class'):
-            model_class = get_class(self.transformers_args['model_class'])
+        if self.backend_extra_args.get('model_class'):
+            model_class = get_class(self.backend_extra_args['model_class'])
 
-            model_extra_kwargs = self.transformers_args.get('model_class_extra_kwargs')
+            model_extra_kwargs = self.backend_extra_args.get('model_class_extra_kwargs')
             if model_extra_kwargs:
                 model_kargs.update(model_extra_kwargs)      # update any extra argument
         else:
             model_class = transformers.AutoModelForCausalLM
 
-        if self.transformers_args.get('tokenizer_class'):
-            tokenizer_class = get_class(self.transformers_args['tokenizer_class'])
+        if self.backend_extra_args.get('tokenizer_class'):
+            tokenizer_class = get_class(self.backend_extra_args['tokenizer_class'])
         else:
             tokenizer_class = transformers.AutoTokenizer
 
-        if self.transformers_args.get('processor_class'):
-            processor_class = get_class(self.transformers_args['processor_class'])
+        if self.backend_extra_args.get('processor_class'):
+            processor_class = get_class(self.backend_extra_args['processor_class'])
         else:
             processor_class = None
 

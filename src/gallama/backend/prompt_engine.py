@@ -1,6 +1,6 @@
 import json
 import yaml
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Literal
 from gallama.data_classes.data_class import BaseMessage, ChatMLQuery, ToolCall, MultiModalTextContent, MultiModalImageContent
 from pydantic import BaseModel
 from copy import deepcopy
@@ -291,9 +291,10 @@ class PromptEngine:
         use_thinking: bool = True,
         thinking_template: str = None,
         thinking_response: str = None,
-        exllama_vision_token: bool = False,    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
+        backend: Literal["exllama", "llama_cpp", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
         #prompt_mode: Literal["auto"]
     ) -> str:
+        exllama_vision_token = (backend=="exllama")     # vision token in exllama is handled and assigned from the embedding itself
 
         def _create_leading_prompt(original_prompt, query_leading_prompt, model_leading_prompt):
             # add leading prompt from user or model
