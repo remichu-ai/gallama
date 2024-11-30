@@ -5,23 +5,23 @@ import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
 
 # logger
-from ...logger.logger import logger
+from gallama.logger.logger import logger
 
 # format enforcement
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from formatron.formatter import FormatterBuilder
 from formatron.schemas.pydantic import ClassSchema
-from ..format_enforcer import FormatEnforcer
+from gallama.backend.llm.format_enforcer import FormatEnforcer
 
 # thinking
-from ..thinking_template import THINKING_TEMPLATE, Thinking
+from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
 
 # function calling
-from ..tools import Tools, create_function_models_v2, create_function_models_formatron
+from gallama.backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
 
-from ...utils.utils import get_token_length
-from ...api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
-from ...data_classes import (
+from gallama.utils.utils import get_token_length
+from gallama.api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
+from gallama.data_classes import (
     ModelParser,
     ChatMLQuery,
     GenEnd,
@@ -33,7 +33,7 @@ from ...data_classes import (
 )
 
 # handle prompting
-from ..prompt_engine import PromptEngine
+from gallama.backend.llm.prompt_engine import PromptEngine
 
 
 class ModelInterface(ABC):
@@ -244,7 +244,7 @@ class ModelInterface(ABC):
                 query,
                 thinking_template=query.thinking_template,
                 thinking_response=thinking_response,
-                exllama_vision_token=(self.backend=="exllama")
+                backend=self.backend
             )
 
         # 1st response if there is regex to match the regex pattern
@@ -346,7 +346,7 @@ class ModelInterface(ABC):
             pydantic_tool_dict=tool_handler.tool_dict,
             thinking_template=tool_thinking_formatted,
             answer_format_schema=False,
-            exllama_vision_token=(self.backend == "exllama")
+            backend=self.backend
             # leading_prompt=leading_prompt,
         )
 
@@ -485,7 +485,7 @@ arg_dict = """
                     'Now i will convert my answer above into "functions_calling" format by continuing this continue this code.\n'
                     f"{tool_as_code_prompt}"
                 ),
-                exllama_vision_token=(self.backend=="exllama"),
+                backend=self.backend,
             )
             logger.info(prompt)
 
@@ -508,7 +508,7 @@ arg_dict = """
         if not use_tool_bool:
             prompt = prompt_eng.get_prompt(
                 query,
-                exllama_vision_token=(self.backend == "exllama"),
+                backend=self.backend,
             )
 
             if query.tool_choice == "auto":

@@ -8,7 +8,7 @@ from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
-from ..data import ARTIFACT_SYSTEM_PROMPT
+from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 
 class PromptEngine:
@@ -27,7 +27,7 @@ class PromptEngine:
     @staticmethod
     def get_prompt_token() -> Dict:
         """Get the absolute path to the data directory."""
-        yaml_file = Path(__file__).parent.parent / 'data' / 'model_token.yaml'
+        yaml_file = Path(__file__).parent.parent.parent / 'data' / 'model_token.yaml'
         with open(yaml_file, 'r') as file:
             yaml_data = yaml.safe_load(file)
         return yaml_data

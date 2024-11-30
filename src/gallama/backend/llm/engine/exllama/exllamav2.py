@@ -1,4 +1,4 @@
-from .interface import ModelInterface
+from gallama.backend.llm.engine.base import ModelInterface
 from typing import Optional, Dict, List, Union
 import torch
 import asyncio
@@ -7,8 +7,8 @@ from importlib.metadata import version      # for checking of exllama version
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 
-from ...logger.logger import logger
-from ...data_classes import (
+from gallama.logger.logger import logger
+from gallama.data_classes import (
     ModelParser,
     GenStart,
     GenEnd,
@@ -17,7 +17,7 @@ from ...data_classes import (
     GenerationStats,
     QueueContext,
 )
-from ...utils.utils import get_image
+from gallama.utils.utils import get_image
 
 
 try:
@@ -86,7 +86,7 @@ from lmformatenforcer import JsonSchemaParser
 try:
     # lm format enforcer does not work correctly without update with latest api from exllama
     # this wrapper class aim as stop gap solution and formatron is recommended instead
-    from gallama.backend.llm.inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp
+    from gallama.backend.llm.engine.exllama.inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp
 except ImportError:
     TokenEnforcerTokenizerData = None
     ExLlamaV2TokenEnforcerFilter = None

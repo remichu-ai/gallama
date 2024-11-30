@@ -15,8 +15,7 @@ from gallama.data_classes import (
 )
 import argparse
 from gallama.backend.llm import ModelExllama, ModelLlamaCpp, ModelTransformers
-from gallama.backend.prompt_engine import PromptEngine
-#from gallama.backend.chatgenerator import ChatGenerator
+from gallama.backend.llm.prompt_engine import PromptEngine
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -31,8 +30,6 @@ from gallama.api_response.chat_response import (
     chat_completion_response_artifact_stream,
     chat_completion_response_artifact
 )
-import concurrent.futures
-from functools import partial
 from gallama.config.config_manager import ConfigManager
 from logging import DEBUG
 from gallama.logger.logger import get_logger
@@ -40,24 +37,6 @@ from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import os
 import asyncio
 from contextlib import asynccontextmanager
-
-try:
-    from gallama.backend.chatgenerator import ChatGeneratorLlamaCpp
-except ImportError:
-    # llama cpp optional dependency
-    ChatGeneratorLlamaCpp = None
-
-# experimental feature: tensor parallel
-try:
-    from exllamav2 import ExLlamaV2Cache_TP
-except:
-    # optional dependency
-    ExLlamaV2Cache_TP = None
-
-try:
-    from gallama.backend.chatgenerator import ChatGeneratorTransformers
-except:
-    ChatGeneratorTransformers =  None
 
 
 # Add this after your imports to clear logging from 3rd party module
@@ -304,7 +283,7 @@ def load_model(model_spec: ModelParser):
             "prompt_engine": prompt_eng,
         }
     else:   # embedding model
-        from gallama.backend.embedding import EmbeddingModel
+        from gallama.backend.embedding.embedding import EmbeddingModel
 
         llm = EmbeddingModel(
             model_id=model_config["model_id"],

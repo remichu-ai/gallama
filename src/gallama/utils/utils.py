@@ -150,3 +150,11 @@ def get_image(
         else:
             # Assume url is a regular URL and fetch it as a stream
             return Image.open(requests.get(url, stream=True).raw)
+
+
+def is_flash_attention_installed() -> (bool, str):
+    try:
+        import flash_attn
+        return True, flash_attn.__version__
+    except ImportError:
+        return False, None

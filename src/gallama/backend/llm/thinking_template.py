@@ -18,10 +18,10 @@ def get_package_root():
         return Path(sys.executable).parent.parent
     elif __package__:
         # If it's an installed package
-        return Path(__file__).parent.parent
+        return Path(__file__).parent.parent.parent
     else:
         # If it's a standalone script
-        return Path(__file__).resolve().parent.parent
+        return Path(__file__).resolve().parent.parent.parent
 
 # Use the function to get the package root
 current_dir = get_package_root()

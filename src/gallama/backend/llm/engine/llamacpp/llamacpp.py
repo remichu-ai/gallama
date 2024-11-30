@@ -1,5 +1,5 @@
-from .interface import ModelInterface
-from typing import Tuple, Optional, Any, Dict, List, Iterator, Union
+from gallama.backend.llm.engine.base import ModelInterface
+from typing import Optional, Dict, List, Union
 from fastapi import Request                 # for type hint
 import time
 
@@ -11,7 +11,6 @@ try:
     from llama_cpp import Llama
     from llama_cpp import LogitsProcessorList
 except:
-    # optional dependency
     Llama = None
     LogitsProcessorList = None
 
@@ -35,7 +34,7 @@ except:
     LogitsProcessorList = None
 
 # custom data classes
-from ...data_classes import (
+from gallama.data_classes import (
     ModelParser,
     GenStart,
     GenEnd,
@@ -44,7 +43,7 @@ from ...data_classes import (
     GenerationStats,
     QueueContext,
 )
-from ...logger.logger import logger
+from gallama.logger.logger import logger
 
 
 class ModelLlamaCpp(ModelInterface):
