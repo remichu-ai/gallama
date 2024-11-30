@@ -1,5 +1,5 @@
 from fastapi import Request
-from gallama.data_classes.data_class import (
+from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
     Choice,
@@ -8,16 +8,19 @@ from gallama.data_classes.data_class import (
     OneTool,
     ToolCallResponse,
     StreamChoice,
-    GenerationStats,
-    GenQueue,
-    GenText,
-    GenEnd,
-    GenStart,
     CompletionResponse,
     CompletionStreamResponse,
     CompletionChoice,
     TextTag,
 )
+from ..data_classes.generation_data_class import (
+    GenerationStats,
+    GenQueue,
+    GenText,
+    GenEnd,
+    GenStart,
+)
+
 from .stream_parser import StreamParser
 from typing import AsyncIterator
 from gallama.utils.utils import get_response_uid, get_response_tool_uid

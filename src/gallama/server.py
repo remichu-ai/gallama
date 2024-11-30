@@ -694,7 +694,7 @@ def run_from_script(args):
         for item in args.model_id:
             model_spec = ModelParser.from_dict(item)
             model_list.append(model_spec)
-            print(model_spec)
+            logger.info(model_spec)
 
     if model_list:
         logger.info("Initial models: " + str(model_list))

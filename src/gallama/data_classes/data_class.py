@@ -489,7 +489,7 @@ class ModelParser(BaseModel):
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
-    backend: Optional[Union[Literal["exllama", "llama_cpp", "transformers", "embedding"], None]] = Field(description="model engine backend", default=None)
+    backend: Optional[Union[Literal["exllama", "llama_cpp", "transformers", "embedding"], None]] = Field(description="model engine backend", default="exllama")
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
 
     # speculative decoding

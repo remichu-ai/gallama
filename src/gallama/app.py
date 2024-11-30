@@ -14,9 +14,9 @@ from gallama.data_classes import (
     EmbeddingRequest
 )
 import argparse
-from gallama.backend.model import ModelExllama
+from gallama.backend.llm import ModelExllama, ModelLlamaCpp, ModelTransformers
 from gallama.backend.prompt_engine import PromptEngine
-from gallama.backend.chatgenerator import ChatGenerator
+#from gallama.backend.chatgenerator import ChatGenerator
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 from sse_starlette.sse import EventSourceResponse
@@ -165,19 +165,6 @@ async def chat_completion(request: Request, query: ChatMLQuery):
             request=request,
         ))
 
-
-        # partial_func = partial(llm.chat,
-        #     query=query,
-        #     prompt_eng=prompt_eng,
-        #     gen_queue=gen_queue,
-        #     request=request
-        # )
-        # with concurrent.futures.ThreadPoolExecutor() as pool:
-        #     await asyncio.get_running_loop().run_in_executor(
-        #         executor=pool,
-        #         func=partial_func,
-        #     )
-
         # send the response to client
         if query.stream:
             # EventSourceResponse take iterator so need to handle at here
@@ -268,6 +255,11 @@ async def options_handler(request: Request):
 
 @router.post("/load_model")
 def load_model(model_spec: ModelParser):
+    """
+    model_spec is model specification coming from cli
+    it might not have all the properties required for the model to be loaded
+    the config_manager below contain all the models properties
+    """
     global config_manager, llm_dict
 
     # get the config from the yml
@@ -289,28 +281,22 @@ def load_model(model_spec: ModelParser):
         else:
             draft_model_config = {}
 
-        # model_dict = {
-        #     "exllama": ChatGenerator,
-        #     "llama_cpp": ChatGeneratorLlamaCpp,
-        #     "transformers": ChatGeneratorTransformers,
-        # }
 
         # load LLM model
-        llm_base = ModelExllama(
+        model_class_dict = {
+            "exllama": ModelExllama,
+            "llama_cpp": ModelLlamaCpp,
+            "transformers": ModelTransformers,
+        }
+
+        model_class_to_use = model_class_dict[model_config["backend"]]
+
+        llm = model_class_to_use(
             model_spec=model_spec,
             model_config=model_config,
             draft_model_config=draft_model_config,
             eos_token_list_from_prompt_template=prompt_eng.eos_token_list,
         )
-
-        chat_generator_dict = {
-            "exllama": ChatGenerator,
-            "llama_cpp": ChatGeneratorLlamaCpp,
-            "transformers": ChatGeneratorTransformers,
-        }
-
-        chatGenerator_to_use = chat_generator_dict[llm_base.backend]
-        llm = chatGenerator_to_use(llm_base)
 
         # update dict
         llm_dict[model_name] = {
@@ -377,7 +363,7 @@ async def startup_event():
             llm = _model["model"]
             await llm.chat_raw(
                 prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
-                stream=False,
+                # stream=False,
                 max_tokens=200,
                 gen_queue=gen_queue,
                 quiet=True,

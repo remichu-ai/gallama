@@ -1,13 +1,11 @@
 # generator.py
-import time
 import re
 import asyncio
 import uuid
 import weakref
-from logging import raiseExceptions
-from typing import List, Union, Literal, Optional, AsyncGenerator
+from typing import List, Union, Optional
 from fastapi import HTTPException, Request
-from .model.exllamav2 import ModelExllama
+from .llm.exllamav2 import ModelExllama
 from gallama.data_classes.generation_data_class import GenEnd, GenText, GenQueue, GenStart, GenerationStats
 from gallama.data_classes.data_class import ChatMLQuery
 from .tools import Tools, create_function_models_v2, create_function_models_formatron
@@ -16,19 +14,11 @@ from gallama.utils.utils import get_token_length
 from gallama.logger.logger import logger
 from .thinking_template import THINKING_TEMPLATE, Thinking
 from gallama.api_response.chat_response import get_response_from_queue
-from lmformatenforcer import JsonSchemaParser, RegexParser
+from lmformatenforcer import JsonSchemaParser
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
-from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from .format_enforcer import FormatEnforcer
 from formatron.schemas.pydantic import ClassSchema
-from formatron.integrations.transformers import create_formatter_logits_processor_list, FormattersLogitsProcessor
-from lmformatenforcer.integrations.transformers import build_transformers_prefix_allowed_tokens_fn
-from threading import Thread
-from functools import partial
-import concurrent.futures
-from qwen_vl_utils import process_vision_info
-from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
 from ..utils.utils import get_image
 from functools import lru_cache
 
@@ -55,10 +45,10 @@ try:
         ExLlamaV2TokenEnforcerFilter,         # TODO to uncomment this after LMFE take in the changes from turboderp
         build_token_enforcer_tokenizer_data
     )
-    from .inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp # TODO to remove this after LMFE take in the changes from turboderp
+    from gallama.backend.llm.inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp # TODO to remove this after LMFE take in the changes from turboderp
 
     if version('exllamav2') == '0.2.1' or version('exllamav2') == '0.2.2':
-        raise "Please use exllamav2 version 0.2.0 or 0.2.3. There is some bug with v0.2.1 and 0.2.2 related with format enforcement"
+        raise "Please use version 0.2.3 onwards. There is some bug with v0.2.1 and 0.2.2 related with format enforcement"
 
 except:
     ExLlamaV2Cache = None
@@ -539,11 +529,11 @@ arg_dict = """
     async def _get_pipeline_async(self):
         # if not self.cache:
         #     logger.info("Custom Cache size: " + str(self.cache_size))
-        #     self.cache = ExLlamaV2Cache_Q4(self.model, max_seq_len=self.cache_size, lazy=not self.model.loaded)
+        #     self.cache = ExLlamaV2Cache_Q4(self.llm, max_seq_len=self.cache_size, lazy=not self.llm.loaded)
 
         # Test VRAM allocation with a full-length forward pass
         # input_ids = torch.zeros((1, self.max_seq_len), dtype=torch.long)
-        # model.forward(input_ids, cache=cache, preprocess_only=True)
+        # llm.forward(input_ids, cache=cache, preprocess_only=True)
 
         lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
 
@@ -586,7 +576,7 @@ arg_dict = """
 
     @staticmethod
     def get_stop_word(text, stop_words) -> Union[str, None]:
-        """ this function will match the stop word used given the text that model ended generation with and a list of stop_words."""
+        """ this function will match the stop word used given the text that llm ended generation with and a list of stop_words."""
 
         # sort the list by length to find the longest first
         sorted_stop_words = sorted(stop_words, key=len, reverse=True)
@@ -607,7 +597,7 @@ arg_dict = """
             model=model,
             tokenizer=tokenizer,
             image=img,
-            text_alias=None,    # passing None will let me model generate its one embedding
+            text_alias=None,    # passing None will let me llm generate its one embedding
         )
 
 
@@ -706,9 +696,9 @@ arg_dict = """
 
             elif vision_required and not self.processor:
                 if version('exllamav2') < '0.2.4':
-                    raise Exception(f"Current Exllama version of {version('exllamav2')} do not support Vision model")
+                    raise Exception(f"Current Exllama version of {version('exllamav2')} do not support Vision llm")
                 else:
-                    raise Exception("This model does not support vision")
+                    raise Exception("This llm does not support vision")
             else:
                 # vision not required
                 pass
@@ -851,7 +841,7 @@ arg_dict = """
                     if result["eos"]:
                         eos = True
 
-                        # if the stop word occurred is from the stop_words and not model result token -> include in result
+                        # if the stop word occurred is from the stop_words and not llm result token -> include in result
                         if stop_words and result.get("held") and result.get("held").get("text"):
                             ending_string = result["held"]["text"].rstrip()
 
@@ -865,7 +855,7 @@ arg_dict = """
                                     for g_queue in gen_queue_list:
                                         g_queue.get_queue().put_nowait(chunk)
                                 else:
-                                    # ending token is model eos token
+                                    # ending token is llm eos token
                                     pass
 
                         gen_stats = GenerationStats(
@@ -920,10 +910,10 @@ arg_dict = """
 #             self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
 #
 #     def _get_pipeline(self):
-#         lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+#         lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.llm)
 #
 #         return self.LLamaCppPipeline(
-#             generator=self.model,
+#             generator=self.llm,
 #             lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
 #         )
 #
@@ -1105,10 +1095,10 @@ arg_dict = """
 #             #self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
 #
 #     def _get_pipeline(self):
-#         #lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+#         #lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.llm)
 #
 #         return self.TransformersPipeline(
-#             generator=self.model.generate,
+#             generator=self.llm.generate,
 #             # lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
 #             lm_enforcer_tokenizer_data=None,    # TODO https://github.com/noamgat/lm-format-enforcer/blob/main/samples/colab_llama2_enforcer.ipynb
 #         )
@@ -1129,8 +1119,8 @@ arg_dict = """
 #         prefix_allowed_tokens_fn=None       # for lmfe format enforcement
 #     ):
 #         # Tokenize the prompt
-#         #input_ids = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-#         input_ids = input_ids.to(self.model.device)
+#         #input_ids = self.tokenizer(prompt, return_tensors="pt").to(self.llm.device)
+#         input_ids = input_ids.to(self.llm.device)
 #
 #         # Create generation config
 #         generation_config = transformers.GenerationConfig(
@@ -1150,9 +1140,9 @@ arg_dict = """
 #             skip_special_tokens=True,
 #         )
 #
-#         # Run the model's generate function in a separate thread
+#         # Run the llm's generate function in a separate thread
 #         thread = Thread(
-#             target=self.model.generate,
+#             target=self.llm.generate,
 #             kwargs={
 #                 **input_ids,
 #                 'generation_config': generation_config,
