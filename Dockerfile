@@ -1,6 +1,9 @@
 #FROM nvcr.io/nvidia/pytorch:23.07-py3
 FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
 LABEL authors="remichu"
+
+# Copy all source code to container
+COPY . /app
 WORKDIR /app
 # Enable CUDA for llama cpp
 ENV CMAKE_ARGS="-DLLAMA_CUDA=on"
@@ -58,7 +61,7 @@ RUN pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
 RUN pip install ninja
 RUN pip install packaging
 # RUN pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu12torch2.3cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
-RUN pip install flash-attn==2.6.3 --no-build-isolation
+RUN pip install flash-attn --no-build-isolation
 
 RUN pip install -r requirements.txt
 
@@ -73,7 +76,13 @@ RUN pip install -U transformers
 #git clone https://github.com/PanQiWei/AutoGPTQ.git && cd AutoGPTQ
 #INSTALL_KERNELS=1 pip install git+https://github.com/casper-hansen/AutoAWQ.git
 #pip install -vvv --no-build-isolation -e .
-RUN pip install gallama
+
+# install gallama from source and clean up files for smaller container size
+RUN pip install . \
+    && pip cache purge \
+    && rm -rf /root/.cache/pip \
+    && rm -rf /app  # Remove source files after installation
+
 
 # Clean up
 RUN apt-get clean && \

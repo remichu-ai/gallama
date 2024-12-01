@@ -2,4 +2,4 @@
 from .llm import ModelExllama, ModelLlamaCpp, ModelTransformers
 
 # Embedding
-from .embedding import embedding
+from .embedding.embedding import EmbeddingModel

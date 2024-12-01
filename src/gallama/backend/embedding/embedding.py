@@ -1,13 +1,14 @@
-from gallama.data_classes.data_class import (
+from ...data_classes.data_class import (
     EmbeddingRequest,
     EmbeddingResponse,
     EmbeddingObject,
+    ModelParser
 )
-from gallama.utils.utils import floats_to_base64
+from ...utils.utils import floats_to_base64
 from typing import Dict
 import logging
 from infinity_emb import EngineArgs, AsyncEmbeddingEngine
-from gallama.data_classes.data_class import ModelParser
+
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)      # disable logging from infinity
 
