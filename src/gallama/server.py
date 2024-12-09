@@ -11,6 +11,7 @@ from typing import Union
 from gallama.data_classes.data_class import ModelParser, ModelObjectResponse, ModelObject, ModelDownloadSpec
 from gallama.data_classes import ModelRequest, ModelInstanceInfo,  ModelInfo, AgentWithThinking, StopModelByPort
 from gallama.server_engine import download_model_from_hf, handle_mixture_of_agent_request, create_options_response
+from gallama.utils import parse_request_body
 from typing import List, Dict, Optional
 from gallama.config import ConfigManager
 from gallama.server_engine import forward_request
@@ -33,16 +34,22 @@ import traceback
 
 manager_app = FastAPI()
 
-
 @manager_app.middleware("http")
 @manager_app.middleware("https")
 async def log_requests(request: Request, call_next):
     try:
         if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
-            request_content = await request.body()
-            if request_content:  # Only process if the body is not empty
-                request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
-                logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
+            content_type = request.headers.get("Content-Type", "")
+            if "multipart/form-data" in content_type or "application/octet-stream" in content_type:
+                logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n[Binary content omitted]")
+            else:
+                request_content = await request.body()
+                if request_content:
+                    try:
+                        request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        request_content = "[Non-JSON or binary content omitted]"
+                    logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
 
         response = await call_next(request)
     except RequestValidationError as e:
@@ -50,6 +57,22 @@ async def log_requests(request: Request, call_next):
         response = JSONResponse(status_code=422, content={"detail": "Validation error"})
 
     return response
+# @manager_app.middleware("http")
+# @manager_app.middleware("https")
+# async def log_requests(request: Request, call_next):
+#     try:
+#         if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
+#             request_content = await request.body()
+#             if request_content:  # Only process if the body is not empty
+#                 request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
+#                 logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
+#
+#         response = await call_next(request)
+#     except RequestValidationError as e:
+#         logger.debug(f"Validation error:\n{e}")
+#         response = JSONResponse(status_code=422, content={"detail": "Validation error"})
+#
+#     return response
 
 # Add CORS middleware
 manager_app.add_middleware(
@@ -224,7 +247,7 @@ async def run_model(model: ModelParser):
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "-id", model_cli_args, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
-                    # stderr=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
             else:
                 # for embedding infinity doesnt have way to select GPU to be used, hence enforce
@@ -381,9 +404,9 @@ async def stop_model_by_port(request: StopModelByPort):
 
 async def get_model_from_body(request: Request) -> str:
     try:
-        body = await request.json()
+        body = await parse_request_body(request, return_full_body=True)
         return body.get("model", "")
-    except json.JSONDecodeError:
+    except:     # when request doesnt come with model e.g. audio transcription
         return ""
 
 
@@ -530,9 +553,9 @@ async def forward_to_multiple_agents(request: Request, agent_list: List[Union[st
     return await asyncio.gather(*tasks)
 
 
+
 async def load_balanced_router(request: Request, path: str):
-    body = await request.body()
-    body_json = json.loads(body)
+    body_json = await parse_request_body(request, return_full_body=False)
 
     if request.url.path in EXCLUDED_ENDPOINTS:
         logger.info(body_json)

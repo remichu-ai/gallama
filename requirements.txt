@@ -31,6 +31,14 @@ formatron>=0.4.4
 referencing
 qwen_vl_utils
 
-# audio
+# gpt_sovits
 librosa
 soundfile
+ffmpeg-python
+pytorch-lightning
+gradio  # TODO to remove
+cn2an
+pypinyin
+jieba-fast
+wordsegment
+g2p-en

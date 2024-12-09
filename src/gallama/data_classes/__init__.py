@@ -18,6 +18,12 @@ from .data_class import (
     ModelDownloadSpec
 )
 
+from .audio_data_class import (
+    TranscriptionResponse,
+    TimeStampedWord,
+    TTSRequest
+)
+
 from .generation_data_class import (
     GenerationStats,
     GenStart,
@@ -26,3 +32,4 @@ from .generation_data_class import (
     GenText,
     QueueContext,
 )
+

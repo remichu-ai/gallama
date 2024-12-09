@@ -103,7 +103,7 @@ mistral:
       quant: [8.0]
       url: https://huggingface.co/MaziyarPanahi/Mistral-7B-Instruct-v0.3-GGUF/blob/main/Mistral-7B-Instruct-v0.3.Q8_0.gguf
       backend: llama_cpp
-mistral-large:
+mistral-large-2407:
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Mistral_large
@@ -115,6 +115,19 @@ mistral-large:
     - repo: "Panchovix/Mistral-Large-Instruct-2407-3.75bpw-h6-exl2"
       branch: ['main']
       quant: [3.75]
+      backend: exllama
+mistral-large-2411:
+  default_quant: 4.0
+  default_cache_quant: Q4
+  prompt_template: Mistral_large
+  repo:
+    - repo: "bartowski/Mistral-Large-Instruct-2411-exl2"
+      branch: ['2_2', '3_0', '3_5', '3_75', '4_25', '5_0', '6_5']
+      quant: [2.2, 3.0, 3.5, 3.75, 4.25, 5.0, 6.5]
+      backend: exllama
+    - repo: "MikeRoz/mistralai_Mistral-Large-Instruct-2411-4.0bpw-h6-exl2"
+      branch: ['main']
+      quant: [4.0]
       backend: exllama
 mistral-nemo:
   default_quant: 4.0

@@ -1,0 +1,1 @@
+# soure code from: https://github.com/RVC-Boss/GPT-SoVITS.git

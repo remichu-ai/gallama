@@ -8,6 +8,9 @@ from PIL import Image
 import requests
 import os
 from io import BytesIO
+from fastapi import Request
+import json
+from typing import Union, Optional
 
 # Lazy import for Exllama
 try:
@@ -158,3 +161,52 @@ def is_flash_attention_installed() -> (bool, str):
         return True, flash_attn.__version__
     except ImportError:
         return False, None
+
+
+
+async def parse_request_body(
+    request: Request,
+    return_full_body: bool = False
+) -> Optional[Union[dict, str]]:
+    """
+    Parse the body of a request and handle different content types safely.
+
+    Args:
+        request (Request): The incoming HTTP request.
+        return_full_body (bool): Whether to return the full body (raw or decoded)
+                                 instead of a parsed JSON or wrapped dictionary.
+
+    Returns:
+        Optional[Union[dict, str]]:
+            - If return_full_body=True:
+                - Raw string or None if no body present.
+            - If return_full_body=False:
+                - Parsed JSON as a dictionary if JSON is detected.
+                - A dictionary with "text" key if plain text is detected.
+                - An empty dictionary if no body or unsupported content type.
+    """
+    try:
+        body = await request.body()
+        if not body:
+            return None if return_full_body else {}
+
+        content_type = request.headers.get("Content-Type", "")
+
+        if "application/json" in content_type:
+            parsed_body = json.loads(body.decode("utf-8"))
+        elif "text/" in content_type:
+            parsed_body = body.decode("utf-8")
+        else:
+            parsed_body = None  # Non-text or unsupported content types
+
+        if return_full_body:
+            return body.decode("utf-8", errors="replace") if isinstance(body, bytes) else body
+
+        if isinstance(parsed_body, dict):
+            return parsed_body
+        elif isinstance(parsed_body, str):
+            return {"text": parsed_body}
+        else:
+            return {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None if return_full_body else {}

@@ -1,8 +1,12 @@
 # using absolute import here as this file will be run alone
 import torch
 import gc
-from fastapi import FastAPI, Request, APIRouter
+from fastapi import FastAPI, Request, APIRouter, File, UploadFile, Form
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from openai.types.beta.assistant_stream_event import ThreadRunStepExpired
+import io
+import soundfile as sf
 from gallama.data_classes import (
     ChatMLQuery,
     ToolForce,
@@ -11,7 +15,9 @@ from gallama.data_classes import (
     ModelObject,
     ModelParser,
     GenQueue,
-    EmbeddingRequest
+    EmbeddingRequest,
+    TranscriptionResponse,
+    TTSRequest
 )
 import argparse
 from gallama.backend.llm import ModelExllama, ModelLlamaCpp, ModelTransformers
@@ -30,15 +36,18 @@ from gallama.api_response.chat_response import (
     chat_completion_response_artifact_stream,
     chat_completion_response_artifact
 )
+from gallama.utils import parse_request_body
 from gallama.config.config_manager import ConfigManager
-from logging import DEBUG
-from gallama.logger.logger import get_logger
 from gallama.data import ARTIFACT_SYSTEM_PROMPT
+from typing import List, Literal, Optional
 import os
 import asyncio
 from contextlib import asynccontextmanager
-
-
+from RealtimeTTS import ParlerEngine
+import threading
+from asyncio import Queue
+from logging import DEBUG
+from gallama.logger.logger import get_logger
 # Add this after your imports to clear logging from 3rd party module
 
 #streaming example
@@ -231,6 +240,105 @@ async def options_handler(request: Request):
         },
     )
 
+@router.post("/v1/audio/transcriptions", response_model=TranscriptionResponse)
+async def create_transcription(
+    file: UploadFile = File(..., description="The audio file to transcribe."),
+    model: str = Form(..., description="ID of the model to use."),
+    language: Optional[str] = Form(None, description="The language of the input audio in ISO-639-1 format."),
+    prompt: Optional[str] = Form(None, description="An optional text to guide the model's style or continue a previous segment."),
+    response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = Form("json", description="The format of the output."),
+    temperature: Optional[float] = Form(0.0, description="The sampling temperature, between 0 and 1."),
+    timestamp_granularities: Optional[List[Literal["word", "segment"]]] = Form(["segment"], description="The timestamp granularities for transcription.")
+):
+    """
+    Transcribe an audio file into the input language.
+    """
+
+    global stt_dict
+
+    stt_to_use = stt_dict.get(model).get("model")
+
+    if stt_to_use is None:
+        raise HTTPException(status_code=400, detail="Model not found")
+
+    if response_format not in  ["json", "verbose_json"]:
+        raise HTTPException(status_code=400, detail="Invalid response format, currently only json format supported")
+
+    include_segments = False
+    if response_format == "verbose_json" and "segment" in timestamp_granularities:
+        include_segments = True
+
+    transcribed_object = await stt_to_use.transcribe_async(
+        audio=file.file,
+        init_prompt=prompt,
+        temperature=temperature,
+        language=language,
+        include_segments=include_segments,
+    )
+
+    return transcribed_object
+
+from concurrent.futures import ThreadPoolExecutor
+
+@router.post("/v1/audio/speech")
+async def create_speech(request: TTSRequest):
+    # Validate the model, voice, and input length
+    # if request.model not in SUPPORTED_MODELS:
+    #     raise HTTPException(status_code=400, detail="Unsupported model")
+    # if request.voice not in SUPPORTED_VOICES:
+    #     raise HTTPException(status_code=400, detail="Unsupported voice")
+    if len(request.input) > 4096:
+        raise HTTPException(status_code=400, detail="Input text exceeds the maximum length of 4096 characters")
+
+    global tts_dict
+    tts_to_use = tts_dict.get(request.model).get("model")
+
+    if len(request.input) > 4096:
+        raise HTTPException(status_code=400, detail="Input text exceeds 4096 characters")
+
+    if request.speed < 0.25 or request.speed > 4.0:
+        raise HTTPException(status_code=400, detail="Speed must be between 0.25 and 4.0")
+
+    # Get the current event loop at the start
+    loop = asyncio.get_running_loop()
+
+    # Generate audio asynchronously
+    #voice_desc = get_voice_description(request.voice)
+    sampling_rate, audio_data = await tts_to_use.text_to_speech(
+        text = request.input,
+        stream = False,
+        batching = True,
+        batch_size = 3
+    )
+
+    # Convert to desired format using a thread pool
+    buffer = io.BytesIO()
+    if request.response_format not in ["mp3", "wav", "flac"]:
+        raise HTTPException(status_code=400, detail=f"Unsupported format: {request.response_format}")
+
+    # Write audio data to buffer in a thread pool
+    await loop.run_in_executor(
+        None,
+        lambda: sf.write(buffer, audio_data, sampling_rate, format=request.response_format)
+    )
+    buffer.seek(0)
+
+    # Set the appropriate media type
+    media_types = {
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "flac": "audio/flac"
+    }
+
+    return StreamingResponse(
+        buffer,
+        media_type=media_types[request.response_format],
+        headers={
+            "Content-Disposition": f'attachment; filename="speech.{request.response_format}"'
+        }
+    )
+
+
 
 @router.post("/load_model")
 def load_model(model_spec: ModelParser):
@@ -239,7 +347,7 @@ def load_model(model_spec: ModelParser):
     it might not have all the properties required for the model to be loaded
     the config_manager below contain all the models properties
     """
-    global config_manager, llm_dict
+    global config_manager, llm_dict, stt_dict, tts_dict
 
     # get the config from the yml
     model_name = model_spec.model_id
@@ -249,7 +357,7 @@ def load_model(model_spec: ModelParser):
         raise Exception(f"Model config for '{model_name}' not exist in ~/gallama/model_config.yaml")
 
     # load the model with config from the model_spec and yml. model_spec comes from cli
-    if model_config["backend"] != "embedding":
+    if model_config["backend"] in ["exllama", "llama_cpp", "transformers"]:  # llm loading
         prompt_eng = PromptEngine(prompt_format=model_config["prompt_template"])
 
         if model_spec.draft_model_id:
@@ -282,7 +390,7 @@ def load_model(model_spec: ModelParser):
             "model": llm,
             "prompt_engine": prompt_eng,
         }
-    else:   # embedding model
+    elif model_config["backend"] == "embedding":   # embedding model
         from gallama.backend.embedding.embedding import EmbeddingModel
 
         llm = EmbeddingModel(
@@ -296,7 +404,38 @@ def load_model(model_spec: ModelParser):
         llm_dict[model_name] = {
             "model": llm,
         }
+    elif model_config["backend"] == "faster_whisper":   # embedding model
+        from gallama.backend.stt import ASRProcessor, ASRFasterWhisper
 
+        stt_base = ASRFasterWhisper(
+            modelsize="large-v3-turbo",  # TODO hardcode for testing
+            cache_dir=None,
+            model_dir=None,
+            quant= "16.0",
+            # model_id=model_config["model_id"],
+            # model_name=model_name,
+            # model_spec=model_spec,
+            # model_config=model_config,
+        )
+
+        stt = ASRProcessor(asr=stt_base)
+
+        # update dict
+        stt_dict[model_name] = {
+            "model": stt,
+        }
+    elif model_config["backend"] == "gpt_sovits":   # embedding model
+        from gallama.backend.tts import TTS_GPT_SoVITS
+        logger.info("load TTS")
+        tts = TTS_GPT_SoVITS(
+            model_spec=model_spec,
+            model_config=model_config,
+        )
+
+        # update dict
+        tts_dict[model_name] = {
+            "model": tts,
+        }
 
     logger.info("Loaded: " + model_name)
 
@@ -363,7 +502,8 @@ async def lifespan(app: FastAPI):
 def make_server(args):
     global logger
     global model_ready
-    global llm_dict, default_model_name
+    global llm_dict, stt_dict, tts_dict
+    global default_model_name
     global draft_spec_dict
     # load yaml file of model info
     logger.info(args)
@@ -418,13 +558,31 @@ def make_server(args):
     @app.middleware("https")
     async def log_requests(request: Request, call_next):
         try:
+            # Log request details for specific methods
             if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
-                request_content = await request.body()
-                if request_content:  # Only process if the body is not empty
-                    request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
-                    logger.debug(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
+                # Use the helper function to parse the request body
+                request_content = await parse_request_body(request, return_full_body=True)
 
+                if isinstance(request_content, str):
+                    try:
+                        # Attempt to format as JSON if possible
+                        parsed_content = json.loads(request_content)
+                        request_content = json.dumps(parsed_content, indent=2)
+                    except json.JSONDecodeError:
+                        # Leave as raw string if it's not JSON
+                        pass
+
+                logger.debug(
+                    f"API Request:\n"
+                    f"Method: {request.method}\n"
+                    f"URL: {request.url}\n"
+                    f"Headers: {dict(request.headers)}\n"
+                    f"Body: {request_content if request_content else 'No Body'}"
+                )
+
+            # Proceed with the request
             response = await call_next(request)
+
         except RequestValidationError as e:
             logger.debug(f"Validation error:\n{e}")
             response = JSONResponse(status_code=422, content={"detail": "Validation error"})
@@ -432,6 +590,8 @@ def make_server(args):
         return response
 
     llm_dict = {}
+    stt_dict = {}
+    tts_dict = {}
 
     # make relevant parameter global for endpoint function to use
     # load LLM model
