@@ -1,4 +1,4 @@
-from fastapi import Request
+from fastapi import Request, APIRouter
 from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
@@ -29,6 +29,7 @@ from pydantic.json import pydantic_encoder
 import time
 import json
 import asyncio
+
 
 
 async def get_response_from_queue(

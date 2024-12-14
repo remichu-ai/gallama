@@ -482,15 +482,23 @@ class Thinking(BaseModel):
 
 
 
-class ModelParser(BaseModel):
-    model_id: str = Field(description='id of the model from the yml file')
-    model_name: Optional[str] = Field(description='name of the model', default=None)
+class ModelSpec(BaseModel):
+    model_id: Optional[str] = Field(description='path of the model from the yml file', default=None)
+    model_name: Optional[str] = Field(description='name of the model, the key in the yaml file', default=None)
     gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
     backend: Optional[Union[Literal["exllama", "llama_cpp", "transformers", "embedding"], None]] = Field(description="model engine backend", default="exllama")
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
+    prompt_template: Optional[str] = Field(description="prompt template", default=None)
+    eos_token_list: List[str] = Field(description="eos tokens, can customize token here", default=[])
+
+    # number of concurrent request this model can handle
+    max_concurrent_requests: int = Field(description="number of concurrent request this model can handle", default=1)
+
+    # extra argument for specific backend or model
+    backend_extra_args: Dict[Any, Any] = Field(description="extra args to pass to the backend", default={})
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -507,15 +515,15 @@ class ModelParser(BaseModel):
     # dont allow non recognizable option
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    @validator('model_name', pre=True, always=True)
-    def set_model_name(cls, v, values):
-        if v is None and 'model_id' in values:
-            return values['model_id'].split('/')[-1]
-        return v
+    # @validator('model_name', pre=True, always=True)
+    # def set_model_name(cls, v, values):
+    #     if v is None and 'model_id' in values:
+    #         return values['model_id'].split('/')[-1]
+    #     return v
 
     @validator('gpus', pre=True, always=True)
     def validate_gpus(cls, v):
-        if v is None:
+        if v is None or v == "auto":
             return None
         if isinstance(v, dict):
             # Convert the dict to a list based on GPU IDs
@@ -542,7 +550,7 @@ class ModelParser(BaseModel):
     #                 raise ValueError(
     #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
-        return gpus
+        # return gpus
 
     @classmethod
     def from_dict(cls, input_data: Union[str, Dict[str, Any]]):
@@ -560,7 +568,7 @@ class ModelParser(BaseModel):
         model_id = input_dict.get('model_id')
         if model_id:
             model_id = input_dict.get('model_id').strip("'")  # Remove single quotes if present
-        #model_name = input_dict.get('model_name')
+        model_name = input_dict.get('model_name')
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
@@ -579,6 +587,10 @@ class ModelParser(BaseModel):
 
         if cache_size:
             cache_size = int(cache_size)
+
+        # concurrent request
+        allowed_concurrency = 50 if backend in ["exllama", "embedding"] else 1  # TODO to look into optimal number
+        max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
 
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
@@ -600,8 +612,7 @@ class ModelParser(BaseModel):
         if draft_cache_size:
             draft_cache_size = int(draft_cache_size)
 
-        # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+        return cls(model_id=model_id, model_name=model_name, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
@@ -673,6 +684,42 @@ class ModelParser(BaseModel):
 
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
+
+    def merge_with_config(self, model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Merges the current ModelSpec instance with a model configuration dictionary.
+        Values from the current ModelSpec take precedence over the model_config.
+
+        Args:
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        # Convert current ModelSpec to dict, excluding None values
+        spec_dict = self.model_dump(exclude_none=True)
+
+        # Merge configurations - spec_dict values will override model_config
+        merged_config = {**model_config, **spec_dict}
+
+        # Create new ModelSpec instance with merged configuration
+        return ModelSpec(**merged_config)
+
+    @classmethod
+    def from_merged_config(cls, model_spec: 'ModelSpec', model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Class method to create a new ModelSpec instance by merging an existing ModelSpec
+        with a model configuration dictionary.
+
+        Args:
+            model_spec (ModelSpec): Existing ModelSpec instance
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        return model_spec.merge_with_config(model_config)
+
 
 
 class ModelDownloadSpec(BaseModel):

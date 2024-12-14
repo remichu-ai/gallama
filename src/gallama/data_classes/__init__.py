@@ -1,4 +1,5 @@
 from .server_dataclass import (
+    ServerSetting,
     ModelRequest,
     ModelInstanceInfo,
     ModelInfo,
@@ -13,7 +14,7 @@ from .data_class import (
     GenerateQuery,
     ModelObjectResponse,
     ModelObject,
-    ModelParser,
+    ModelSpec,
     EmbeddingRequest,
     ModelDownloadSpec
 )
@@ -31,5 +32,6 @@ from .generation_data_class import (
     GenQueue,
     GenText,
     QueueContext,
+    ModelError, # picklable exception
 )
 

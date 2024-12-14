@@ -1,5 +1,6 @@
 import logging
 from logging.config import dictConfig
+from torch import multiprocessing as mp
 from logging.handlers import RotatingFileHandler
 import os
 import sys
@@ -255,4 +256,6 @@ def get_logger(
     )
     return setup_logger(config)
 
-logger = get_logger()
+# logger = get_logger()
+logger = mp.log_to_stderr()
+logger.setLevel(logging.DEBUG)

@@ -16,7 +16,7 @@ dynamic = ["dependencies"]
 "Homepage" = "https://github.com/remichu-ai/gallama"
 
 [project.scripts]
-gallama = "gallama.cli:main_cli"
+gallama = "gallama.cli:main"
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

@@ -9,7 +9,7 @@ import uuid                                 # use for generating id for api retu
 
 from gallama.logger.logger import logger
 from gallama.data_classes import (
-    ModelParser,
+    ModelSpec,
     GenStart,
     GenEnd,
     GenQueue,
@@ -97,12 +97,9 @@ except ImportError:
 
 class ModelExllama(ModelInterface):
     def __init__(self,
-        model_spec:ModelParser,
-        model_config: Dict,
-        draft_model_config: Dict = None,
-        eos_token_list_from_prompt_template: List[str] = None
+        model_spec:ModelSpec,
     ):
-        super().__init__(model_spec, model_config, draft_model_config, eos_token_list_from_prompt_template)
+        super().__init__(model_spec)
         self.model, self.tokenizer, self.cache, self.processor = self.load_model()
 
 

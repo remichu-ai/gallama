@@ -37,7 +37,7 @@ from gallama.logger.logger import logger
 
 # custom data classes
 from gallama.data_classes import (
-    ModelParser,
+    ModelSpec,
     GenStart,
     GenEnd,
     GenQueue,
@@ -48,12 +48,9 @@ from gallama.data_classes import (
 
 class ModelTransformers(ModelInterface):
     def __init__(self,
-        model_spec:ModelParser,
-        model_config: Dict,
-        draft_model_config: Dict = None,
-        eos_token_list_from_prompt_template: List[str] = None
+        model_spec:ModelSpec
     ):
-        super().__init__(model_spec, model_config, draft_model_config, eos_token_list_from_prompt_template)
+        super().__init__(model_spec)
         self.model, self.tokenizer, self.processor = self.load_model()
 
 

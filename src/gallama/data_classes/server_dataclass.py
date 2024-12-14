@@ -1,5 +1,13 @@
 from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator
 from typing import Optional, Literal, List, Dict, Union, Any, Type
+from .data_class import ModelSpec
+
+class ServerSetting(BaseModel):
+    host: str = Field(default="127.0.0.1")
+    port: int = Field(default=8000, ge=1, le=65535)
+    verbose: bool = Field(default=False, description="Turn on more verbose logging")
+    strict_mode: bool = Field(default=False, description="Enable strict mode for routing non-embedding requests to matching model names")
+    model_specs: List[ModelSpec] = Field(default=None)
 
 
 class ModelRequest(BaseModel):
@@ -36,3 +44,4 @@ class MixtureOfAgents(BaseModel):
 
 class StopModelByPort(BaseModel):
     port: int
+

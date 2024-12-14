@@ -94,3 +94,11 @@ class QueueContext:
 
     def get_queue(self) -> GenQueue | None:
         return self.gen_queue()
+
+
+# Create a picklable custom exception
+class ModelError(Exception):
+    def __init__(self, detail: str, status_code: int = None):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(self.detail)

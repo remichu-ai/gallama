@@ -5,3 +5,7 @@ from . import app
 from .app import make_server
 from .backend import chatgenerator
 from .config import ConfigManager
+
+from .cli import main
+
+__all__ = ["main"]
