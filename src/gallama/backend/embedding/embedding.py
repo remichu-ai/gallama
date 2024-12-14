@@ -2,7 +2,7 @@ from ...data_classes.data_class import (
     EmbeddingRequest,
     EmbeddingResponse,
     EmbeddingObject,
-    ModelParser
+    ModelSpec
 )
 from ...utils.utils import floats_to_base64
 from typing import Dict
@@ -14,10 +14,10 @@ for handler in logging.root.handlers[:]:
 
 
 class EmbeddingModel:
-    def __init__(self, model_id: str, model_name: str, model_spec: ModelParser, model_config: Dict):
-        self.model_id = model_id
-        self.model_name = model_name
-        self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
+    def __init__(self, model_spec: ModelSpec):
+
+        self.model_id = model_spec.model_id
+        self.model_name = model_spec.model_name
         self.model = self.load_embedding_model()
 
     def get_visible_gpu_indices(self) -> str:
@@ -46,6 +46,7 @@ class EmbeddingModel:
                 model_name_or_path=self.model_id,
                 engine="torch",
                 embedding_dtype="float32",
+                bettertransformer=False,    # not compatible with many model
                 dtype="auto"
             )
         )

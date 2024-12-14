@@ -17,7 +17,7 @@ chardet
 sse_starlette
 fastapi
 lxml
-infinity-emb
+infinity-emb[all]
 colorama
 zmq
 #git+https://github.com/huggingface/transformers.git@c42b3223db0fc24ff9a694f19e6c78faf3ac58a1#egg=transformers

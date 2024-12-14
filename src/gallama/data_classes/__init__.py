@@ -13,9 +13,10 @@ from .data_class import (
     GenerateQuery,
     ModelObjectResponse,
     ModelObject,
-    ModelParser,
+    ModelSpec,
     EmbeddingRequest,
-    ModelDownloadSpec
+    ModelDownloadSpec,
+    SUPPORTED_BACKENDS
 )
 
 from .audio_data_class import (

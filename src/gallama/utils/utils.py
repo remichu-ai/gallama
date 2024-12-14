@@ -10,7 +10,8 @@ import os
 from io import BytesIO
 from fastapi import Request
 import json
-from typing import Union, Optional
+from typing import Union, Optional, Tuple
+from gallama.logger import logger
 
 # Lazy import for Exllama
 try:
@@ -162,51 +163,68 @@ def is_flash_attention_installed() -> (bool, str):
     except ImportError:
         return False, None
 
-
-
 async def parse_request_body(
     request: Request,
-    return_full_body: bool = False
-) -> Optional[Union[dict, str]]:
+) -> Tuple[Optional[Union[dict, str]], bool]:
     """
-    Parse the body of a request and handle different content types safely.
+    Parse the request body intelligently based on content type.
+    Returns both the parsed body and a flag indicating if it's a multipart request.
 
     Args:
         request (Request): The incoming HTTP request.
-        return_full_body (bool): Whether to return the full body (raw or decoded)
-                                 instead of a parsed JSON or wrapped dictionary.
 
     Returns:
-        Optional[Union[dict, str]]:
-            - If return_full_body=True:
-                - Raw string or None if no body present.
-            - If return_full_body=False:
-                - Parsed JSON as a dictionary if JSON is detected.
-                - A dictionary with "text" key if plain text is detected.
-                - An empty dictionary if no body or unsupported content type.
+        Tuple[Optional[Union[dict, str]], bool]:
+            - First element: Parsed body content
+            - Second element: Boolean indicating if it's a multipart request
     """
     try:
-        body = await request.body()
-        if not body:
-            return None if return_full_body else {}
-
         content_type = request.headers.get("Content-Type", "")
 
+        # Handle multipart form data (like audio files) differently
+        if "multipart/form-data" in content_type:
+            return await request.body(), True
+
+        body = await request.body()
+        if not body:
+            return {}, False
+
         if "application/json" in content_type:
-            parsed_body = json.loads(body.decode("utf-8"))
+            return json.loads(body.decode("utf-8")), False
         elif "text/" in content_type:
-            parsed_body = body.decode("utf-8")
+            return {"text": body.decode("utf-8")}, False
         else:
-            parsed_body = None  # Non-text or unsupported content types
+            # For binary or unknown content types, return raw body
+            return body, False
 
-        if return_full_body:
-            return body.decode("utf-8", errors="replace") if isinstance(body, bytes) else body
+    except Exception as e:
+        logger.error(f"Error parsing request body: {e}")
+        return {}, False
 
-        if isinstance(parsed_body, dict):
-            return parsed_body
-        elif isinstance(parsed_body, str):
-            return {"text": parsed_body}
-        else:
-            return {}
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None if return_full_body else {}
+
+async def get_model_from_body(request: Request) -> str:
+    """
+    Extract model information from request body, handling different request types.
+
+    Args:
+        request (Request): The incoming HTTP request.
+
+    Returns:
+        str: The model name if found, empty string otherwise.
+    """
+    try:
+        body, is_multipart = await parse_request_body(request)
+
+        # For multipart requests (like audio), return default or configured model
+        if is_multipart:
+            return "whisper"  # Or any default model for audio
+
+        # For regular JSON requests, extract model from body
+        if isinstance(body, dict):
+            return body.get("model", "")
+
+        return ""
+
+    except Exception as e:
+        logger.error(f"Error while getting model from request: {e}")
+        return ""

@@ -3,8 +3,9 @@ import shutil
 from pathlib import Path
 from gallama.config import ConfigManager
 from gallama.logger.logger import logger
-from gallama.server import run_from_script, download_model
-from gallama.data_classes.data_class import ModelDownloadSpec
+from gallama.server import run_from_script
+from gallama.server_routes import download_model
+from gallama.data_classes.data_class import ModelDownloadSpec, SUPPORTED_BACKENDS
 from rich.markdown import Markdown
 from rich.console import Console
 
@@ -115,7 +116,7 @@ def main_cli():
     # Add 'download' subcommand
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
     download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
-    download_parser.add_argument("--backend", type=str, default="exllama", choices=['exllama', 'llama_cpp', 'embedding', 'transformers'],
+    download_parser.add_argument("--backend", type=str, default=None, choices=SUPPORTED_BACKENDS,
                                  help="The backend to download model with. One of exllama, llama_cpp, embedding or transformers")
 
     # Modify 'list' subcommand
@@ -135,9 +136,9 @@ def main_cli():
         logger.setLevel("INFO")
 
     if args.command == "run" or args.command is None:
-        if args.model_name and not args.model_id:
-            # Convert simplified version to the full version
-            args.model_id = [{"model_id": args.model_name}]
+        # if args.model_name and not args.model_id:
+        #     # Convert simplified version to the full version
+        #     args.model_id = [{"model_name": args.model_name}]
         run_from_script(args)  # Pass all arguments to run_from_script
 
     elif args.command == "download":

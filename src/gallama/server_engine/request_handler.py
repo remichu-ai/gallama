@@ -38,10 +38,10 @@ async def stream_response(method: str, url: str, headers: dict, body: bytes):   
 
 
 async def forward_request(
-    request: Request,
-    instance: ModelInstanceInfo,
-    modified_body: Optional[str] = None,
-    modified_headers: Optional[dict] = None
+        request: Request,
+        instance: ModelInstanceInfo,
+        modified_body: Optional[str] = None,
+        modified_headers: Optional[dict] = None
 ) -> Union[Response, StreamingResponse]:
     """
     Forward a request to a specific instance while handling optional modifications to the body and headers.
@@ -57,24 +57,31 @@ async def forward_request(
     """
     original_path = request.url.path
     path = original_path
-
-    # Construct the URL to forward to
     url = f"http://localhost:{instance.port}{path}"
     logger.debug(f"Forwarding request to URL: {url}")
 
     # Use modified headers if provided, otherwise use the original headers
     headers = modified_headers if modified_headers else dict(request.headers)
 
-    # Parse the request body
-    body = modified_body if modified_body else await parse_request_body(request, return_full_body=True)
-    body_json = None
+    # Handle the body based on content type and modifications
+    if modified_body is not None:
+        body = modified_body
+        body_json = json.loads(body) if isinstance(body, str) else None
+    else:
+        body, is_multipart = await parse_request_body(request)
 
-    # Attempt to parse the body as JSON if applicable
-    if isinstance(body, str):
-        try:
-            body_json = json.loads(body)
-        except json.JSONDecodeError:
-            logger.warning("Request body is not valid JSON; proceeding with raw body")
+        if is_multipart:
+            # For multipart requests (like file uploads), get the raw body
+            body = await request.body()
+            body_json = None
+        else:
+            # For non-multipart requests
+            if isinstance(body, dict):
+                body_json = body
+                body = json.dumps(body)
+            else:
+                body_json = None
+                body = body if isinstance(body, (str, bytes)) else str(body)
 
     request.state.instance_port = instance.port
 
@@ -84,7 +91,7 @@ async def forward_request(
     logger.debug(f"Content-Type header: {headers.get('content-type')}")
     if body_json:
         logger.debug(f"Request body JSON: {body_json}")
-    else:
+    elif isinstance(body, (str, bytes)):
         logger.debug(f"Request raw body: {body[:500]}")  # Log up to 500 characters of the raw body
 
     # Check if it's a streaming request
@@ -117,7 +124,8 @@ async def forward_request(
                     headers=dict(response.headers)
                 )
             except httpx.RequestError as exc:
-                logger.error(f"An error occurred while forwarding the request to instance at port {instance.port}: {exc}")
+                logger.error(
+                    f"An error occurred while forwarding the request to instance at port {instance.port}: {exc}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
 

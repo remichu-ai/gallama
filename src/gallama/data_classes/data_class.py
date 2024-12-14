@@ -481,16 +481,29 @@ class Thinking(BaseModel):
     regex: str = Field(description='regex string to enforce any value', default=None)
 
 
+# list of supported backend. None meaning it the api will take backend set from yaml config file
+SUPPORTED_BACKENDS = ["exllama", "llama_cpp", "transformers", "embedding", "faster_whisper", "gpt_sovits", None]
 
-class ModelParser(BaseModel):
-    model_id: str = Field(description='id of the model from the yml file')
-    model_name: Optional[str] = Field(description='name of the model', default=None)
-    gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+class ModelSpec(BaseModel):
+    model_id: Optional[str] = Field(description='id of the model which should be the path to the model', default=None)
+    model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
+    model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
+    gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
-    backend: Optional[Union[Literal["exllama", "llama_cpp", "transformers", "embedding"], None]] = Field(description="model engine backend", default="exllama")
+    backend: Optional[Union[Literal[tuple(SUPPORTED_BACKENDS)], None]] = Field(description="model engine backend", default=None)
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
+    prompt_template: Optional[str] = Field(description="prompt template", default=None)
+    eos_token_list: List[str] = Field(description="eos tokens, can customize token here", default_factory=list)
+
+    quant: Optional[float] = Field(description="quantization if the model support quantization on the fly", default=None)
+
+    # number of concurrent request this model can handle
+    max_concurrent_requests: int = Field(description="number of concurrent request this model can handle", default=1)
+
+    # extra argument for specific backend or model
+    backend_extra_args: Dict[Any, Any] = Field(description="extra args to pass to the backend", default_factory=dict)
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -503,15 +516,17 @@ class ModelParser(BaseModel):
     # transformers specific
     transformers_args: Optional[Dict] = None
 
+    # audio related setting
+    language: Optional[str] = Field(description="language of the audio", default="auto")
 
     # dont allow non recognizable option
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    @validator('model_name', pre=True, always=True)
-    def set_model_name(cls, v, values):
-        if v is None and 'model_id' in values:
-            return values['model_id'].split('/')[-1]
-        return v
+    # @validator('model_name', pre=True, always=True)
+    # def set_model_name(cls, v, values):
+    #     if v is None and 'model_id' in values:
+    #         return values['model_id'].split('/')[-1]
+    #     return v
 
     @validator('gpus', pre=True, always=True)
     def validate_gpus(cls, v):
@@ -542,7 +557,21 @@ class ModelParser(BaseModel):
     #                 raise ValueError(
     #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
-        return gpus
+        # return gpus
+
+
+    @classmethod
+    def get_model_type_from_backend(cls, backend: str = None):
+        if backend is None:
+            return None
+        elif backend in ["exllama", "llama_cpp", "transformers"]:
+            return "llm"
+        elif backend in ["faster_whisper"]:
+            return "stt"
+        elif backend in ["gpt_sovits"]:
+            return "tts"
+        elif backend in ["embedding"]:
+            return "embedding"
 
     @classmethod
     def from_dict(cls, input_data: Union[str, Dict[str, Any]]):
@@ -560,7 +589,7 @@ class ModelParser(BaseModel):
         model_id = input_dict.get('model_id')
         if model_id:
             model_id = input_dict.get('model_id').strip("'")  # Remove single quotes if present
-        #model_name = input_dict.get('model_name')
+        model_name = input_dict.get('model_name')
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
@@ -579,6 +608,20 @@ class ModelParser(BaseModel):
 
         if cache_size:
             cache_size = int(cache_size)
+
+        if cache_size:
+            cache_size = int(cache_size)
+
+        model_type = input_dict.get('model_type', None)
+        if model_type is None:
+            model_type = cls.get_model_type_from_backend(backend)
+
+
+        # concurrent request
+        allowed_concurrency = 50 if backend in ["exllama", "embedding"] else 1  # TODO to look into optimal number for each backend
+        max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
+
+        backend_extra_args = input_dict.get('backend_extra_args', None)
 
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
@@ -601,59 +644,61 @@ class ModelParser(BaseModel):
             draft_cache_size = int(draft_cache_size)
 
         # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+        return cls(model_id=model_id, model_name=model_name, model_type=model_type,
+                   gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+                   max_concurrent_requests=max_concurrent_requests,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
 
-    def to_arg_string(self) -> str:
-        """
-        Generate a command-line argument string based on the instance's attributes.
-
-        Returns:
-            str: A string representation of the command-line arguments.
-        """
-        args = [f"model_id={self.model_id}"]
-
-        if self.model_name != self.model_id.split('/')[-1]:
-            args.append(f"model_name={self.model_name}")
-
-        if self.gpus is not None:
-            args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
-
-        if self.max_seq_len is not None:
-            args.append(f"max_seq_len={self.max_seq_len}")
-
-        if self.cache_size is not None:
-            args.append(f"cache_size={self.cache_size}")
-
-        if self.cache_quant is not None:
-            args.append(f"cache_quant={self.cache_quant}")
-
-        if self.backend != "exllama":  # Only include if it's not the default value
-            args.append(f"backend={self.backend}")
-
-        if self.tensor_parallel:
-            args.append(f"tp={self.tensor_parallel}")
-
-        # Add draft model parameters
-        if self.draft_model_id is not None:
-            args.append(f"draft_model_id={self.draft_model_id}")
-
-        if self.draft_model_name is not None and self.draft_model_name != self.draft_model_id.split('/')[-1]:
-            args.append(f"draft_model_name={self.draft_model_name}")
-
-        if self.draft_gpus is not None:
-            args.append(f"draft_gpus={','.join(str(vram) for vram in self.draft_gpus)}")
-
-        if self.draft_cache_size is not None:
-            args.append(f"draft_cache_size={self.draft_cache_size}")
-
-        if self.draft_cache_quant is not None:
-            args.append(f"draft_cache_quant={self.draft_cache_quant}")
-
-        return " ".join(args)
+    # def to_arg_string(self) -> str:
+    #     """
+    #     Generate a command-line argument string based on the instance's attributes.
+    #     This is needed for the server to generate the command to load children api server
+    #     Returns:
+    #         str: A string representation of the command-line arguments.
+    #     """
+    #     args = [f"model_id={self.model_id}"]
+    #
+    #     if self.model_name != self.model_id.split('/')[-1]:
+    #         args.append(f"model_name={self.model_name}")
+    #
+    #     if self.gpus is not None:
+    #         args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
+    #
+    #     if self.max_seq_len is not None:
+    #         args.append(f"max_seq_len={self.max_seq_len}")
+    #
+    #     if self.cache_size is not None:
+    #         args.append(f"cache_size={self.cache_size}")
+    #
+    #     if self.cache_quant is not None:
+    #         args.append(f"cache_quant={self.cache_quant}")
+    #
+    #     if self.backend != "exllama":  # Only include if it's not the default value
+    #         args.append(f"backend={self.backend}")
+    #
+    #     if self.tensor_parallel:
+    #         args.append(f"tp={self.tensor_parallel}")
+    #
+    #     # Add draft model parameters
+    #     if self.draft_model_id is not None:
+    #         args.append(f"draft_model_id={self.draft_model_id}")
+    #
+    #     if self.draft_model_name is not None and self.draft_model_name != self.draft_model_id.split('/')[-1]:
+    #         args.append(f"draft_model_name={self.draft_model_name}")
+    #
+    #     if self.draft_gpus is not None:
+    #         args.append(f"draft_gpus={','.join(str(vram) for vram in self.draft_gpus)}")
+    #
+    #     if self.draft_cache_size is not None:
+    #         args.append(f"draft_cache_size={self.draft_cache_size}")
+    #
+    #     if self.draft_cache_quant is not None:
+    #         args.append(f"draft_cache_quant={self.draft_cache_quant}")
+    #
+    #     return " ".join(args)
 
     def get_visible_gpu_indices(self) -> str:
         """
@@ -664,7 +709,7 @@ class ModelParser(BaseModel):
             str: A comma-separated string of GPU indices with allocated VRAM,
                  or all available GPU indices if none are specified.
         """
-        if self.gpus is None:
+        if self.gpus is None or self.gpus == "auto":
             import torch
             return ','.join(str(i) for i in range(torch.cuda.device_count()))
 
@@ -674,12 +719,76 @@ class ModelParser(BaseModel):
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
 
+    @staticmethod
+    def deep_merge_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively merge two dictionaries, handling nested dictionaries.
+        Values from dict2 take precedence over dict1 except for nested dictionaries,
+        which are merged recursively.
+
+        Args:
+            dict1 (Dict[str, Any]): First dictionary
+            dict2 (Dict[str, Any]): Second dictionary (takes precedence for non-dict values)
+
+        Returns:
+            Dict[str, Any]: Merged dictionary
+        """
+        merged = dict1.copy()
+
+        for key, value in dict2.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                # If both values are dictionaries, merge them recursively
+                merged[key] = ModelSpec.deep_merge_dicts(merged[key], value)
+            else:
+                # For non-dict values or when key doesn't exist in dict1,
+                # take the value from dict2
+                merged[key] = value
+
+        return merged
+
+    def merge_with_config(self, model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Merges the current ModelSpec instance with a model configuration dictionary.
+        Values from the current ModelSpec take precedence over the model_config.
+        Handles nested dictionaries by merging them recursively.
+
+        Args:
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        # Convert current ModelSpec to dict, excluding None values
+        spec_dict = self.model_dump(exclude_none=True)
+
+        # Merge configurations recursively
+        merged_config = ModelSpec.deep_merge_dicts(model_config, spec_dict)
+
+        # Create new ModelSpec instance with merged configuration
+        return ModelSpec(**merged_config)
+
+    @classmethod
+    def from_merged_config(cls, model_spec: 'ModelSpec', model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Class method to create a new ModelSpec instance by merging an existing ModelSpec
+        with a model configuration dictionary.
+
+        Args:
+            model_spec (ModelSpec): Existing ModelSpec instance
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        return model_spec.merge_with_config(model_config)
+
+
 
 class ModelDownloadSpec(BaseModel):
     """ dataclass for model download"""
     model_name: str
     quant: Optional[float] = None
-    backend: Literal["exllama", "llama_cpp", "embedding", "transformers"] = "exllama"
+    backend: Literal[tuple(SUPPORTED_BACKENDS)] = None
 
     # disable protected_namespaces due to it field use model_ in the name
     model_config = ConfigDict(extra="forbid", protected_namespaces=())

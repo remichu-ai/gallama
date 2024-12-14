@@ -6,7 +6,7 @@ import asyncio
 from ..text_processor import TextToTextSegment
 from concurrent.futures import ThreadPoolExecutor
 from gallama.data_classes import (
-    ModelParser
+    ModelSpec
 )
 
 class TSS_ConfigModified(TTS_Config):
@@ -22,7 +22,7 @@ class TSS_ConfigModified(TTS_Config):
             value_to_set = backend_extra_args.get(arg_name)
 
             if value_to_set is None:
-                raise ValueError("For GPT_SoVits argument {arg_name} is required and must be set in model_config.yaml")
+                raise ValueError(f"For GPT_SoVits argument {arg_name} is required and must be set in model_config.yaml")
 
             # set this as attribute of the class
             setattr(self, arg_name, value_to_set)
@@ -89,11 +89,9 @@ class AsyncTTSWrapper:
 
 
 class TTS_GPT_SoVITS(TTSBase):
-    def __init__(self,
-        model_spec: ModelParser,
-        model_config: Dict,
-    ):
-        super().__init__(model_spec, model_config)
+    def __init__(self, model_spec: ModelSpec):
+        super().__init__(model_spec)
+
         # create the config object with parameters from gallama yaml config file
         self.config = TSS_ConfigModified(self.backend_extra_args)
         self.model = AsyncTTSWrapper(TTS(self.config))

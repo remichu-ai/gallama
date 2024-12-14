@@ -78,6 +78,23 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
         if quant is None:
             raise HTTPException(status_code=400, detail=f"Error: No default quantization specified for model '{model_name}'.")
 
+    # get the list of backend available in the yaml for download
+    available_backends_for_this_model = [repo['backend'] for repo in model_config["repo"] if quant in repo['quant']]
+
+    # if there is only 1 backend available, set to that backend
+    if len(available_backends_for_this_model) == 1:
+        backend_to_download = available_backends_for_this_model[0]
+    elif len(available_backends_for_this_model) > 1:
+        # default to exllama if it is available as one of the backend
+        if "exllama" in available_backends_for_this_model:
+            backend_to_download = "exllama"
+        else:   # just pick any
+            backend_to_download = available_backends_for_this_model[0]
+    else:
+        raise HTTPException(status_code=400, detail=f"Error: No backend available for model '{model_name}'.")
+
+    backend = backend_to_download
+
     # Filter repo_info based on both quant and backend
     repo_info = next((repo for repo in model_config['repo'] if quant in repo['quant'] and repo['backend'] == backend), None)
 

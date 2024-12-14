@@ -12,6 +12,10 @@ class GenerationStats(BaseModel):
     time_generate: float = Field(description='time to generate tokens', default=0)
 
     @property
+    def total_tokens_count(self) -> int:
+        return self.input_tokens_count + self.output_tokens_count
+
+    @property
     def generation_speed(self) -> float:
         if self.time_generate > 0:
             return round(self.output_tokens_count / self.time_generate, ndigits=1)

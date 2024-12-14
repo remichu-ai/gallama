@@ -786,6 +786,61 @@ llama-3.1-nemotron-70B:
       backend: exllama
 
 
+# audio model from here
+whisper-large-v3:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Systran/faster-whisper-large-v3"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
+whisper-medium:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Systran/faster-whisper-medium"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
+whisper-small:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Systran/faster-whisper-small"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
+whisper-base:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Systran/faster-whisper-base"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
+whisper-tiny:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "Systran/faster-whisper-tiny"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
+whisper-large-v3-turbo:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+      branch: ['main']
+      quant: [16.0]
+      backend: faster_whisper
+
 # embedding model from here
 multilingual-e5-large-instruct:
   default_quant: 16

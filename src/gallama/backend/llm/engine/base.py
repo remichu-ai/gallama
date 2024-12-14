@@ -22,7 +22,7 @@ from gallama.backend.llm.tools import Tools, create_function_models_v2, create_f
 from gallama.utils.utils import get_token_length
 from gallama.api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
 from gallama.data_classes import (
-    ModelParser,
+    ModelSpec,
     ChatMLQuery,
     GenEnd,
     GenText,
@@ -31,44 +31,60 @@ from gallama.data_classes import (
     GenerationStats,
     QueueContext
 )
-
+from ....config.config_manager import ConfigManager
 # handle prompting
 from gallama.backend.llm.prompt_engine import PromptEngine
 
+config_manager = ConfigManager()
 
 class ModelInterface(ABC):
     @abstractmethod
-    def __init__(self,
-        model_spec:ModelParser,
-        model_config: Dict,
-        draft_model_config: Dict = None,
-        eos_token_list_from_prompt_template: List[str] = None
-    ):
+    def __init__(self, model_spec:ModelSpec):
         # initialization share the same code to keep the frontend consistent
         # if a backend does not support the value, please set it in the __init__ or load_model()
 
+        # load prompt engine
+        self.prompt_eng = PromptEngine(prompt_format=model_spec.prompt_template)
+
         # model_spec capture cli argument
         # model_config is from yml file
-        self.model_id = model_config["model_id"]
-        self.model_name = model_spec.model_name or model_config["model_name"]
-        self.max_seq_len = model_spec.max_seq_len or model_config.get("max_seq_len", None)
+        self.model_id = model_spec.model_id
+        # self.model_name = model_spec.model_name or model_config["model_name"]
+        self.model_name = model_spec.model_name
+        # self.max_seq_len = model_spec.max_seq_len or model_config.get("max_seq_len", None)
+        self.max_seq_len = model_spec.max_seq_len
         if self.max_seq_len is not None:
             self.max_seq_len = (self.max_seq_len//256) * 256     # for paged attention
 
-        self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
-        self.cache_size = model_spec.cache_size or model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
+        # self.gpus = model_spec.gpus or model_config.get("gpus") or "auto"
+        self.gpus = model_spec.gpus or "auto"
+        # self.cache_size = model_spec.cache_size or model_config.get("cache_size") or self.max_seq_len   # default to max_seq_len if not set
+        self.cache_size = model_spec.cache_size or self.max_seq_len   # default to max_seq_len if not set
         if self.cache_size is not None:
             self.cache_size = (self.cache_size//256) * 256     # for paged attention
             if self.max_seq_len is not None:
                 # cache size must be greater or equal to max_seq_len
                 self.cache_size = max(self.cache_size, self.max_seq_len)
 
-        self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
-        self.backend = model_spec.backend or model_config["backend"] or "exllama"
-        self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
+        # self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
+        self.cache_quant = model_spec.cache_quant or "Q4"       # default to cache quant 4
+        # self.backend = model_spec.backend or model_config["backend"] or "exllama"
+        self.backend = model_spec.backend   # default should be set as exllama if not defined
+        # self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
+        self.tensor_parallel = model_spec.tensor_parallel or False      # tensor parallel is False unless explicitly
 
         # transformers specific arguments
-        self.backend_extra_args = model_config.get("backend_extra_args") or {}
+        # self.backend_extra_args = model_spec.get("backend_extra_args") or {}
+        self.backend_extra_args = model_spec.backend_extra_args or {}
+
+
+        # handle draft model
+        draft_model_config = {}
+        if model_spec.draft_model_id:
+            draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
+            if not draft_model_config:
+                raise HTTPException(f"Model config for '{model_spec.draft_model_name}' not exist")
+
 
         # draft model is via cli only
         self.draft_model_id = draft_model_config.get("model_id")
@@ -79,7 +95,7 @@ class ModelInterface(ABC):
         assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # get the eos_token_str by merging the default config with anything set by user
-        self.eos_token_str = list(set(model_config.get("eos_token_list", []) + eos_token_list_from_prompt_template))
+        self.eos_token_str = list(set(model_spec.eos_token_list + self.prompt_eng.eos_token_list))
         self.eos_token_str_set = set(self.eos_token_str)    # set for some more efficient operation
 
         # load_model method in each subclass should set the following parameters:

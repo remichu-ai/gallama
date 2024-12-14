@@ -1,7 +1,7 @@
 from ..base import ASRBase
 from ....data_classes import TimeStampedWord
 from ....logger import logger
-from ....data_classes import TranscriptionResponse
+from ....data_classes import ModelSpec, TranscriptionResponse
 
 import dataclasses
 from typing import Literal, List, Union, BinaryIO
@@ -21,36 +21,26 @@ class ASRFasterWhisper(ASRBase):
 
     def load_model(
         self,
-        modelsize=None,
-        cache_dir=None,
-        model_dir=None,
-        quant: Literal["8.0", "16.0"] = "16.0",
-        device="gpu"        # TODO
+        model_spec: ModelSpec,
     ):
 
         # set seperator for faster whisper to ""
         self.sep = ""                       # seperator for faster whisper is ""
         self.compute_type = "float16"       # to store the quantization
-        self.model_size_or_path = None      # to store path to model
-        self.device = "cuda" if device == "gpu" else "cpu"
+        self.model_id = model_spec.model_id      # to store path to model
+        self.model_name = model_spec.model_name
+        self.device = "cuda" # if device == "gpu" else "cpu"
 
-        if model_dir is not None:
-            logger.debug(f"Loading whisper model from model_dir {model_dir}. modelsize and cache_dir parameters are not used.")
-            model_size_or_path = model_dir
-        elif modelsize is not None:
-            model_size_or_path = modelsize
-        else:
-            raise ValueError("modelsize or model_dir parameter must be set")
 
-        if quant == "8.0":
+        if self.quant == "8.0":
             self.compute_type = "int8_float16"
 
         # load model
         model = WhisperModel(
-            model_size_or_path,
+            self.model_id,
             device=self.device,
             compute_type=self.compute_type,
-            download_root=cache_dir
+            # download_root=cache_dir
         )
 
         return model
