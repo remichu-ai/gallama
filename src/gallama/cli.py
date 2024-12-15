@@ -92,7 +92,7 @@ def main_cli():
 
     subparsers = arg_parser.add_subparsers(dest="command")
 
-    # Add 'serve' subcommand
+    # Add 'run' subcommand
     serve_parser = subparsers.add_parser("run", help="Run the FastAPI server_engine")
     serve_parser.add_argument("model_name", nargs='?', help="Model name to run (simplified version)")
     serve_parser.add_argument("--strict_mode", action="store_true", default=False,
@@ -112,6 +112,8 @@ def main_cli():
                                    "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
+    serve_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+
 
     # Add 'download' subcommand
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")

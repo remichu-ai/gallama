@@ -156,9 +156,9 @@ class ASRProcessor:
         """
         # Generate the prompt and context
         prompt, context = self.construct_prompt()
-        logger.debug(f"PROMPT: {prompt}")
-        logger.debug(f"CONTEXT: {context}")
-        logger.debug(
+        logger.info(f"PROMPT: {prompt}")
+        logger.info(f"CONTEXT: {context}")
+        logger.info(
             f"Transcribing {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds from offset {self.audio_time_offset:.2f}")
 
         # Perform transcription
@@ -182,7 +182,7 @@ class ASRProcessor:
         if len(self.audio_buffer) / self.SAMPLING_RATE > trim_duration:
             self.trim_to_last_completed_segment(asr_results)
 
-        logger.debug(
+        logger.info(
             f"Audio buffer length after processing: {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds")
         return self.format_output(confirmed_transcriptions)
 

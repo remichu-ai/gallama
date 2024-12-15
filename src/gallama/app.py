@@ -20,7 +20,7 @@ from logging import DEBUG
 from gallama.logger.logger import get_logger
 import base64
 from gallama.dependencies import get_model_manager
-from gallama.routes import chat_router, embedding_router, model_management_router, audio_router
+from gallama.routes import chat_router, embedding_router, model_management_router, audio_router, ws_stt_router
 # Add this after your imports to clear logging from 3rd party module
 
 #streaming example
@@ -34,6 +34,7 @@ router.include_router(chat_router)
 router.include_router(embedding_router)
 router.include_router(model_management_router)
 router.include_router(audio_router)
+router.include_router(ws_stt_router)
 
 
 config_manager = ConfigManager()

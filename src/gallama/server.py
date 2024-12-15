@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Request, APIRouter
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 from collections import defaultdict
 from typing import Union
 from gallama.data_classes.data_class import ModelSpec
@@ -23,7 +24,12 @@ from logging import DEBUG, INFO
 import os
 import json
 import base64
-from gallama.server_routes import server_management_router, periodic_health_check, stop_model_instance
+from gallama.server_routes import (
+    server_management_router,
+    realtime_router,
+    periodic_health_check,
+    stop_model_instance
+)
 from gallama.server_engine import log_model_status
 from gallama.dependencies_server import get_server_manager, get_server_logger, start_log_receiver, DEFAULT_ZMQ_URL
 
@@ -32,10 +38,14 @@ server_logger = get_server_logger()
 
 router = APIRouter()
 router.include_router(server_management_router)
+router.include_router(realtime_router)
 
 
 manager_app = FastAPI()
 manager_app.include_router(router)
+
+
+
 
 
 @manager_app.middleware("http")
@@ -61,6 +71,118 @@ async def log_requests(request: Request, call_next):
         response = JSONResponse(status_code=422, content={"detail": "Validation error"})
 
     return response
+
+
+class WebSocketLoggingMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "websocket":
+            await self.log_websocket(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+    async def log_websocket(self, scope: Scope, receive: Receive, send: Send):
+        # Log detailed connection attempt information
+        client = scope.get('client')
+        server_logger.info(f"WebSocket connection attempt from {client}")
+
+        # Log query parameters
+        query_string = scope.get('query_string', b'').decode('utf-8')
+        server_logger.debug(f"Query parameters: {query_string}")
+
+        # Convert headers to a more readable format and log them
+        headers = dict(scope.get('headers', []))
+        formatted_headers = {
+            k.decode('utf-8'): v.decode('utf-8')
+            for k, v in headers.items()
+        }
+        server_logger.debug("WebSocket headers:")
+        for key, value in formatted_headers.items():
+            server_logger.debug(f"  {key}: {value}")
+
+        # Log protocols specifically
+        protocols = formatted_headers.get('sec-websocket-protocol', '').split(', ')
+        server_logger.debug(f"Requested protocols: {protocols}")
+
+        async def receive_with_logging():
+            message = await receive()
+            server_logger.debug(f"Received message type: {message['type']}")
+
+            if message["type"] == "websocket.connect":
+                server_logger.info("WebSocket client connecting")
+                # Log any authentication info (safely)
+                auth_header = formatted_headers.get('authorization', '')
+                if auth_header:
+                    server_logger.debug("Authorization header present")
+
+            elif message["type"] == "websocket.disconnect":
+                server_logger.info(f"WebSocket client disconnecting from {client}")
+
+            elif message["type"] == "websocket.receive":
+                try:
+                    if "text" in message:
+                        content = message["text"]
+                        try:
+                            parsed_content = json.loads(content)
+                            server_logger.info(
+                                "WebSocket received text:\n" +
+                                json.dumps(parsed_content, indent=2)
+                            )
+                        except json.JSONDecodeError:
+                            server_logger.info(f"WebSocket received raw text: {content}")
+                    elif "bytes" in message:
+                        server_logger.info(f"WebSocket received binary data of size: {len(message['bytes'])} bytes")
+                except Exception as e:
+                    server_logger.error(f"Error logging WebSocket message: {str(e)}")
+                    server_logger.debug(f"Raw message content: {message}")
+            return message
+
+        async def send_with_logging(message):
+            server_logger.debug(f"Sending message type: {message['type']}")
+
+            if message["type"] == "websocket.accept":
+                selected_protocol = message.get('subprotocol')
+                server_logger.info(f"WebSocket connection accepted with protocol: {selected_protocol}")
+
+            elif message["type"] == "websocket.close":
+                code = message.get('code', 1000)
+                reason = message.get('reason', '')
+                server_logger.info(f"WebSocket connection closed with code {code}: {reason}")
+
+            elif message["type"] == "websocket.send":
+                try:
+                    if "text" in message:
+                        content = message["text"]
+                        try:
+                            parsed_content = json.loads(content)
+                            server_logger.info(
+                                "WebSocket sent text:\n" +
+                                json.dumps(parsed_content, indent=2)
+                            )
+                        except json.JSONDecodeError:
+                            server_logger.info(f"WebSocket sent raw text: {content}")
+                    elif "bytes" in message:
+                        server_logger.info(f"WebSocket sent binary data of size: {len(message['bytes'])} bytes")
+                except Exception as e:
+                    server_logger.error(f"Error logging WebSocket message: {str(e)}")
+                    server_logger.debug(f"Raw message content: {message}")
+
+            # Log any error responses
+            if message.get('status', 200) >= 400:
+                server_logger.error(f"WebSocket error response: {message}")
+
+            await send(message)
+
+        try:
+            await self.app(scope, receive_with_logging, send_with_logging)
+        except Exception as e:
+            server_logger.error(f"WebSocket connection error: {str(e)}")
+            server_logger.debug(f"Error details:", exc_info=True)
+
+# Add WebSocket middleware
+manager_app.add_middleware(WebSocketLoggingMiddleware)
 
 # Add CORS middleware
 manager_app.add_middleware(

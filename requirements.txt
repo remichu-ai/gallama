@@ -31,6 +31,10 @@ formatron>=0.4.4
 referencing
 qwen_vl_utils
 
+# stt
+silero-vad
+faster-whisper
+
 # gpt_sovits
 librosa
 soundfile
