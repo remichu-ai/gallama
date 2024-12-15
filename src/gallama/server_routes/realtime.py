@@ -101,7 +101,7 @@ class ServiceConnections:
 
 class WebSocketManager:
     def __init__(self):
-        self.STT_URL = "ws://stt-service/ws"
+        self.STT_URL = "ws://localhost:8001/speech-to-text"     # TODO hardcode for now
         self.LLM_URL = "ws://llm-service/ws"
         self.TTS_URL = "ws://tts-service/ws"
 
@@ -170,35 +170,6 @@ class ConversationManager:
                 conversation.pop(i)
                 return True
         return False
-
-# variable:
-    # message queue of unprocessed
-    # message queue of global history
-    # latest_item (the latest item being processing), once processed will go into history
-
-    # response queue
-    # audio_to_client queue, any audio put here will be send to client
-
-# function:
-    # get snapshot:
-        # get a history + latest item snapshot -> ChatQueryML
-
-    # ask llm no audio -> get snapshot -> ask for 1 token
-    # ask llm with audio -> get snapshot -> put result into a queue that tts will process
-
-# concurrent task:
-    # process unprocessed queue:
-        # look out for item and process one at a time
-        # if text, straight away add to global history
-        # if audio, process, transcribe and stream the result latest_item. Once transcribing finished, move it to history and set latest_item to none
-
-    #  LLM processing:
-        # monitor response queue:
-            # if a response.create event receive, wait until queue of unprocessed is empty
-            # then get snapshot and send LLM
-
-    # audio to client:
-        # monitor queue of audio to client and send to client
 
 
 

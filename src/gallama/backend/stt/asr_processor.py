@@ -4,15 +4,10 @@ import numpy as np
 from typing import Union, BinaryIO
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from pydantic import BaseModel
-
-# from faster_whisper import WhisperModel
-from faster_whisper.transcribe import TranscriptionOptions, TranscriptionInfo, Segment
+import os
+from datetime import datetime
+import soundfile as sf
 from ...data_classes import TranscriptionResponse
-from gallama.logger.logger import logger
-
-
-import sys
 from ...logger import logger
 
 
@@ -26,10 +21,11 @@ class ASRProcessor:
     SAMPLING_RATE = 16000  # Standard audio sampling rate
 
     def __init__(
-        self,
-        asr: ASRBase,
-        tokenizer=None,
-        buffer_trimming=("segment", 15)
+            self,
+            asr: ASRBase,
+            tokenizer=None,
+            buffer_trimming=("segment", 15),
+            debug_audio_dir=None  # New parameter for debug audio directory
     ):
         """
         Initializes the ASR processor.
@@ -40,20 +36,26 @@ class ASRProcessor:
             buffer_trimming: Tuple (mode, duration).
                              - mode: "sentence" or "segment" (trimming method).
                              - duration: Max buffer length (in seconds) before trimming occurs.
+            debug_audio_dir: Directory to store debug audio files
         """
         self.asr = asr
         self.tokenizer = tokenizer
+        self.debug_audio_dir = debug_audio_dir
+
+        # Create debug directory if it doesn't exist
+        if debug_audio_dir and not os.path.exists(debug_audio_dir):
+            os.makedirs(debug_audio_dir)
 
         # Trimming configuration
         self.trimming_mode, self.trimming_duration = buffer_trimming
 
         # initial state
-        self.audio_buffer = np.array([], dtype=np.float32)              # Holds incoming audio chunks
-        self.transcript_buffer = HypothesisBuffer()                             # Tracks ongoing hypotheses
-        self.audio_time_offset = 0                                           # Current start time of the audio buffer
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.transcript_buffer = HypothesisBuffer()
+        self.audio_time_offset = 0
         self.transcript_buffer.last_committed_time = self.audio_time_offset
-        self.committed_transcriptions = []                                      # List of confirmed transcriptions
-
+        self.committed_transcriptions = []
+        self.buffer_count = 0  # Counter for debug files
 
     def transcribe(
         self,
@@ -147,18 +149,48 @@ class ASRProcessor:
         remaining_transcriptions = self.committed_transcriptions[start_index:]
         return self.asr.sep.join(reversed(prompt)), self.asr.sep.join(text for _, _, text in remaining_transcriptions)
 
-    def process_audio(self):
+    def save_debug_audio(self, audio_data: np.ndarray, suffix: str = ""):
+        """
+        Saves the current audio buffer to a WAV file for debugging.
+
+        Args:
+            audio_data: Audio data to save
+            suffix: Optional suffix to add to the filename
+        """
+        if self.debug_audio_dir:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"audio_buffer_{timestamp}_{self.buffer_count}{suffix}.wav"
+            filepath = os.path.join(self.debug_audio_dir, filename)
+
+            try:
+                sf.write(filepath, audio_data, self.SAMPLING_RATE)
+                logger.info(f"Saved debug audio to {filepath}")
+            except Exception as e:
+                logger.error(f"Error saving debug audio: {str(e)}")
+
+            self.buffer_count += 1
+        else:
+            pass
+
+    def process_audio(self, is_final: bool = False):
         """
         Processes the current audio buffer, transcribes it, and handles buffer trimming.
+
+        Args:
+            is_final (bool): Whether this is the final processing call (end of stream)
 
         Returns:
             A tuple (start_time, end_time, transcription) for newly committed transcriptions.
         """
+        # Save the audio buffer before processing
+
+        self.save_debug_audio(self.audio_buffer, "_before")
+
         # Generate the prompt and context
         prompt, context = self.construct_prompt()
-        logger.info(f"PROMPT: {prompt}")
-        logger.info(f"CONTEXT: {context}")
-        logger.info(
+        logger.debug(f"PROMPT: {prompt}")
+        logger.debug(f"CONTEXT: {context}")
+        logger.debug(
             f"Transcribing {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds from offset {self.audio_time_offset:.2f}")
 
         # Perform transcription
@@ -168,23 +200,38 @@ class ASRProcessor:
         timestamped_words = self.asr.segment_to_timestamped_words(asr_results)
         self.transcript_buffer.insert(timestamped_words, self.audio_time_offset)
 
-        # Commit transcriptions
-        confirmed_transcriptions = self.transcript_buffer.flush()
+        # Get transcriptions based on whether this is final processing or not
+        if is_final:
+            # For final processing, commit all remaining words
+            confirmed_transcriptions = self.transcript_buffer.set_final()
+            # Save final audio buffer
+            self.save_debug_audio(self.audio_buffer, "_final")
+        else:
+            # For normal streaming, use regular flush
+            confirmed_transcriptions = self.transcript_buffer.flush()
+
+        # Add to committed transcriptions list
         self.committed_transcriptions.extend(confirmed_transcriptions)
 
         # Handle trimming based on confirmed transcriptions
-        if confirmed_transcriptions and self.trimming_mode == "sentence":
+        if confirmed_transcriptions and self.trimming_mode == "sentence" and not is_final:
             if len(self.audio_buffer) / self.SAMPLING_RATE > self.trimming_duration:
                 self.trim_to_last_completed_sentence()
 
         # Handle segment-based trimming or fallback
-        trim_duration = self.trimming_duration if self.trimming_mode == "segment" else 30
-        if len(self.audio_buffer) / self.SAMPLING_RATE > trim_duration:
-            self.trim_to_last_completed_segment(asr_results)
+        if not is_final:  # Don't trim on final processing
+            if self.trimming_mode == "segment":
+                if len(self.audio_buffer) / self.SAMPLING_RATE > self.trimming_duration:
+                    # Save audio before trimming
+                    self.save_debug_audio(self.audio_buffer, "_before_trim")
+                    self.trim_to_last_completed_segment(asr_results)
+                    # Save audio after trimming
+                    self.save_debug_audio(self.audio_buffer, "_after_trim")
 
         logger.info(
             f"Audio buffer length after processing: {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds")
         return self.format_output(confirmed_transcriptions)
+
 
     def trim_to_last_completed_sentence(self):
         """
