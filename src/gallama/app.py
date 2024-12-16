@@ -6,6 +6,7 @@ from gallama.data_classes import (
     ModelSpec,
     GenQueue,
 )
+import signal
 import argparse
 import uvicorn
 from fastapi.exceptions import RequestValidationError
@@ -95,12 +96,31 @@ async def startup_event():
 async def lifespan(app: FastAPI):
     # Startup code
     await startup_event()
-    yield
+    try:
+        yield
+    finally:
+        # Cleanup code
+        logger.info("Cleaning up ZMQ connections...")
+        for handler in logger.handlers:
+            if hasattr(handler, 'close'):
+                handler.close()
 
 
 def make_server(args):
     global logger
     global draft_spec_dict
+
+    # Add signal handlers for graceful shutdown
+    def signal_handler(signum, frame):
+        logger.info("Received shutdown signal, cleaning up...")
+        for handler in logger.handlers:
+            if hasattr(handler, 'close'):
+                handler.close()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # load yaml file of model info
     logger.info(args)
     model_dict = {}
