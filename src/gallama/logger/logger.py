@@ -127,8 +127,10 @@ class PlainTextFormatter(logging.Formatter):
 class ZeroMQHandler(logging.Handler):
     def __init__(self, zmq_url=DEFAULT_ZMQ_URL):
         super().__init__()
+        self.zmq_url = zmq_url
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUSH)
+        self.socket.setsockopt(zmq.LINGER, 0)  # Add this line
         self.socket.connect(zmq_url)
 
     def emit(self, record):
@@ -145,6 +147,14 @@ class ZeroMQHandler(logging.Handler):
         except Exception as e:
             print(f"Error in ZeroMQHandler: {e}")
             self.handleError(record)
+
+    def close(self):
+        """Properly close the ZMQ socket and context"""
+        if hasattr(self, 'socket'):
+            self.socket.close()
+        if hasattr(self, 'context'):
+            self.context.term()
+        super().close()
 
 
 class LogConfig(BaseModel):
