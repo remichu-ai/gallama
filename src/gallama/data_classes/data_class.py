@@ -177,7 +177,7 @@ class ChatMLQuery(BaseModel):
     class StreamOption(BaseModel):
         include_usage: bool = False
 
-    model: Optional[str] = "Mixtral-8x7B"
+    model: Optional[str] = ""
     messages: List[BaseMessage]
     temperature: Optional[float] = 0.01
     top_p: float = 0.85

@@ -140,10 +140,10 @@ manager = TranscriptionConnectionManager()
 
 @router.websocket("/speech-to-text")
 async def websocket_endpoint(
-        websocket: WebSocket,
-        model: str,
-        language: str = None,
-        sample_rate: int = 16000
+    websocket: WebSocket,
+    model: str,
+    language: str = None,
+    sample_rate: int = 16000
 ):
     try:
         success = await manager.connect(websocket, model, language, sample_rate)
