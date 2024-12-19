@@ -122,6 +122,9 @@ class ModelLlamaCpp(ModelInterface):
     # ************* method for generation from here
     def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list,
                                  top_p=0.8, prefix_strings=None, stop_word_to_return="", gen_type_str: str="text"):
+
+        loop = asyncio.get_event_loop()
+
         generator = self.model(
             prompt=prompt,
             #suffix=prefix_strings,
@@ -140,15 +143,24 @@ class ModelLlamaCpp(ModelInterface):
             chunk_text = GenText(content=chunk['choices'][0]['text'], text_type=gen_type_str)
             generate_text += chunk_text.content
             for g_queue in gen_queue_list:
-                g_queue.get_queue().put_nowait(chunk_text)
+                # g_queue.get_queue().put_nowait(chunk_text)
+                future = asyncio.run_coroutine_threadsafe(
+                    g_queue.get_queue().put(chunk_text),
+                    loop
+                )
+                future.result()
 
         # return stop_word if there is
         if stop_word_to_return:
             chunk_text = GenText(content=stop_word_to_return, text_type=gen_type_str)
             generate_text += chunk_text.content
             for g_queue in gen_queue_list:
-                g_queue.get_queue().put_nowait(chunk_text)
-
+                # g_queue.get_queue().put_nowait(chunk_text)
+                future = asyncio.run_coroutine_threadsafe(
+                    g_queue.get_queue().put(chunk_text),
+                    loop
+                )
+                future.result()
         return generate_text
 
     async def generate(
@@ -168,6 +180,8 @@ class ModelLlamaCpp(ModelInterface):
         messages: List = None,  # query.message for multimodal
         **kwargs,
     ) -> (str, GenerationStats):
+
+        loop = asyncio.get_event_loop()
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -236,13 +250,16 @@ class ModelLlamaCpp(ModelInterface):
             gen_type_str = gen_type.gen_type  # get out the generation type in str format
 
         for g_queue in gen_queue_list:
-            g_queue.get_queue().put_nowait(gen_type)
+            # g_queue.get_queue().put_nowait(gen_type)
+            future = asyncio.run_coroutine_threadsafe(
+                g_queue.get_queue().put(gen_type),
+                loop
+            )
+            future.result()
 
         # Create a task to check for disconnection
-
         # llama cpp python generator is not async, hence running fake async..
         # Run the synchronous generator in a separate thread
-        loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as pool:
             generate_text = await loop.run_in_executor(
                 pool,
@@ -256,11 +273,21 @@ class ModelLlamaCpp(ModelInterface):
         gen_stats = GenerationStats()
         for g_queue in gen_queue_list:
             if g_queue.include_GenStats:
-                g_queue.get_queue().put_nowait(gen_stats)
+                # g_queue.get_queue().put_nowait(gen_stats)
+                future = asyncio.run_coroutine_threadsafe(
+                    g_queue.get_queue().put(gen_stats),
+                    loop
+                )
+                future.result()
+
 
         # this to signal the end of generation
         for g_queue in gen_queue_list:
             if g_queue.include_GenEnd:
-                g_queue.get_queue().put_nowait(GenEnd())
-
+                # g_queue.get_queue().put_nowait(GenEnd())
+                future = asyncio.run_coroutine_threadsafe(
+                    g_queue.get_queue().put(GenEnd()),
+                    loop
+                )
+                future.result()
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)

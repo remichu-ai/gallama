@@ -82,7 +82,7 @@ async def startup_event():
             await _model.chat_raw(
                 prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
                 # stream=False,
-                max_tokens=200,
+                max_tokens=100,
                 gen_queue=gen_queue,
                 quiet=True,
                 request=None,
@@ -95,6 +95,7 @@ async def startup_event():
         logger.info("STT warmed up NOT YET IMPLEMENTED")
 
     if model_manager.tts_dict:
+
         logger.info("TTS warmed up NOT YET IMPLEMENTED")
 
     if model_manager.embedding_dict:

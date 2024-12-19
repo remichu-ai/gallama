@@ -11,6 +11,9 @@ class TTSBase:
         self.model_name = model_spec.model_name
         self.model = None
 
+        self.voice = model_spec.voice
+        # TODO, get a list of available voice
+
         # backend specific arguments
         self.backend_extra_args = model_spec.backend_extra_args
 
@@ -31,72 +34,18 @@ class TTSBase:
         speed_factor: float = 1.0,
         queue: asyncio.Queue = None,
         **kwargs: Any
-
     ):
+        # If stream=False: Tuple of (sample_rate, concatenated_audio_data)
+        # If stream=True: None (audio chunks are sent to the provided queue)
+
         raise NotImplementedError(
             "The synthesize method must be implemented by the derived class."
         )
 
-    async def text_to_speech_to_queue(
-        self,
-        queue: asyncio.Queue,
-        text: str,
-        language:str = "auto",
-        speed_factor: float = 1.0,
-        **kwargs: Any    # use for overwriting any other parameter below
-    ):
-        """
-        Generate audio chunks from text and put them into an asyncio Queue.
-
-        Args:
-            queue: asyncio.Queue to put the audio chunks into
-            text: Text to convert to speech
-            language: Language of the text (default: "auto")
-            stream: Whether to stream the audio in chunks (default: False)
-            speed_factor: Speed factor for the audio playback (default: 1.0)
-            kwargs: Additional parameters to pass to the text_to_speech function
-        """
-
-        try:
-            # Use the existing text_to_speech method
-            audio_result = await self.text_to_speech(
-                    text=text,
-                    language=language,
-                    stream=True,
-                    speed_factor=speed_factor,
-                    queue=queue,
-                    **kwargs
-            )
-
-            # # Process the audio chunks
-            # chunks_processed = 0
-            # async for sampling_rate, audio_data in audio_result:
-            #     if audio_data.shape[0] == 0:
-            #         break
-            #
-            #     chunks_processed += 1
-            #     logger.info(f"Processing chunk #{chunks_processed}")
-            #     logger.info(f"  - Queue size before put: {queue.qsize()}")
-            #     logger.info(f"  - Audio shape: {audio_data.shape}")
-            #
-            #     # Put both sampling rate and audio data into queue
-            #     await asyncio.wait_for(queue.put((sampling_rate, audio_data)), timeout=5.0)
-            #     logger.info(f"  - Queue size after put: {queue.qsize()}")
-            #
-            # # Signal completion by putting None into the queue
-            # await asyncio.wait_for(queue.put(None), timeout=5.0)
-
-        except Exception as e:
-            logger.error(f"Error in text_to_speech_to_queue: {e}")
-            # Put the error in the queue to notify consumers
-            await queue.put(Exception(f"Text-to-speech error: {str(e)}"))
-            self.model.stop()
-            raise
-
     async def text_stream_to_speech_to_queue(
         self,
         text_stream: AsyncIterator,
-        queue: asyncio.Queue,
+        queue: asyncio.Queue,           # audio chunk will be put to this queue
         language: str = "auto",
         speed_factor: float = 1.0,
         **kwargs: Any
@@ -123,10 +72,11 @@ class TTSBase:
                         continue
 
                     else:
-                        await self.text_to_speech_to_queue(
+                        await self.text_to_speech(
                             queue=queue,
                             text=segment,
                             language=language,
+                            stream=True,
                             speed_factor=speed_factor,
                         )
                     # logger.info("Segment processed successfully")
@@ -139,10 +89,11 @@ class TTSBase:
                             final_text = pipeline.get_buffer_contents()
                             segments = pipeline.segment_text(final_text)
                             for segment in segments:
-                                await self.text_to_speech_to_queue(
+                                await self.text_to_speech(
                                     queue=queue,
                                     text=segment,
                                     language=language,
+                                    stream=True,
                                     speed_factor=speed_factor,
                                 )
                         break

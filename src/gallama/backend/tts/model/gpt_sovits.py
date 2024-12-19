@@ -47,9 +47,9 @@ class AsyncTTSWrapper:
         self.executor = executor or ThreadPoolExecutor(max_workers=1)
 
     async def stream_audio(
-            self,
-            inputs: Dict[str, Any],
-            queue: asyncio.Queue,
+        self,
+        inputs: Dict[str, Any],
+        queue: asyncio.Queue,
     ) -> None:
         """
         Feeds audio fragments directly into the provided queue for upstream consumption.
@@ -132,15 +132,15 @@ class TTS_GPT_SoVITS(TTSBase):
             raise ValueError("Both ref_audio_path and ref_audio_transcription must be set for GPT_SoVITS")
 
     async def text_to_speech(
-            self,
-            text: str,
-            language: str = "auto",
-            stream: bool = False,
-            speed_factor: float = 1.0,
-            batching: bool = False,
-            batch_size: int = 1,
-            queue: asyncio.Queue = None,
-            **kwargs: Any
+        self,
+        text: str,
+        language: str = "auto",
+        stream: bool = False,
+        speed_factor: float = 1.0,
+        batching: bool = False,
+        batch_size: int = 1,
+        queue: asyncio.Queue = None,
+        **kwargs: Any
     ):
         """
         Generate audio chunks from text and put them into an asyncio Queue.
@@ -160,6 +160,11 @@ class TTS_GPT_SoVITS(TTSBase):
             If stream=True: None (audio chunks are sent to the provided queue)
         """
         logger.info(f"----------Converting: {text}")
+
+        if stream and not queue:
+            # for streaming, the result will be written directly to the queue hence it is required parameter
+            raise Exception("For streaming mode, the queue must be provided")
+
 
         params = {
             "text": text,

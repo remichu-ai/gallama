@@ -481,6 +481,26 @@ class Thinking(BaseModel):
     regex: str = Field(description='regex string to enforce any value', default=None)
 
 
+class VoiceConfig(BaseModel):
+    """Configuration for a single voice sample"""
+    path: str = Field(description='path to the sound sample')
+    text: str = Field(description='text of the voice sample')
+    language: str = Field(description='language of the voice sample')
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class VoiceSettings(BaseModel):
+    """Collection of voice configurations with custom names"""
+    voices: Dict[str, VoiceConfig] = Field(
+        default_factory=dict,
+        description='Dictionary mapping voice names to their configurations'
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+
+
 # list of supported backend. None meaning it the api will take backend set from yaml config file
 SUPPORTED_BACKENDS = ["exllama", "llama_cpp", "transformers", "embedding", "faster_whisper", "gpt_sovits", None]
 
@@ -513,8 +533,11 @@ class ModelSpec(BaseModel):
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
 
-    # transformers specific
-    transformers_args: Optional[Dict] = None
+    # arguement for different voice sample
+    voice: Optional[VoiceSettings] = Field(
+        default=None,
+        description="Voice configurations mapping voice names to their settings"
+    )
 
     # audio related setting
     language: Optional[str] = Field(description="language of the audio", default="auto")
