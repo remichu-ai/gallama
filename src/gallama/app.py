@@ -27,7 +27,8 @@ from gallama.routes import (
     model_management_router,
     audio_router,
     ws_stt_router,
-    ws_llm_router
+    ws_llm_router,
+    ws_tts_router
 )
 # Add this after your imports to clear logging from 3rd party module
 
@@ -44,6 +45,7 @@ router.include_router(model_management_router)
 router.include_router(audio_router)
 router.include_router(ws_stt_router)
 router.include_router(ws_llm_router)
+router.include_router(ws_tts_router)
 
 
 config_manager = ConfigManager()

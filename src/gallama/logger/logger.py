@@ -123,20 +123,40 @@ class PlainTextFormatter(logging.Formatter):
         return record.plain_message if hasattr(record, 'plain_message') else record.getMessage()
 
 
-
 class ZeroMQHandler(logging.Handler):
     def __init__(self, zmq_url=DEFAULT_ZMQ_URL):
         super().__init__()
         self.zmq_url = zmq_url
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.PUSH)
-        self.socket.setsockopt(zmq.LINGER, 0)  # Add this line
-        self.socket.connect(zmq_url)
+        self._context = None
+        self._socket = None
+        self._initialize_socket()
+
+    def _initialize_socket(self):
+        """Initialize or reinitialize the ZMQ socket"""
+        try:
+            if self._socket:
+                self._socket.close()
+            if self._context:
+                self._context.term()
+
+            self._context = zmq.Context()
+            self._socket = self._context.socket(zmq.PUSH)
+            self._socket.setsockopt(zmq.LINGER, 0)
+            self._socket.connect(self.zmq_url)
+        except Exception as e:
+            print(f"Error initializing ZMQ socket: {e}")
+            self._socket = None
+            self._context = None
 
     def emit(self, record):
+        if not self._socket:
+            self._initialize_socket()
+            if not self._socket:
+                return  # Skip logging if socket initialization failed
+
         log_entry = self.format(record)
         try:
-            self.socket.send_json({
+            self._socket.send_json({
                 'log': log_entry,
                 'level': record.levelname,
                 'model': os.environ.get('MODEL_NAME', 'unknown'),
@@ -144,17 +164,26 @@ class ZeroMQHandler(logging.Handler):
             }, flags=zmq.NOBLOCK)
         except zmq.Again:
             print("Warning: ZMQ socket buffer full, log message dropped")
+        except zmq.error.ZMQError as e:
+            print(f"ZMQ Error in emit: {e}")
+            self._initialize_socket()  # Try to reinitialize socket
         except Exception as e:
             print(f"Error in ZeroMQHandler: {e}")
             self.handleError(record)
 
     def close(self):
         """Properly close the ZMQ socket and context"""
-        if hasattr(self, 'socket'):
-            self.socket.close()
-        if hasattr(self, 'context'):
-            self.context.term()
-        super().close()
+        try:
+            if self._socket:
+                self._socket.close()
+            if self._context:
+                self._context.term()
+        except Exception as e:
+            print(f"Error closing ZMQ handler: {e}")
+        finally:
+            self._socket = None
+            self._context = None
+            super().close()
 
 
 class LogConfig(BaseModel):

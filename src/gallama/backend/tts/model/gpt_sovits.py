@@ -3,11 +3,11 @@ from .gpt_sovits_source import TTS, TTS_Config
 from typing import Dict, Any, AsyncGenerator, Tuple, AsyncIterator
 import numpy as np
 import asyncio
-from ..text_processor import TextToTextSegment
 from concurrent.futures import ThreadPoolExecutor
-from gallama.data_classes import (
-    ModelSpec
-)
+from gallama.data_classes import ModelSpec
+from gallama.logger.logger import logger
+import time
+
 
 class TSS_ConfigModified(TTS_Config):
     def __init__(self, backend_extra_args):
@@ -46,42 +46,67 @@ class AsyncTTSWrapper:
         self.tts = tts_instance
         self.executor = executor or ThreadPoolExecutor(max_workers=1)
 
-    async def stream_audio(self, inputs: Dict[str, Any]) -> AsyncGenerator[Tuple[int, np.ndarray], None]:
+    async def stream_audio(
+            self,
+            inputs: Dict[str, Any],
+            queue: asyncio.Queue,
+    ) -> None:
         """
-        Creates an async generator that yields audio fragments from the TTS system.
+        Feeds audio fragments directly into the provided queue for upstream consumption.
 
         Args:
             inputs: Dictionary of TTS parameters including text, ref_audio_path, etc.
-                   Make sure return_fragment=True is set in the inputs.
-
-        Yields:
-            Tuples of (sample_rate, audio_data)
+            queue: asyncio.Queue where audio chunks will be placed
         """
-        # Create a queue to receive audio fragments
-        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
 
         # Function to run in the executor that will feed the queue
         def run_tts():
             try:
+                chunk_counter = 0
+                sent_chunks = set()  # Track chunks we've sent
+
                 for audio_chunk in self.tts.run(inputs):
-                    # Handle stop condition if needed
-                    if self.tts.stop_flag:
-                        break
-                    asyncio.run_coroutine_threadsafe(queue.put(audio_chunk), loop)
+                    chunk_counter += 1
+                    chunk_id = id(audio_chunk)
+
+                    if chunk_id in sent_chunks:
+                        logger.warning(f"Duplicate chunk detected! ID: {chunk_id}")
+                        continue
+
+                    sent_chunks.add(chunk_id)
+
+                    # Put the chunk in the queue from the thread
+                    future = asyncio.run_coroutine_threadsafe(
+                        queue.put(audio_chunk),
+                        loop
+                    )
+                    # Ensure the put operation completes
+                    future.result()
+
+                    logger.info(f"TTS Generated chunk #{chunk_counter}")
+                    logger.info(f"  - Size: {len(audio_chunk[1])}")
+                    logger.info(f"  - Chunk ID: {chunk_id}")
+                    logger.info(f"  - Queue size after put: {queue.qsize()}")
+
+            except Exception as e:
+                logger.error(f"Error in TTS generation: {e}")
+                # Put the error in the queue
+                future = asyncio.run_coroutine_threadsafe(
+                    queue.put(Exception(f"TTS error: {str(e)}")),
+                    loop
+                )
+                future.result()
             finally:
                 # Signal that we're done by putting None in the queue
-                asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+                future = asyncio.run_coroutine_threadsafe(
+                    queue.put(None),
+                    loop
+                )
+                future.result()
 
-        loop = asyncio.get_running_loop()
-        # Start the TTS processing in the executor
+        # Start the TTS processing in the executor and return immediately
         loop.run_in_executor(self.executor, run_tts)
-
-        # Yield audio fragments as they become available
-        while True:
-            chunk = await queue.get()
-            if chunk is None:  # End of stream
-                break
-            yield chunk
 
     def stop(self):
         """Stops the TTS processing"""
@@ -92,9 +117,11 @@ class TTS_GPT_SoVITS(TTSBase):
     def __init__(self, model_spec: ModelSpec):
         super().__init__(model_spec)
 
+
+    def load_model(self, model_spec: ModelSpec):
         # create the config object with parameters from gallama yaml config file
-        self.config = TSS_ConfigModified(self.backend_extra_args)
-        self.model = AsyncTTSWrapper(TTS(self.config))
+        config = TSS_ConfigModified(self.backend_extra_args)
+        self.model = AsyncTTSWrapper(TTS(config))
 
         # set other required parameter for speech generation
         self.ref_audio_path = self.backend_extra_args.get('ref_audio_path')
@@ -105,14 +132,15 @@ class TTS_GPT_SoVITS(TTSBase):
             raise ValueError("Both ref_audio_path and ref_audio_transcription must be set for GPT_SoVITS")
 
     async def text_to_speech(
-        self,
-        text: str,
-        language:str = "auto",
-        stream: bool = False,    # non stream return numpy array of whole speech, True will return iterator instead
-        speed_factor: float = 1.0,
-        batching: bool = False,
-        batch_size: int = 1,
-        *kwargs: Any    # use for overwriting any other parameter below
+            self,
+            text: str,
+            language: str = "auto",
+            stream: bool = False,
+            speed_factor: float = 1.0,
+            batching: bool = False,
+            batch_size: int = 1,
+            queue: asyncio.Queue = None,
+            **kwargs: Any
     ):
         """
         Generate audio chunks from text and put them into an asyncio Queue.
@@ -122,11 +150,16 @@ class TTS_GPT_SoVITS(TTSBase):
             language: Language of the text (default: "auto")
             stream: Whether to stream the audio in chunks (default: False)
             speed_factor: Speed factor for the audio playback (default: 1.0)
-            batching: whether to using parallel batching, will be faster but require more memmory (default: False)
-            batch_size: batch size if use batching (default: 1),
+            batching: whether to using parallel batching, will be faster but require more memory (default: False)
+            batch_size: batch size if use batching (default: 1)
+            queue: Optional asyncio Queue to receive audio chunks
             kwargs: Additional parameters to pass to the text_to_speech function
-        """
 
+        Returns:
+            If stream=False: Tuple of (sample_rate, concatenated_audio_data)
+            If stream=True: None (audio chunks are sent to the provided queue)
+        """
+        logger.info(f"----------Converting: {text}")
 
         params = {
             "text": text,
@@ -138,152 +171,56 @@ class TTS_GPT_SoVITS(TTSBase):
             "top_k": 5,
             "top_p": 1,
             "temperature": 1,
-            "text_split_method": "cut5",
+            "text_split_method": "cut0",
             "batch_size": batch_size,
             "batch_threshold": 0.75,
             "split_bucket": not stream,  # Disable split_bucket when streaming
             "return_fragment": stream,  # Enable fragments when streaming
-            "speed_factor": 1.0,
-            "fragment_interval": self.chunk_size_in_s,  # Use the provided chunk size
+            "speed_factor": speed_factor,  # Use the provided speed_factor
+            "fragment_interval": self.chunk_size_in_s,
             "seed": -1,
             "parallel_infer": batching,
-            "repetition_penalty": 1.35
+            "repetition_penalty": 1.35,
+            **kwargs  # Allow overriding of any parameters
         }
 
-        # over any other arguments set from the api call
-        params.update(kwargs)
-
         if stream:
-            async def audio_stream() -> AsyncGenerator[np.ndarray, None]:
-                try:
-                    async for sampling_rate, audio_data in self.model.stream_audio(params):
-                        if audio_data.shape[0] == 0:
-                            break
-                        yield sampling_rate, audio_data
-                except Exception as e:
-                    print(f"Error during audio streaming: {e}")
-                    self.model.stop()
-                    raise
-
-            return audio_stream()   # return an iterator instead
+            if queue is None:
+                queue = asyncio.Queue()
+            await self.model.stream_audio(inputs=params, queue=queue)
+            return None  # Since we're using a queue, no direct return value needed
         else:
+            # For non-streaming mode, create a temporary queue and collect all chunks
+            temp_queue = asyncio.Queue()
+            await self.model.stream_audio(inputs=params, queue=temp_queue)
+
             try:
                 # Collect all audio chunks into a single array
                 audio_chunks = []
-                generated_sampling_rate = 0
-                async for sample_rate, audio_data in self.model.stream_audio(params):
-                    if audio_data.shape[0] == 0:
+                sample_rate = None
+
+                while True:
+                    chunk = await temp_queue.get()
+                    if chunk is None:  # End of stream
                         break
-                    audio_chunks.append(audio_data)
-                    generated_sampling_rate = sample_rate
+                    if isinstance(chunk, Exception):
+                        raise chunk
+
+                    current_sample_rate, audio_data = chunk
+                    if sample_rate is None:
+                        sample_rate = current_sample_rate
+                    elif sample_rate != current_sample_rate:
+                        raise ValueError(f"Inconsistent sample rates detected: {sample_rate} vs {current_sample_rate}")
+
+                    if audio_data.shape[0] > 0:  # Only add non-empty chunks
+                        audio_chunks.append(audio_data)
 
                 if not audio_chunks:
                     return 0, np.array([], dtype=np.int16)
 
-                return generated_sampling_rate, np.concatenate(audio_chunks)
+                return sample_rate, np.concatenate(audio_chunks)
+
             except Exception as e:
-                print(f"Error during audio generation: {e}")
+                logger.error(f"Error during audio generation: {e}")
                 self.model.stop()
                 raise
-
-
-    async def text_to_speech_to_queue(
-        self,
-        queue: asyncio.Queue,
-        text: str,
-        language:str = "auto",
-        speed_factor: float = 1.0,
-        *kwargs: Any    # use for overwriting any other parameter below
-    ):
-        """
-        Generate audio chunks from text and put them into an asyncio Queue.
-
-        Args:
-            queue: asyncio.Queue to put the audio chunks into
-            text: Text to convert to speech
-            language: Language of the text (default: "auto")
-            stream: Whether to stream the audio in chunks (default: False)
-            speed_factor: Speed factor for the audio playback (default: 1.0)
-            kwargs: Additional parameters to pass to the text_to_speech function
-        """
-
-        try:
-            # Use the existing text_to_speech method
-            audio_result = await self.text_to_speech(
-                text=text,
-                language=language,
-                stream=True,  # Always use stream mode to get chunks
-                speed_factor=speed_factor,
-                **kwargs
-            )
-
-            # Process the audio chunks
-            async for sampling_rate, audio_data in audio_result:
-                if audio_data.shape[0] == 0:
-                    break
-
-                # Put both sampling rate and audio data into queue
-                await queue.put((sampling_rate, audio_data))
-
-            # Signal completion by putting None into the queue
-            await queue.put(None)
-
-        except Exception as e:
-            print(f"Error in text_to_speech_to_queue: {e}")
-            # Put the error in the queue to notify consumers
-            await queue.put(Exception(f"Text-to-speech error: {str(e)}"))
-            self.model.stop()
-            raise
-
-    async def text_stream_to_speech_to_queue(
-        self,
-        text_stream: AsyncIterator,
-        queue: asyncio.Queue,
-        language: str = "auto",
-        speed_factor: float = 1.0,
-        **kwargs: Any
-    ) -> None:
-        """
-        Process a stream of text chunks and convert them to speech, putting audio chunks into a queue.
-
-        Args:
-            text_stream: AsyncIterator yielding text chunks
-            queue: asyncio.Queue to receive audio chunks
-            language: Language of the text
-            speed_factor: Speed factor for speech
-            **kwargs: Additional parameters for text_to_speech
-        """
-        try:
-            pipeline = TextToTextSegment(quick_start=True)
-
-            # Process the incoming text stream
-            await pipeline.process_text_stream_async(
-                text_stream,
-                end_stream=True
-            )
-
-            # Process segments as they become available
-            while True:
-                segment = await pipeline.get_next_segment(timeout=0.5)
-                if segment is None:
-                    break
-
-                # Use existing method to handle audio conversion and queueing
-                await self.text_to_speech_to_queue(
-                    queue=queue,
-                    text=segment,
-                    language=language,
-                    speed_factor=speed_factor,
-                    **kwargs
-                )
-
-        except Exception as e:
-            print(f"Error in text_stream_to_speech_to_queue: {e}")
-            await queue.put(Exception(f"Text-to-speech error: {str(e)}"))
-            self.model.stop()
-            raise
-        finally:
-            # Cleanup
-            await pipeline.stop_processing()
-            await pipeline.reset()
-            await pipeline.clear_queue()

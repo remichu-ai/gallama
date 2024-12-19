@@ -36,6 +36,7 @@ silero-vad
 faster-whisper
 
 # gpt_sovits
+numpy==1.26.4
 librosa
 soundfile
 ffmpeg-python

@@ -1,4 +1,5 @@
 from typing import AsyncIterator, List, Callable, Optional, Literal
+from ...logger.logger import logger
 import asyncio
 
 
@@ -18,7 +19,7 @@ class TextToTextSegment:
                  char_limit: int = 50,
                  min_segment_length: int = 5,
                  max_queue_size: int = 100,
-                 buffer_size: int = 1000,
+                 buffer_size: int = 500,
                  custom_segmenter: Optional[Callable[[str], List[str]]] = None,
                  quick_start: bool = False,
                  quick_start_min_words: int = 5,
@@ -86,6 +87,12 @@ class TextToTextSegment:
         Buffer incomplete text and return complete sentences.
         Now handles quick start optimization for first segment.
         """
+        # Add space if the buffer isn't empty and doesn't end with a space
+        # and the new text doesn't start with a space
+        if (self.text_buffer and
+                not self.text_buffer.endswith(' ') and
+                not text.startswith(' ')):
+            self.text_buffer += ' '
         self.text_buffer += text
 
         if self.quick_start and not self.first_segment_processed:
@@ -168,40 +175,30 @@ class TextToTextSegment:
             List of text segments, each approximately char_limit characters long
         """
         segments = []
+        words = text.split()
         current_segment = []
         current_length = 0
-
-        # Split into words first to avoid splitting within words
-        words = text.split()
 
         for i, word in enumerate(words):
             word_length = len(word)
 
-            # If adding this word would exceed the limit
-            if current_length + word_length + 1 > self.char_limit:
-                # If current segment is empty, force add the word
-                if not current_segment:
-                    current_segment.append(word)
-                else:
-                    # Complete current segment
+            # Check if adding this word would exceed the limit
+            if current_length + word_length + (1 if current_segment else 0) > self.char_limit:
+                if current_segment:
+                    # Properly join with spaces
                     segments.append(' '.join(current_segment))
                     current_segment = [word]
                     current_length = word_length
-                    continue
+                else:
+                    # Handle case where a single word exceeds limit
+                    current_segment = [word]
+                    current_length = word_length
+            else:
+                current_segment.append(word)
+                current_length += word_length + (1 if current_segment else 0)
 
-            current_segment.append(word)
-            current_length += word_length + 1  # +1 for space
-
-            # Check if current word ends with sentence-ending punctuation
-            if any(word.endswith(mark) for mark in {'.', '!', '?', '。', '！', '？'}):
-                # Complete current segment at sentence boundary if it's long enough
-                if current_length >= self.min_segment_length:
-                    segments.append(' '.join(current_segment))
-                    current_segment = []
-                    current_length = 0
-
-        # Add remaining text if any
-        if current_segment and len(' '.join(current_segment)) >= self.min_segment_length:
+        # Handle remaining text
+        if current_segment:
             segments.append(' '.join(current_segment))
 
         return segments
@@ -257,6 +254,8 @@ class TextToTextSegment:
             end_stream: Whether this is the end of the text stream
         """
         try:
+            logger.info("Starting text stream processing")
+
             async for text in text_iterator:
                 if self.stop_event.is_set():
                     break
@@ -266,6 +265,8 @@ class TextToTextSegment:
                 if complete_text:
                     segments = self.segment_text(complete_text)
                     for segment in segments:
+                        logger.info(f"segment: {segment}")
+                        logger.info(f"processing_queue: {self.processing_queue}")
                         await self.processing_queue.put(segment)
 
             # Handle end of stream if specified
@@ -278,6 +279,7 @@ class TextToTextSegment:
                 # Signal end of processing
                 await self.processing_queue.put(None)
 
+            logger.info("End of stream processing complete")
         finally:
             if end_stream:
                 await self.processing_queue.put(None)
