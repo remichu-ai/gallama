@@ -483,19 +483,10 @@ class Thinking(BaseModel):
 
 class VoiceConfig(BaseModel):
     """Configuration for a single voice sample"""
-    path: str = Field(description='path to the sound sample')
-    text: str = Field(description='text of the voice sample')
+    ref_audio_path: str = Field(description='path to the sound sample')
+    ref_audio_transcription: str = Field(description='text of the voice sample')
     language: str = Field(description='language of the voice sample')
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class VoiceSettings(BaseModel):
-    """Collection of voice configurations with custom names"""
-    voices: Dict[str, VoiceConfig] = Field(
-        default_factory=dict,
-        description='Dictionary mapping voice names to their configurations'
-    )
+    speed_factor: Optional[float] = Field(description='speed factor of the voice sample', default=1.0)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -533,8 +524,8 @@ class ModelSpec(BaseModel):
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
 
-    # arguement for different voice sample
-    voice: Optional[VoiceSettings] = Field(
+    # argument for different voice sample
+    voice: Optional[Dict[str, VoiceConfig]] = Field(
         default=None,
         description="Voice configurations mapping voice names to their settings"
     )

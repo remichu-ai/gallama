@@ -1,6 +1,7 @@
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Dict, List
 import asyncio
 from .text_processor import TextToTextSegment
+from .TTSQueueHandler import TTSQueueHandler
 from ...data_classes import ModelSpec
 from ...logger import logger
 
@@ -11,8 +12,13 @@ class TTSBase:
         self.model_name = model_spec.model_name
         self.model = None
 
-        self.voice = model_spec.voice
-        # TODO, get a list of available voice
+        self.voice_list: List[str] = None
+        self.default_voice: Dict = None
+
+        self.voice: Dict = model_spec.voice
+        if self.voice:
+            self.voice_list = list(self.voice.keys())
+            self.default_voice = self.voice[self.voice_list[0]]
 
         # backend specific arguments
         self.backend_extra_args = model_spec.backend_extra_args
@@ -48,6 +54,7 @@ class TTSBase:
         queue: asyncio.Queue,           # audio chunk will be put to this queue
         language: str = "auto",
         speed_factor: float = 1.0,
+        stream_end_signal = None,       # signal to return to let parent function know that audio conversationfinished
         **kwargs: Any
     ) -> None:
 
@@ -64,6 +71,10 @@ class TTSBase:
                 try:
                     # Shorter timeout for more responsive processing
                     segment = await pipeline.get_next_segment(timeout=0.1)
+                    # if segment:
+                        # logger.info(f"---------------------Segment start with space: {segment.startswith(' ')}")
+                        # logger.info(f"---------------------Segment end with space: {segment.endswith(' ')}")
+                        # segment = segment.strip()
 
                     if segment is None:
                         # Check if processing task is done and queue is empty

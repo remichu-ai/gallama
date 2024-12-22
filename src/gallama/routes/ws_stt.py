@@ -17,17 +17,23 @@ class TranscriptionConnectionManager:
         self.active_connections: Dict[WebSocket, Dict] = {}
 
     async def connect(
-            self,
-            websocket: WebSocket,
-            model: str,
-            language: str = None,
-            sample_rate: int = 16000  # Add sample rate parameter
+        self,
+        websocket: WebSocket,
+        model: str,
+        language: str = None,
+        sample_rate: int = 16000  # Add sample rate parameter
     ) -> bool:
         try:
             await websocket.accept()
 
             model_manager = get_model_manager()
             asr_processor = model_manager.stt_dict.get(model)
+            if not asr_processor:   # just pick the first available model
+                try:
+                    asr_processor = next(iter(model_manager.stt_dict.values()))
+                except Exception as e:
+                    logger.error(f"No STT model found in model_manager: {str(e)}")
+                    asr_processor = None
 
             if asr_processor is None:
                 await websocket.close(code=4000, reason="Model not found")
@@ -141,7 +147,7 @@ manager = TranscriptionConnectionManager()
 @router.websocket("/speech-to-text")
 async def websocket_endpoint(
     websocket: WebSocket,
-    model: str,
+    model: str = None,
     language: str = None,
     sample_rate: int = 16000
 ):

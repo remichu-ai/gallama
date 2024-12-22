@@ -16,7 +16,9 @@ from .data_class import (
     ModelSpec,
     EmbeddingRequest,
     ModelDownloadSpec,
-    SUPPORTED_BACKENDS
+    SUPPORTED_BACKENDS,
+    ChatCompletionResponse,
+    UsageResponse
 )
 
 from .audio_data_class import (

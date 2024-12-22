@@ -1,192 +1,20 @@
-from fastapi import WebSocket, WebSocketDisconnect, Query, APIRouter
+from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 import asyncio
-import numpy as np
 import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
-from ..dependencies import get_model_manager
-import json
 from pydantic import BaseModel, validator
-from gallama.logger.logger import logger
+import json
 from pathlib import Path
+from ..dependencies import get_model_manager
+from gallama.logger.logger import logger
 
 router = APIRouter(prefix="", tags=["tts"])
 
 
-class TTSWebsocketManager:
-    def __init__(self):
-        self.active_connections: dict[WebSocket, dict] = {}
-        self.tasks: dict[WebSocket, list[asyncio.Task]] = {}
-        self.output_dir = Path("/home/remichu/work/ML/gallama/experiment")
-        self.output_dir.mkdir(exist_ok=True)
-        self.send_lock = asyncio.Lock()
-
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        timestamp = int(time.time())
-        self.active_connections[websocket] = {
-            'audio_queue': asyncio.Queue(),
-            'text_queue': asyncio.Queue(),
-            'processing_flag': asyncio.Event(),
-            'accumulated_audio': [],  # Store audio chunks
-            'accumulated_rate': None,  # Store sampling rate
-            'output_file': self.output_dir / f"tts_output_{timestamp}.mp3"  # Unique filename
-        }
-        self.active_connections[websocket]['processing_flag'].set()  # Start in active state
-        self.tasks[websocket] = []
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.tasks:
-            for task in self.tasks[websocket]:
-                task.cancel()
-            # Save accumulated audio before disconnecting
-            self._save_accumulated_audio(websocket)
-        self.tasks.pop(websocket, None)
-        self.active_connections.pop(websocket, None)
-
-    async def process_text_stream(self, websocket: WebSocket, tts_model, response_format: str = "mp3"):
-        try:
-            conn = self.active_connections[websocket]
-            # logger.info("Starting text stream processing in TTSWebsocketManager")
-
-            async def text_stream() -> AsyncIterator[str]:
-                # logger.info("Initializing text stream iterator")
-                while True:
-                    # Check if processing is allowed
-                    await conn['processing_flag'].wait()
-
-                    try:
-                        text = await conn['text_queue'].get()
-                        logger.info(f"Got text from queue: {text[:50] if text else 'None'}...")
-                        if text is None:  # End of stream marker
-                            break
-                        yield text
-                    except asyncio.CancelledError:
-                        break
-
-            # logger.info("Starting TTS model processing")
-            await tts_model.text_stream_to_speech_to_queue(
-                text_stream=text_stream(),
-                queue=conn['audio_queue'],
-                stream=True
-            )
-
-        except Exception as e:
-            print(f"Error in process_text_stream: {e}")
-            if websocket in self.active_connections:
-                await conn['audio_queue'].put(Exception(f"Text processing error: {str(e)}"))
-
-    def _save_accumulated_audio(self, websocket: WebSocket):
-        """Save accumulated audio chunks to file"""
-        conn = self.active_connections.get(websocket)
-        if conn and conn['accumulated_audio'] and conn['accumulated_rate']:
-            # Concatenate all audio chunks
-            combined_audio = np.concatenate(conn['accumulated_audio'])
-            # Save to file
-            sf.write(
-                conn['output_file'],
-                combined_audio,
-                conn['accumulated_rate'],
-                format=str(conn['output_file'].suffix[1:])  # Remove dot from suffix
-            )
-            print(f"Saved audio to: {conn['output_file']}")
-
-    async def clear_processing(self, websocket: WebSocket):
-        """Clear current processing and buffers for a connection"""
-        if websocket in self.active_connections:
-            conn = self.active_connections[websocket]
-            # Stop current processing
-            conn['processing_flag'].clear()
-
-            # Save current accumulated audio before clearing
-            self._save_accumulated_audio(websocket)
-
-            # Reset accumulation
-            conn['accumulated_audio'] = []
-            conn['accumulated_rate'] = None
-
-            # Create new output file
-            timestamp = int(time.time())
-            conn['output_file'] = self.output_dir / f"tts_output_{timestamp}.mp3"
-
-            # Clear the queues
-            while not conn['text_queue'].empty():
-                try:
-                    conn['text_queue'].get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
-            while not conn['audio_queue'].empty():
-                try:
-                    conn['audio_queue'].get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-
-            # Reset processing flag to allow new processing
-            conn['processing_flag'].set()
-
-    async def process_audio_queue(self, websocket: WebSocket, response_format: str = "mp3"):
-        try:
-            conn = self.active_connections[websocket]
-
-            while True:
-                # Add timeout to prevent infinite waiting
-                try:
-                    chunk = await asyncio.wait_for(conn['audio_queue'].get(), timeout=5.0)
-                    # if chunk is None:
-                    #     # Save final audio before ending
-                    #     self._save_accumulated_audio(websocket)
-                    #     await websocket.send_bytes(b"END_OF_STREAM")
-                    #     break
-
-                    if isinstance(chunk, Exception):
-                        await websocket.send_text(f"Error: {str(chunk)}")
-                        break
-
-                    # Only process if flag is set and ensure completion
-                    #if conn['processing_flag'].is_set():
-                    if chunk:
-                        sampling_rate, audio_data = chunk
-                        logger.info(
-                            f"Processing audio chunk - Queue size: {conn['audio_queue'].qsize()}, Audio shape: {audio_data.shape}, Timestamp: {time.time()}")
-                        # Add pre-send logging
-                        logger.info(f"About to send chunk - Size: {len(audio_data)}, Time: {time.time()}")
-
-                        # Store the chunk for accumulation
-                        if conn['accumulated_rate'] is None:
-                            conn['accumulated_rate'] = sampling_rate
-                        conn['accumulated_audio'].append(audio_data)
-
-                        # In process_audio_queue
-                        async with self.send_lock:
-                            buffer = io.BytesIO()
-                            sf.write(buffer, audio_data, sampling_rate, format=response_format)
-                            buffer.seek(0)
-                            await websocket.send_bytes(buffer.getvalue())
-
-                    # # Send to client
-                    # buffer = io.BytesIO()
-                    # sf.write(buffer, audio_data, sampling_rate, format=response_format)
-                    # buffer.seek(0)
-                    # data_to_send = buffer.getvalue()
-                    # logger.info(f"Sending websocket chunk - Bytes: {len(data_to_send)}, Time: {time.time()}")
-                    # await websocket.send_bytes(data_to_send)
-                    # logger.info(f"Chunk sent successfully - Time: {time.time()}")
-                    # Signal completion
-                    # conn['audio_queue'].task_done()
-
-                except asyncio.TimeoutError:
-                    continue
-
-        except Exception as e:
-            print(f"Error in process_audio_queue: {e}")
-            # Try to save accumulated audio even if there's an error
-            self._save_accumulated_audio(websocket)
-
 class WSMessageTTS(BaseModel):
-    type: str = Literal["add_text", "clear"]
+    type: Literal["add_text", "text_done", "interrupt"]
     text: Optional[str] = None
 
     @validator("text")
@@ -195,7 +23,201 @@ class WSMessageTTS(BaseModel):
             raise ValueError("text field cannot be None when type is add_text")
         return v
 
+
+class TTSConnectionState:
+    """Class to manage the state of a single TTS connection"""
+
+    def __init__(self):
+        self.audio_queue: asyncio.Queue = asyncio.Queue()
+        self.text_queue: asyncio.Queue = asyncio.Queue()
+        self.processing_flag: asyncio.Event = asyncio.Event()
+        self.accumulated_audio: list = []
+        self.accumulated_rate: Optional[int] = None
+        self.stream_complete: asyncio.Event = asyncio.Event()
+        self.text_done: asyncio.Event = asyncio.Event()
+
+        # Set processing flag to True initially
+        self.processing_flag.set()
+
+    def reset(self):
+        """Reset all state for new connection"""
+        # Clear all queues
+        while not self.audio_queue.empty():
+            try:
+                self.audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        while not self.text_queue.empty():
+            try:
+                self.text_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        # Reset all flags and events
+        self.processing_flag.clear()
+        self.processing_flag.set()  # Reset to initial state
+        self.stream_complete.clear()
+        self.text_done.clear()
+
+        # Reset accumulated data
+        self.accumulated_audio = []
+        self.accumulated_rate = None
+
+
+
+class TTSConnection:
+    """Class to handle a single TTS WebSocket connection"""
+
+    def __init__(self, websocket: WebSocket, tts_model, response_format: str = "wav"):
+        self.websocket = websocket
+        self.tts_model = tts_model
+        self.response_format = response_format
+        self.state = TTSConnectionState()
+        self.tasks: list[asyncio.Task] = []
+        self.send_lock = asyncio.Lock()
+        self.stream_end_signal = "STREAM_END"
+
+    async def start(self):
+        """Initialize the connection and start processing tasks"""
+        await self.websocket.accept()
+
+        # Create and store tasks
+        self.tasks.extend([
+            asyncio.create_task(self.process_text_stream()),
+            asyncio.create_task(self.process_audio_queue())
+        ])
+
+    async def process_text_stream(self):
+        """Process the incoming text stream and convert to speech"""
+        try:
+            async def text_stream() -> AsyncIterator[str]:
+                while True:
+                    await self.state.processing_flag.wait()
+                    try:
+                        text = await self.state.text_queue.get()
+                        if text is None:  # End of stream marker
+                            self.state.text_done.set()
+                            break
+                        logger.info(f"Received text: {text}")
+                        yield text
+                    except asyncio.TimeoutError:
+                        continue
+                    except asyncio.CancelledError:
+                        break
+
+            await self.tts_model.text_stream_to_speech_to_queue(
+                text_stream=text_stream(),
+                queue=self.state.audio_queue,
+                stream=True,
+                # stream_end_signal=self.stream_end_signal,
+            )
+
+
+        except Exception as e:
+            logger.error(f"Error in process_text_stream: {e}")
+            await self.state.audio_queue.put(Exception(f"Text processing error: {str(e)}"))
+
+    async def process_audio_queue(self):
+        """Process and send audio chunks to the client"""
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(self.state.audio_queue.get(), timeout=1.0)
+
+                    if chunk == ("STREAM_END", None):
+                        await self.websocket.send_json({"type": "tts_complete"})
+                        self.state.stream_complete.set()
+                        break
+
+                    if isinstance(chunk, Exception):
+                        await self.websocket.send_text(f"Error: {str(chunk)}")
+                        break
+
+                    if chunk:
+                        sampling_rate, audio_data = chunk
+                        if self.state.accumulated_rate is None:
+                            self.state.accumulated_rate = sampling_rate
+                        self.state.accumulated_audio.append(audio_data)
+
+                        async with self.send_lock:
+                            buffer = io.BytesIO()
+                            sf.write(
+                                buffer,
+                                audio_data,
+                                sampling_rate,
+                                format=self.response_format,
+                                subtype="PCM_16"
+                            )
+                            buffer.seek(0)
+                            await self.websocket.send_bytes(buffer.getvalue())
+
+                except asyncio.TimeoutError:
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error in process_audio_queue: {e}")
+
+    async def handle_message(self, message: WSMessageTTS):
+        """Handle incoming WebSocket messages"""
+        if message.type == "interrupt":
+            await self.clear_processing()
+        elif message.type == "add_text" and message.text:
+            await self.state.text_queue.put(message.text)
+        elif message.type == "text_done":
+            await self.state.text_queue.put(None)
+            self.state.text_done.set()
+            await self.state.stream_complete.wait()
+
+    async def clear_processing(self):
+        """Clear all processing states and queues"""
+        self.state.processing_flag.clear()
+        self.state.accumulated_audio = []
+        self.state.accumulated_rate = None
+
+        # Clear all events
+        self.state.text_done.clear()
+        self.state.stream_complete.clear()
+
+        # Clear queues
+        while not self.state.text_queue.empty():
+            try:
+                self.state.text_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        while not self.state.audio_queue.empty():
+            try:
+                self.state.audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        self.state.processing_flag.set()
+
+    async def cleanup(self):
+        """Cleanup connection resources"""
+        # Clear processing flag first to stop new operations
+        self.state.processing_flag.clear()
+
+        # Cancel all tasks
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for tasks to complete with timeout
+        try:
+            await asyncio.wait(self.tasks, timeout=5.0)
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+        # Clear all queues and state
+        await self.clear_processing()
+
+        # Reset tasks list
+        self.tasks = []
+
+
 async def validate_message(raw_data: str) -> WSMessageTTS:
+    """Validate and parse incoming WebSocket messages"""
     try:
         json_data = json.loads(raw_data)
         return WSMessageTTS(**json_data)
@@ -204,70 +226,41 @@ async def validate_message(raw_data: str) -> WSMessageTTS:
     except Exception as e:
         raise ValueError(f"Invalid message format: {str(e)}")
 
-@router.websocket("/ws/speech")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    #model: str = Query(...),
-    #response_format: str = Query("mp3", regex="^(mp3|wav|flac)$")
-):
-    manager = TTSWebsocketManager()
-    model_manager = get_model_manager()
-    tts = model_manager.tts_dict.get("gpt_sovits")
-    response_format = "wav"
-    logger.info("TODO here")
 
-    # Check if model exists before accepting connection
+@router.websocket("/ws/speech")
+async def websocket_endpoint(websocket: WebSocket):
+    model_manager = get_model_manager()
+    model_name = "gpt_sovits"
+    tts = model_manager.tts_dict.get(model_name)
+
     if not tts:
         await websocket.accept()
-        error_data = {
+        await websocket.send_json({
             "type": "error",
-            "message": f"Model '{tts.model_name}' not found. Available models: {list(model_manager.tts_dict.keys())}"
-        }
-        await websocket.send_json(error_data)
+            "message": f"Model '{model_name}' not found"
+        })
         await websocket.close()
         return
 
+    connection = None
     try:
-        await manager.connect(websocket)
-        # logger.info("WebSocket connected successfully")
+        # Create new connection
+        connection = TTSConnection(websocket, tts)
+        await connection.start()
 
-        # Create an event for signaling stream end
-        stream_end_event = asyncio.Event()
+        while True:
+            message = await websocket.receive_text()
+            parsed_message = await validate_message(message)
+            await connection.handle_message(parsed_message)
 
-        # Start the text-to-speech processing task
-        # logger.info("Starting text processing task")
-        text_task = asyncio.create_task(
-            manager.process_text_stream(websocket, tts, response_format)
-        )
-        manager.tasks[websocket].append(text_task)
-
-        # Start the audio processing task
-        # logger.info("Starting audio processing task")
-        audio_task = asyncio.create_task(
-            manager.process_audio_queue(websocket, response_format)
-        )
-        manager.tasks[websocket].append(audio_task)
-
-        try:
-            while True:
-                message = await websocket.receive_text()
-                message = await validate_message(message)
-                # logger.info(f"Received message: {message}")
-                if message.type == "clear":
-                    # logger.info("Clearing processing queue")
-                    await manager.clear_processing(websocket)
-                elif message.type == "add_text" and message.text != "":
-                    # logger.info(f"Adding text to queue: {message.text[:50]}...")
-                    await manager.active_connections[websocket]['text_queue'].put(message.text)
-
-        except WebSocketDisconnect:
-            print("WebSocket disconnected")
-
-        # Wait for tasks to complete
-        if websocket in manager.tasks:
-            await asyncio.gather(*manager.tasks[websocket])
-
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected")
     except Exception as e:
-        print(f"Error in websocket_endpoint: {e}")
+        logger.error(f"Error in websocket_endpoint: {e}")
     finally:
-        manager.disconnect(websocket)
+        if connection:
+            # Ensure proper cleanup
+            try:
+                await connection.cleanup()
+            except Exception as e:
+                logger.error(f"Error during connection cleanup: {e}")

@@ -63,18 +63,18 @@ class AsyncTTSWrapper:
         # Function to run in the executor that will feed the queue
         def run_tts():
             try:
-                chunk_counter = 0
-                sent_chunks = set()  # Track chunks we've sent
+                # chunk_counter = 0
+                # sent_chunks = set()  # Track chunks we've sent
 
                 for audio_chunk in self.tts.run(inputs):
-                    chunk_counter += 1
-                    chunk_id = id(audio_chunk)
-
-                    if chunk_id in sent_chunks:
-                        logger.warning(f"Duplicate chunk detected! ID: {chunk_id}")
-                        continue
-
-                    sent_chunks.add(chunk_id)
+                    # chunk_counter += 1
+                    # chunk_id = id(audio_chunk)
+                    #
+                    # if chunk_id in sent_chunks:
+                    #     logger.warning(f"Duplicate chunk detected! ID: {chunk_id}")
+                    #     continue
+                    #
+                    # sent_chunks.add(chunk_id)
 
                     # Put the chunk in the queue from the thread
                     future = asyncio.run_coroutine_threadsafe(
@@ -84,10 +84,10 @@ class AsyncTTSWrapper:
                     # Ensure the put operation completes
                     future.result()
 
-                    logger.info(f"TTS Generated chunk #{chunk_counter}")
-                    logger.info(f"  - Size: {len(audio_chunk[1])}")
-                    logger.info(f"  - Chunk ID: {chunk_id}")
-                    logger.info(f"  - Queue size after put: {queue.qsize()}")
+                    # logger.info(f"TTS Generated chunk #{chunk_counter}")
+                    # logger.info(f"  - Size: {len(audio_chunk[1])}")
+                    # logger.info(f"  - Chunk ID: {chunk_id}")
+                    # logger.info(f"  - Queue size after put: {queue.qsize()}")
 
             except Exception as e:
                 logger.error(f"Error in TTS generation: {e}")
@@ -124,24 +124,24 @@ class TTS_GPT_SoVITS(TTSBase):
         self.model = AsyncTTSWrapper(TTS(config))
 
         # set other required parameter for speech generation
-        self.ref_audio_path = self.backend_extra_args.get('ref_audio_path')
-        self.ref_audio_transcription = self.backend_extra_args.get('ref_audio_transcription')
-        self.chunk_size_in_s = self.backend_extra_args.get('chunk_size_in_s')
+        # self.ref_audio_path = self.backend_extra_args.get('ref_audio_path')
+        # self.ref_audio_transcription = self.backend_extra_args.get('ref_audio_transcription')
+        self.chunk_size_in_s = self.backend_extra_args.get('chunk_size_in_s', 0.5)
 
-        if self.ref_audio_path is None or self.ref_audio_transcription is None:
-            raise ValueError("Both ref_audio_path and ref_audio_transcription must be set for GPT_SoVITS")
 
     async def text_to_speech(
         self,
         text: str,
         language: str = "auto",
         stream: bool = False,
-        speed_factor: float = 1.0,
         batching: bool = False,
         batch_size: int = 1,
         queue: asyncio.Queue = None,
+        voice: str = None,
+        speed_factor: float = None,
+        end_signal: str = "conversion_done",
         **kwargs: Any
-    ):
+    ) -> None | Tuple[int, np.ndarray] | AsyncIterator[Tuple[int, np.ndarray]] | str:
         """
         Generate audio chunks from text and put them into an asyncio Queue.
 
@@ -154,6 +154,7 @@ class TTS_GPT_SoVITS(TTSBase):
             batch_size: batch size if use batching (default: 1)
             queue: Optional asyncio Queue to receive audio chunks
             kwargs: Additional parameters to pass to the text_to_speech function
+            end_signal: str = "conversion_done" -> the string to put into queue when conversion is done
 
         Returns:
             If stream=False: Tuple of (sample_rate, concatenated_audio_data)
@@ -165,13 +166,25 @@ class TTS_GPT_SoVITS(TTSBase):
             # for streaming, the result will be written directly to the queue hence it is required parameter
             raise Exception("For streaming mode, the queue must be provided")
 
+        if voice:
+            if voice in self.voice_list:
+                voice_to_use = self.voice[voice]
+            else:
+                voice_to_use = self.default_voice
+        else:
+            voice_to_use = self.default_voice
+
+        if speed_factor:
+            speed_factor_to_use = speed_factor
+        else:
+            speed_factor_to_use = voice_to_use.speed_factor or 1.0
 
         params = {
             "text": text,
             "text_lang": "en",
-            "ref_audio_path": self.ref_audio_path,
+            "ref_audio_path": voice_to_use.ref_audio_path,
             "aux_ref_audio_paths": [],
-            "prompt_text": self.ref_audio_transcription,
+            "prompt_text": voice_to_use.ref_audio_transcription,
             "prompt_lang": "en",
             "top_k": 5,
             "top_p": 1,
@@ -179,12 +192,15 @@ class TTS_GPT_SoVITS(TTSBase):
             "text_split_method": "cut0",
             "batch_size": batch_size,
             "batch_threshold": 0.75,
-            "split_bucket": not stream,  # Disable split_bucket when streaming
+            # "split_bucket": not stream,  # Disable split_bucket when streaming
+            "split_bucket": True,  # Disable split_bucket when streaming
             "return_fragment": stream,  # Enable fragments when streaming
-            "speed_factor": speed_factor,  # Use the provided speed_factor
+            # "return_fragment": False,  # Enable fragments when streaming
+            "speed_factor": speed_factor_to_use,  # Use the provided speed_factor
             "fragment_interval": self.chunk_size_in_s,
             "seed": -1,
-            "parallel_infer": batching,
+            # "parallel_infer": batching,
+            "parallel_infer": 3,
             "repetition_penalty": 1.35,
             **kwargs  # Allow overriding of any parameters
         }
@@ -221,7 +237,8 @@ class TTS_GPT_SoVITS(TTSBase):
                         audio_chunks.append(audio_data)
 
                 if not audio_chunks:
-                    return 0, np.array([], dtype=np.int16)
+                    pass
+                    # return 0, np.array([], dtype=np.int16)
 
                 return sample_rate, np.concatenate(audio_chunks)
 

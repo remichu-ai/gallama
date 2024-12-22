@@ -30,6 +30,7 @@ psutil
 formatron>=0.4.4
 referencing
 qwen_vl_utils
+websockets>=14.1
 
 # stt
 silero-vad
