@@ -4,6 +4,7 @@ from .text_processor import TextToTextSegment
 from .TTSQueueHandler import TTSQueueHandler
 from ...data_classes import ModelSpec
 from ...logger import logger
+from ...routes.ws_tts import TTSEvent
 
 class TTSBase:
     """this is the base interface for all TTS models"""
@@ -50,7 +51,7 @@ class TTSBase:
 
     async def text_stream_to_speech_to_queue(
         self,
-        text_stream: AsyncIterator,
+        text_queue: asyncio.Queue,
         queue: asyncio.Queue,           # audio chunk will be put to this queue
         language: str = "auto",
         speed_factor: float = 1.0,
@@ -65,27 +66,19 @@ class TTSBase:
             # logger.info("Starting text-to-speech pipeline")
             # Create task but don't wait for it
             processing_task = asyncio.create_task(
-                pipeline.process_text_stream_async(text_stream, end_stream=False)
+                pipeline.process_text_stream_async(input_queue=text_queue)
             )
 
             while True:
                 try:
                     # Shorter timeout for more responsive processing
-                    segment = await pipeline.get_next_segment(timeout=0.1)
+                    segment = await pipeline.get_next_segment(timeout=0.1, raise_timeout=True)
                     # if segment:
                         # logger.info(f"---------------------Segment start with space: {segment.startswith(' ')}")
                         # logger.info(f"---------------------Segment end with space: {segment.endswith(' ')}")
                         # segment = segment.strip()
 
-                    if segment is None:
-                        # Check if processing task is done and queue is empty
-                        if processing_task.done() and pipeline.processing_queue.empty():
-                            if text_stream_end is not None:
-                                text_stream_end.set()
-                            break
-                        continue
-
-                    else:
+                    if segment:
                         await self.text_to_speech(
                             queue=queue,
                             text=segment,
@@ -97,22 +90,10 @@ class TTSBase:
 
                 except asyncio.TimeoutError:
                     # Check if we should continue processing
-                    if processing_task.done() and pipeline.processing_queue.empty():
-                        # Process any remaining text in buffer before exiting
-                        if pipeline.get_buffer_contents().strip():
-                            final_text = pipeline.get_buffer_contents()
-                            segments = pipeline.segment_text(final_text)
-                            for segment in segments:
-                                await self.text_to_speech(
-                                    queue=queue,
-                                    text=segment,
-                                    language=language,
-                                    stream=True,
-                                    speed_factor=speed_factor,
-                                )
+                    if processing_task.done():
                         break
-                    continue
-
+                    else:
+                        continue
         except Exception as e:
             logger.error(f"Error in text_stream_to_speech_to_queue: {str(e)}", exc_info=True)
             await queue.put(Exception(f"Text-to-speech error: {str(e)}"))
@@ -120,11 +101,8 @@ class TTSBase:
                 self.model.stop()
             raise
         finally:
-            if audio_stream_end is not None:
-                audio_stream_end.set()
             logger.info("Cleaning up pipeline")
+            await queue.put(TTSEvent(type="text_end"))  # signal that audio complete
             await pipeline.stop_processing()
             await pipeline.reset()
             await pipeline.clear_queue()
-            # Signal completion to the queue
-            await queue.put(None)

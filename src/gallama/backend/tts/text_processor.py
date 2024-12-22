@@ -1,5 +1,6 @@
 from typing import AsyncIterator, List, Callable, Optional, Literal
 from ...logger.logger import logger
+from ...routes.ws_tts import TTSEvent
 import asyncio
 
 
@@ -243,63 +244,76 @@ class TextToTextSegment:
 
     async def process_text_stream_async(
         self,
-        text_iterator: AsyncIterator[str],
-        end_stream: bool = True
+        input_queue: asyncio.Queue,
     ) -> None:
         """
-        Process a stream of text asynchronously, segmenting and adding to the queue.
+        Process text from an input queue asynchronously, handling both TTSEvent and string inputs.
 
         Args:
-            text_iterator: AsyncIterator yielding text strings
-            end_stream: Whether this is the end of the text stream
+            input_queue: AsyncQueue containing either TTSEvent objects or text strings
+            end_stream: Whether to process remaining buffer when stream ends
         """
         try:
             logger.info("Starting text stream processing")
 
-            async for text in text_iterator:
+            while True:
                 if self.stop_event.is_set():
                     break
 
-                # Buffer text and get complete sentences
-                complete_text = self._buffer_text(text)
-                if complete_text:
-                    segments = self.segment_text(complete_text)
-                    for segment in segments:
-                        logger.info(f"segment: {segment}")
-                        logger.info(f"processing_queue: {self.processing_queue}")
-                        await self.processing_queue.put(segment)
+                # Get next item from queue
+                item = await input_queue.get()
+                # Handle string input
+                if isinstance(item, str):
+                    complete_text = self._buffer_text(item)
+                    if complete_text:
+                        segments = self.segment_text(complete_text)
+                        for segment in segments:
+                            logger.info(f"segment: {segment}")
+                            await self.processing_queue.put(segment)
 
-            # Handle end of stream if specified
-            if end_stream and self.text_buffer:
-                # Process any remaining text in buffer
-                segments = self.segment_text(self.text_buffer)
-                for segment in segments:
-                    await self.processing_queue.put(segment)
-                self.text_buffer = ""
-                # Signal end of processing
-                await self.processing_queue.put(None)
+                # Handle TTSEvent
+                elif isinstance(item, TTSEvent):
+                    if item.type == "text_end":
+                        # Process remaining buffer if any
+                        if self.text_buffer:
+                            segments = self.segment_text(self.text_buffer)
+                            for segment in segments:
+                                await self.processing_queue.put(segment)
+                            self.text_buffer = ""
+                        break
+                    elif item.type == "text_start":
+                        pass
 
             logger.info("End of stream processing complete")
         finally:
-            if end_stream:
-                await self.processing_queue.put(None)
+            pass
 
-    async def get_next_segment(self, timeout: Optional[float] = None) -> Optional[str]:
+    async def get_next_segment(
+        self,
+        timeout: Optional[float] = None,
+        raise_timeout: bool = False
+    ) -> Optional[str]:
         """
         Get the next text segment from the queue.
         Returns None if queue is empty and processing is finished.
 
         Args:
             timeout: How long to wait for next segment (seconds)
+            raise_timeout: If True, raises TimeoutError instead of returning None
 
         Returns:
             Optional[str]: The next segment or None if timeout/finished
+
+        Raises:
+            asyncio.TimeoutError: If timeout occurs and raise_timeout is True
         """
         try:
             if timeout is not None:
                 return await asyncio.wait_for(self.processing_queue.get(), timeout)
             return await self.processing_queue.get()
         except asyncio.TimeoutError:
+            if raise_timeout:
+                raise
             return None
         except asyncio.CancelledError:
             # Handle cancellation gracefully

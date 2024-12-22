@@ -63,19 +63,9 @@ class AsyncTTSWrapper:
         # Function to run in the executor that will feed the queue
         def run_tts():
             try:
-                # chunk_counter = 0
-                # sent_chunks = set()  # Track chunks we've sent
+
 
                 for audio_chunk in self.tts.run(inputs):
-                    # chunk_counter += 1
-                    # chunk_id = id(audio_chunk)
-                    #
-                    # if chunk_id in sent_chunks:
-                    #     logger.warning(f"Duplicate chunk detected! ID: {chunk_id}")
-                    #     continue
-                    #
-                    # sent_chunks.add(chunk_id)
-
                     # Put the chunk in the queue from the thread
                     future = asyncio.run_coroutine_threadsafe(
                         queue.put(audio_chunk),
@@ -84,10 +74,6 @@ class AsyncTTSWrapper:
                     # Ensure the put operation completes
                     future.result()
 
-                    # logger.info(f"TTS Generated chunk #{chunk_counter}")
-                    # logger.info(f"  - Size: {len(audio_chunk[1])}")
-                    # logger.info(f"  - Chunk ID: {chunk_id}")
-                    # logger.info(f"  - Queue size after put: {queue.qsize()}")
 
             except Exception as e:
                 logger.error(f"Error in TTS generation: {e}")
@@ -99,11 +85,7 @@ class AsyncTTSWrapper:
                 future.result()
             finally:
                 # Signal that we're done by putting None in the queue
-                future = asyncio.run_coroutine_threadsafe(
-                    queue.put(None),
-                    loop
-                )
-                future.result()
+                pass
 
         # Start the TTS processing in the executor and return immediately
         loop.run_in_executor(self.executor, run_tts)

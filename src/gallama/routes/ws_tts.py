@@ -13,6 +13,10 @@ from gallama.logger.logger import logger
 router = APIRouter(prefix="", tags=["tts"])
 
 
+class TTSEvent(BaseModel):
+    type: Literal["text_start", "text_end"]
+
+
 class WSMessageTTS(BaseModel):
     type: Literal["add_text", "text_done", "interrupt"]
     text: Optional[str] = None
@@ -30,18 +34,21 @@ class TTSConnectionState:
     def __init__(self):
         self.audio_queue: asyncio.Queue = asyncio.Queue()
         self.text_queue: asyncio.Queue = asyncio.Queue()
-        self.processing_flag: asyncio.Event = asyncio.Event()
+        # self.processing_flag: asyncio.Event = asyncio.Event()
         self.accumulated_audio: list = []
         self.accumulated_rate: Optional[int] = None
+        self.mode: Literal["processing", "idle"] = "idle"
         self.stream_complete: asyncio.Event = asyncio.Event()
         self.text_done: asyncio.Event = asyncio.Event()
+        self.last_text_event_time: float = 0.0
+        self.timeout_seconds: int = 20
 
-        # Set processing flag to True initially
-        self.processing_flag.set()
+        self.lock = asyncio.Lock()
 
     def reset(self):
         """Reset all state for new connection"""
         # Clear all queues
+        self.mode = "idle"
         while not self.audio_queue.empty():
             try:
                 self.audio_queue.get_nowait()
@@ -52,12 +59,6 @@ class TTSConnectionState:
                 self.text_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-
-        # Reset all flags and events
-        self.processing_flag.clear()
-        self.processing_flag.set()  # Reset to initial state
-        self.stream_complete.clear()
-        self.text_done.clear()
 
         # Reset accumulated data
         self.accumulated_audio = []
@@ -75,48 +76,12 @@ class TTSConnection:
         self.state = TTSConnectionState()
         self.tasks: list[asyncio.Task] = []
         self.send_lock = asyncio.Lock()
-        self.text_stream_end = asyncio.Event()
-        self.audio_stream_end = asyncio.Event()
+
 
     async def start(self):
         """Initialize the connection and start processing tasks"""
         await self.websocket.accept()
 
-        # Create and store tasks
-        self.tasks.extend([
-            asyncio.create_task(self.process_text_stream()),
-            asyncio.create_task(self.process_audio_queue())
-        ])
-
-    async def process_text_stream(self):
-        """Process the incoming text stream and convert to speech"""
-        try:
-            async def text_stream() -> AsyncIterator[str]:
-                while True:
-                    await self.state.processing_flag.wait()
-                    try:
-                        text = await self.state.text_queue.get()
-                        if text is None:  # End of stream marker
-                            self.state.text_done.set()
-                            break
-                        logger.info(f"Received text: {text}")
-                        yield text
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
-
-            await self.tts_model.text_stream_to_speech_to_queue(
-                text_stream=text_stream(),
-                queue=self.state.audio_queue,
-                stream=True,
-                # stream_end_signal=self.stream_end_signal,
-            )
-
-
-        except Exception as e:
-            logger.error(f"Error in process_text_stream: {e}")
-            await self.state.audio_queue.put(Exception(f"Text processing error: {str(e)}"))
 
     async def process_audio_queue(self):
         """Process and send audio chunks to the client"""
@@ -126,55 +91,94 @@ class TTSConnection:
                     chunk = await asyncio.wait_for(self.state.audio_queue.get(), timeout=1.0)
 
                     if chunk is None:
-                        logger.info("-------------------------------------------chunk is None")
+                        logger.info("Received None chunk")
+                        continue
 
-                    if chunk is None and self.audio_stream_end.is_set():
-                        await self.websocket.send_json({"type": "tts_complete"})
-                        self.state.stream_complete.set()
-                        break
+                    if isinstance(chunk, TTSEvent) and chunk.type == "text_end":
+                        async with self.state.lock:
+                            self.state.mode = "idle"
+                            break
 
-                    if isinstance(chunk, Exception):
-                        await self.websocket.send_text(f"Error: {str(chunk)}")
-                        break
-
-                    if chunk:
+                    if chunk and self.state.mode != "idle":  # Only process if not idle
                         sampling_rate, audio_data = chunk
                         if self.state.accumulated_rate is None:
                             self.state.accumulated_rate = sampling_rate
                         self.state.accumulated_audio.append(audio_data)
 
                         async with self.send_lock:
-                            buffer = io.BytesIO()
-                            sf.write(
-                                buffer,
-                                audio_data,
-                                sampling_rate,
-                                format=self.response_format,
-                                subtype="PCM_16"
-                            )
-                            buffer.seek(0)
-                            await self.websocket.send_bytes(buffer.getvalue())
+                            try:
+                                buffer = io.BytesIO()
+                                sf.write(
+                                    buffer,
+                                    audio_data,
+                                    sampling_rate,
+                                    format=self.response_format,
+                                    subtype="PCM_16"
+                                )
+                                buffer.seek(0)
+                                await self.websocket.send_bytes(buffer.getvalue())
+                            except RuntimeError as e:
+                                # Handle websocket already closed
+                                logger.info(f"Websocket send failed: {e}")
+                                break
 
                 except asyncio.TimeoutError:
+                    if self.state.mode == "idle":
+                        break
                     continue
 
         except Exception as e:
             logger.error(f"Error in process_audio_queue: {e}")
+            raise  # Re-raise to handle in the caller
+
+    async def track_incoming_text(self):
+        while True:
+            await asyncio.sleep(0.2)
+            if self.state.mode == "processing":
+                if time.time() - self.state.last_text_event_time > self.state.timeout_seconds:
+                    logger.info("-------------------------------------------text timeout")
+                    await self.state.text_queue.put(TTSEvent(type="text_end"))
+                    break
+            elif self.state.mode == "idle":
+                break
+
 
     async def handle_message(self, message: WSMessageTTS):
         """Handle incoming WebSocket messages"""
         if message.type == "interrupt":
-            await self.clear_processing()
+            pass
+            # await self.clear_processing()   # TODO
         elif message.type == "add_text" and message.text:
-            await self.state.text_queue.put(message.text)
+            if self.state.mode == "idle":
+                async with self.state.lock:
+                    self.state.reset()
+                    logger.info("-------------------------------------------reset state")
+                    self.state.mode = "processing"
+                    # reset state to ensure empty queue
+
+
+                await self.state.text_queue.put(TTSEvent(type="text_start"))
+                await self.state.text_queue.put(message.text)
+                self.state.last_text_event_time = time.time()
+
+                asyncio.create_task(self.track_incoming_text())
+                asyncio.create_task(self.tts_model.text_stream_to_speech_to_queue(
+                    text_queue=self.state.text_queue,
+                    queue=self.state.audio_queue,
+                    stream=True,
+                ))
+                asyncio.create_task(self.process_audio_queue())
+
+            else:
+                await self.state.text_queue.put(message.text)
+                self.state.last_text_event_time = time.time()
         elif message.type == "text_done":
-            await self.state.text_queue.put(None)
-            self.state.text_done.set()
-            await self.state.stream_complete.wait()
+            await self.state.text_queue.put(TTSEvent(type="text_end"))
+
 
     async def clear_processing(self):
         """Clear all processing states and queues"""
-        self.state.processing_flag.clear()
+        # self.state.processing_flag.clear()
         self.state.accumulated_audio = []
         self.state.accumulated_rate = None
 
@@ -195,29 +199,45 @@ class TTSConnection:
             except asyncio.QueueEmpty:
                 break
 
-        self.state.processing_flag.set()
-
     async def cleanup(self):
         """Cleanup connection resources"""
-        # Clear processing flag first to stop new operations
-        self.state.processing_flag.clear()
-
-        # Cancel all tasks
-        for task in self.tasks:
-            if not task.done():
-                task.cancel()
-
-        # Wait for tasks to complete with timeout
         try:
-            await asyncio.wait(self.tasks, timeout=5.0)
+            # Stop any ongoing text tracking
+            self.state.mode = "idle"
+
+            # Cancel all tasks
+            for task in self.tasks:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+            # Clear all queues
+            await self.clear_queues()
+
+            # Reset state
+            self.state.reset()
+
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
-        # Clear all queues and state
-        await self.clear_processing()
+    async def clear_queues(self):
+        """Clear all queues safely"""
+        # Clear audio queue
+        while not self.state.audio_queue.empty():
+            try:
+                self.state.audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
-        # Reset tasks list
-        self.tasks = []
+        # Clear text queue
+        while not self.state.text_queue.empty():
+            try:
+                self.state.text_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
 async def validate_message(raw_data: str) -> WSMessageTTS:
@@ -255,7 +275,13 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             message = await websocket.receive_text()
             parsed_message = await validate_message(message)
-            await connection.handle_message(parsed_message)
+
+            # Track the tasks created by handle_message
+            if parsed_message.type == "add_text" and parsed_message.text:
+                connection.tasks = []  # Clear previous tasks
+                await connection.handle_message(parsed_message)
+            else:
+                await connection.handle_message(parsed_message)
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
@@ -263,8 +289,13 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"Error in websocket_endpoint: {e}")
     finally:
         if connection:
-            # Ensure proper cleanup
             try:
                 await connection.cleanup()
             except Exception as e:
                 logger.error(f"Error during connection cleanup: {e}")
+            finally:
+                try:
+                    await websocket.close()
+                except RuntimeError:
+                    # Websocket might already be closed
+                    pass
