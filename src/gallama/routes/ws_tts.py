@@ -75,7 +75,8 @@ class TTSConnection:
         self.state = TTSConnectionState()
         self.tasks: list[asyncio.Task] = []
         self.send_lock = asyncio.Lock()
-        self.stream_end_signal = "STREAM_END"
+        self.text_stream_end = asyncio.Event()
+        self.audio_stream_end = asyncio.Event()
 
     async def start(self):
         """Initialize the connection and start processing tasks"""
@@ -124,7 +125,10 @@ class TTSConnection:
                 try:
                     chunk = await asyncio.wait_for(self.state.audio_queue.get(), timeout=1.0)
 
-                    if chunk == ("STREAM_END", None):
+                    if chunk is None:
+                        logger.info("-------------------------------------------chunk is None")
+
+                    if chunk is None and self.audio_stream_end.is_set():
                         await self.websocket.send_json({"type": "tts_complete"})
                         self.state.stream_complete.set()
                         break

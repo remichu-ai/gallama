@@ -54,7 +54,8 @@ class TTSBase:
         queue: asyncio.Queue,           # audio chunk will be put to this queue
         language: str = "auto",
         speed_factor: float = 1.0,
-        stream_end_signal = None,       # signal to return to let parent function know that audio conversationfinished
+        text_stream_end: asyncio.Event = None,        # let parent function know that text done
+        audio_stream_end: asyncio.Event = None,       # let parent function know that audio done
         **kwargs: Any
     ) -> None:
 
@@ -79,6 +80,8 @@ class TTSBase:
                     if segment is None:
                         # Check if processing task is done and queue is empty
                         if processing_task.done() and pipeline.processing_queue.empty():
+                            if text_stream_end is not None:
+                                text_stream_end.set()
                             break
                         continue
 
@@ -117,6 +120,8 @@ class TTSBase:
                 self.model.stop()
             raise
         finally:
+            if audio_stream_end is not None:
+                audio_stream_end.set()
             logger.info("Cleaning up pipeline")
             await pipeline.stop_processing()
             await pipeline.reset()
