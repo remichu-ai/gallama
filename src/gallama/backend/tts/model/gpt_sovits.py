@@ -50,6 +50,7 @@ class AsyncTTSWrapper:
         self,
         inputs: Dict[str, Any],
         queue: asyncio.Queue,
+        session_tracker: set = None,  # Set to track generations for a specific session
     ) -> None:
         """
         Feeds audio fragments directly into the provided queue for upstream consumption.
@@ -57,38 +58,38 @@ class AsyncTTSWrapper:
         Args:
             inputs: Dictionary of TTS parameters including text, ref_audio_path, etc.
             queue: asyncio.Queue where audio chunks will be placed
+            session_tracker: Optional set to track generations for this specific session
         """
+
+        task_id = str(time.time())
+        if session_tracker is not None:
+            session_tracker.add(task_id)
+
         loop = asyncio.get_running_loop()
 
-        # Function to run in the executor that will feed the queue
         def run_tts():
             try:
-
-
                 for audio_chunk in self.tts.run(inputs):
-                    # Put the chunk in the queue from the thread
                     future = asyncio.run_coroutine_threadsafe(
                         queue.put(audio_chunk),
                         loop
                     )
-                    # Ensure the put operation completes
                     future.result()
 
-
             except Exception as e:
-                logger.error(f"Error in TTS generation: {e}")
-                # Put the error in the queue
+                logger.error(f"Error in TTS generation {task_id}: {e}")
                 future = asyncio.run_coroutine_threadsafe(
                     queue.put(Exception(f"TTS error: {str(e)}")),
                     loop
                 )
                 future.result()
             finally:
-                # Signal that we're done by putting None in the queue
-                pass
+                # Remove this task from session tracker if it exists
+                if session_tracker is not None:
+                    session_tracker.discard(task_id)
 
-        # Start the TTS processing in the executor and return immediately
         loop.run_in_executor(self.executor, run_tts)
+
 
     def stop(self):
         """Stops the TTS processing"""
@@ -121,7 +122,7 @@ class TTS_GPT_SoVITS(TTSBase):
         queue: asyncio.Queue = None,
         voice: str = None,
         speed_factor: float = None,
-        end_signal: str = "conversion_done",
+        session_tracker: set = None,
         **kwargs: Any
     ) -> None | Tuple[int, np.ndarray] | AsyncIterator[Tuple[int, np.ndarray]] | str:
         """
@@ -131,12 +132,13 @@ class TTS_GPT_SoVITS(TTSBase):
             text: Text to convert to speech
             language: Language of the text (default: "auto")
             stream: Whether to stream the audio in chunks (default: False)
+            voice: the name of the voice to use (default: None), if None, will use default voice
             speed_factor: Speed factor for the audio playback (default: 1.0)
             batching: whether to using parallel batching, will be faster but require more memory (default: False)
             batch_size: batch size if use batching (default: 1)
             queue: Optional asyncio Queue to receive audio chunks
+            session_tracker: Optional set to track generations for this specific session
             kwargs: Additional parameters to pass to the text_to_speech function
-            end_signal: str = "conversion_done" -> the string to put into queue when conversion is done
 
         Returns:
             If stream=False: Tuple of (sample_rate, concatenated_audio_data)
@@ -190,12 +192,20 @@ class TTS_GPT_SoVITS(TTSBase):
         if stream:
             if queue is None:
                 queue = asyncio.Queue()
-            await self.model.stream_audio(inputs=params, queue=queue)
+            await self.model.stream_audio(
+                inputs=params,
+                queue=queue,
+                session_tracker=session_tracker
+            )
             return None  # Since we're using a queue, no direct return value needed
         else:
             # For non-streaming mode, create a temporary queue and collect all chunks
             temp_queue = asyncio.Queue()
-            await self.model.stream_audio(inputs=params, queue=temp_queue)
+            await self.model.stream_audio(
+                inputs=params,
+                queue=temp_queue,
+                session_tracker = session_tracker
+            )
 
             try:
                 # Collect all audio chunks into a single array
@@ -219,8 +229,7 @@ class TTS_GPT_SoVITS(TTSBase):
                         audio_chunks.append(audio_data)
 
                 if not audio_chunks:
-                    pass
-                    # return 0, np.array([], dtype=np.int16)
+                    return 0, np.array([], dtype=np.int16)
 
                 return sample_rate, np.concatenate(audio_chunks)
 

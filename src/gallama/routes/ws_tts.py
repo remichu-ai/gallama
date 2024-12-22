@@ -4,28 +4,16 @@ import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
-from pydantic import BaseModel, validator
+from ..data_classes import TTSEvent, WSMessageTTS
+import samplerate
+import numpy as np
 import json
 from pathlib import Path
 from ..dependencies import get_model_manager
 from gallama.logger.logger import logger
-
 router = APIRouter(prefix="", tags=["tts"])
 
 
-class TTSEvent(BaseModel):
-    type: Literal["text_start", "text_end"]
-
-
-class WSMessageTTS(BaseModel):
-    type: Literal["add_text", "text_done", "interrupt"]
-    text: Optional[str] = None
-
-    @validator("text")
-    def validate_text_for_add_type(cls, v, values):
-        if values.get("type") == "add_text" and v is None:
-            raise ValueError("text field cannot be None when type is add_text")
-        return v
 
 
 class TTSConnectionState:
@@ -41,7 +29,7 @@ class TTSConnectionState:
         self.stream_complete: asyncio.Event = asyncio.Event()
         self.text_done: asyncio.Event = asyncio.Event()
         self.last_text_event_time: float = 0.0
-        self.timeout_seconds: int = 20
+        self.timeout_seconds: int = 12
 
         self.lock = asyncio.Lock()
 
@@ -76,16 +64,19 @@ class TTSConnection:
         self.state = TTSConnectionState()
         self.tasks: list[asyncio.Task] = []
         self.send_lock = asyncio.Lock()
-
+        self.target_sample_rate = 24000
 
     async def start(self):
         """Initialize the connection and start processing tasks"""
         await self.websocket.accept()
 
-
     async def process_audio_queue(self):
         """Process and send audio chunks to the client"""
         try:
+            resampler = samplerate.Resampler('sinc_medium', channels=1)
+            buffer_threshold = 2048  # Experiment with this value
+            accumulated_chunk = np.array([], dtype=np.float32)
+
             while True:
                 try:
                     chunk = await asyncio.wait_for(self.state.audio_queue.get(), timeout=1.0)
@@ -99,28 +90,47 @@ class TTSConnection:
                             self.state.mode = "idle"
                             break
 
-                    if chunk and self.state.mode != "idle":  # Only process if not idle
+                    if chunk and self.state.mode != "idle":
                         sampling_rate, audio_data = chunk
-                        if self.state.accumulated_rate is None:
-                            self.state.accumulated_rate = sampling_rate
-                        self.state.accumulated_audio.append(audio_data)
 
-                        async with self.send_lock:
-                            try:
-                                buffer = io.BytesIO()
-                                sf.write(
-                                    buffer,
-                                    audio_data,
-                                    sampling_rate,
-                                    format=self.response_format,
-                                    subtype="PCM_16"
+                        # Ensure audio data is float32 and normalized to [-1, 1]
+                        audio_data = audio_data.astype(np.float32)
+                        if audio_data.max() > 1.0 or audio_data.min() < -1.0:
+                            audio_data = audio_data / np.max(np.abs(audio_data))
+
+                        # Accumulate chunks
+                        accumulated_chunk = np.concatenate([accumulated_chunk, audio_data])
+
+                        # Only process when we have enough data
+                        if len(accumulated_chunk) >= buffer_threshold:
+                            if sampling_rate != self.target_sample_rate:
+                                ratio = self.target_sample_rate / sampling_rate
+                                resampled_audio = resampler.process(
+                                    accumulated_chunk,
+                                    ratio,
+                                    end_of_input=False
                                 )
-                                buffer.seek(0)
-                                await self.websocket.send_bytes(buffer.getvalue())
-                            except RuntimeError as e:
-                                # Handle websocket already closed
-                                logger.info(f"Websocket send failed: {e}")
-                                break
+                            else:
+                                resampled_audio = accumulated_chunk
+
+                            # Reset accumulation
+                            accumulated_chunk = np.array([], dtype=np.float32)
+
+                            async with self.send_lock:
+                                try:
+                                    buffer = io.BytesIO()
+                                    sf.write(
+                                        buffer,
+                                        resampled_audio,
+                                        self.target_sample_rate,
+                                        format=self.response_format,
+                                        subtype="PCM_16"
+                                    )
+                                    buffer.seek(0)
+                                    await self.websocket.send_bytes(buffer.getvalue())
+                                except RuntimeError as e:
+                                    logger.info(f"Websocket send failed: {e}")
+                                    break
 
                 except asyncio.TimeoutError:
                     if self.state.mode == "idle":
@@ -129,7 +139,7 @@ class TTSConnection:
 
         except Exception as e:
             logger.error(f"Error in process_audio_queue: {e}")
-            raise  # Re-raise to handle in the caller
+            raise
 
     async def track_incoming_text(self):
         while True:

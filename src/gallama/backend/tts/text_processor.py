@@ -16,10 +16,12 @@ class TextToTextSegment:
 
     def __init__(self,
                  segmentation_method: SEGMENTATION_METHODS = "sentence_group",
-                 segment_size: int = 4,
+                 initial_segment_size: int = 1,
+                 max_segment_size: int = 4,
+                 segment_size_increase_interval: int = 3,  # Number of segments before increasing
                  char_limit: int = 50,
                  min_segment_length: int = 5,
-                 max_queue_size: int = 100,
+                 max_queue_size: int = 1000,
                  buffer_size: int = 500,
                  custom_segmenter: Optional[Callable[[str], List[str]]] = None,
                  quick_start: bool = False,
@@ -28,9 +30,14 @@ class TextToTextSegment:
                  ):
         """
         Initialize the pipeline with configurable parameters.
+        Added parameters for dynamic segment size adjustment.
         """
         self.segmentation_method = segmentation_method
-        self.segment_size = segment_size
+        self.initial_segment_size = initial_segment_size
+        self.current_segment_size = initial_segment_size
+        self.max_segment_size = max_segment_size
+        self.segment_size_increase_interval = segment_size_increase_interval
+        self.segments_processed = 0
         self.char_limit = char_limit
         self.min_segment_length = min_segment_length
         self.max_buffer_size = buffer_size
@@ -44,6 +51,16 @@ class TextToTextSegment:
         self.quick_start_min_words = quick_start_min_words
         self.quick_start_max_words = quick_start_max_words
         self.first_segment_processed = False
+
+    def _maybe_increase_segment_size(self):
+        """
+        Increase segment size if appropriate conditions are met.
+        """
+        self.segments_processed += 1
+        if (self.segments_processed % self.segment_size_increase_interval == 0 and
+            self.current_segment_size < self.max_segment_size):
+            self.current_segment_size += 1
+            logger.info(f"Increased segment size to: {self.current_segment_size}")
 
     def _find_quick_start_break(self, text: str) -> int:
         """
@@ -220,7 +237,9 @@ class TextToTextSegment:
 
         if self.segmentation_method == "sentence_group":
             sentences = self._split_by_punctuation(text)
-            return self._group_sentences(sentences, self.segment_size)
+            segments = self._group_sentences(sentences, self.current_segment_size)
+            self._maybe_increase_segment_size()
+            return segments
 
         elif self.segmentation_method == "char_count":
             return self._segment_by_char_count(text)
@@ -342,4 +361,6 @@ class TextToTextSegment:
         self.clear_buffer()
         await self.clear_queue()
         self.first_segment_processed = False
+        self.segments_processed = 0
+        self.current_segment_size = self.initial_segment_size
         self.stop_event.clear()

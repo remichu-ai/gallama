@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Literal, Optional
 from fastapi import Query
 
@@ -31,3 +31,19 @@ class TTSRequest(BaseModel):
     voice: str = "alloy"
     response_format: str = Query(DEFAULT_FORMAT, enum=list(SUPPORTED_FORMATS))
     speed: float = Query(1.0, ge=0.25, le=4.0)
+
+
+
+class TTSEvent(BaseModel):
+    type: Literal["text_start", "text_end"]
+
+
+class WSMessageTTS(BaseModel):
+    type: Literal["add_text", "text_done", "interrupt"]
+    text: Optional[str] = None
+
+    @validator("text")
+    def validate_text_for_add_type(cls, v, values):
+        if values.get("type") == "add_text" and v is None:
+            raise ValueError("text field cannot be None when type is add_text")
+        return v

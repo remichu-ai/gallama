@@ -5,6 +5,8 @@ from .TTSQueueHandler import TTSQueueHandler
 from ...data_classes import ModelSpec
 from ...logger import logger
 from ...routes.ws_tts import TTSEvent
+import time
+
 
 class TTSBase:
     """this is the base interface for all TTS models"""
@@ -50,47 +52,68 @@ class TTSBase:
         )
 
     async def text_stream_to_speech_to_queue(
-        self,
-        text_queue: asyncio.Queue,
-        queue: asyncio.Queue,           # audio chunk will be put to this queue
-        language: str = "auto",
-        speed_factor: float = 1.0,
-        text_stream_end: asyncio.Event = None,        # let parent function know that text done
-        audio_stream_end: asyncio.Event = None,       # let parent function know that audio done
-        **kwargs: Any
+            self,
+            text_queue: asyncio.Queue,
+            queue: asyncio.Queue,
+            language: str = "auto",
+            speed_factor: float = 1.0,
+            text_stream_end: asyncio.Event = None,
+            audio_stream_end: asyncio.Event = None,
+            **kwargs: Any
     ) -> None:
 
-        pipeline = TextToTextSegment(quick_start=True)
+        pipeline = TextToTextSegment(
+            quick_start=True,
+            initial_segment_size=1,  # Start with single sentences
+            max_segment_size=4,  # Maximum of 4 sentences per segment
+            segment_size_increase_interval=1  # Increase segment size every 3 segments
+        )
+
+        # Create a set to track generations specific to this streaming session
+        session_generations = set()
 
         try:
-            # logger.info("Starting text-to-speech pipeline")
-            # Create task but don't wait for it
             processing_task = asyncio.create_task(
                 pipeline.process_text_stream_async(input_queue=text_queue)
             )
 
+            last_log_time = time.time()
+
             while True:
                 try:
-                    # Shorter timeout for more responsive processing
                     segment = await pipeline.get_next_segment(timeout=0.1, raise_timeout=True)
-                    # if segment:
-                        # logger.info(f"---------------------Segment start with space: {segment.startswith(' ')}")
-                        # logger.info(f"---------------------Segment end with space: {segment.endswith(' ')}")
-                        # segment = segment.strip()
 
                     if segment:
+                        segment = segment.strip()
                         await self.text_to_speech(
                             queue=queue,
                             text=segment,
                             language=language,
                             stream=True,
                             speed_factor=speed_factor,
+                            session_tracker=session_generations,
                         )
-                    # logger.info("Segment processed successfully")
 
                 except asyncio.TimeoutError:
-                    # Check if we should continue processing
-                    if processing_task.done():
+                    # current_time = time.time()
+                    # # Only log if 3 seconds have passed since the last log
+                    # if current_time - last_log_time >= 3.0:
+                    #     queue_size = pipeline.processing_queue.qsize()
+                    #     logger.info(f"-------------------Timeout reached, queue is {pipeline.processing_queue}")
+                    #     logger.info(f"-------------------Queue size: {queue_size}-------------------")
+                    #     logger.info(f"-------------------Text buffer is: {pipeline.text_buffer}-------------------")
+                    #     logger.info(f"-------------------Text Processing task is: {processing_task.done()}-------------------")
+                    #     # Update the last log time
+                    #     last_log_time = current_time
+
+
+                    if not session_generations and pipeline.processing_queue.qsize()==0 and pipeline.text_buffer=="" and processing_task.done():
+                        # logger.info("------------------ break frog here------------------------")
+                        # queue_size = pipeline.processing_queue.qsize()
+                        # logger.info(f"-------------------Timeout reached, queue is {pipeline.processing_queue}")
+                        # logger.info(f"-------------------Queue size: {queue_size}-------------------")
+                        # logger.info(f"-------------------Text buffer is: {pipeline.text_buffer}-------------------")
+                        # logger.info(f"-------------------Text Processing task is: {processing_task.done()}-------------------")
                         break
                     else:
                         continue
@@ -102,7 +125,7 @@ class TTSBase:
             raise
         finally:
             logger.info("Cleaning up pipeline")
-            await queue.put(TTSEvent(type="text_end"))  # signal that audio complete
+            await queue.put(TTSEvent(type="text_end"))
             await pipeline.stop_processing()
             await pipeline.reset()
             await pipeline.clear_queue()

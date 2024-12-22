@@ -24,7 +24,9 @@ from .data_class import (
 from .audio_data_class import (
     TranscriptionResponse,
     TimeStampedWord,
-    TTSRequest
+    TTSRequest,
+    TTSEvent,
+    WSMessageTTS
 )
 
 from .generation_data_class import (
