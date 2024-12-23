@@ -74,10 +74,10 @@ async def options_handler(request: Request):
 async def startup_event():
     # run some dummy generation so that cache is initialized
     logger.info("Generator initialization")
-    gen_queue = GenQueue()
 
     # warm up LLM
     if model_manager.llm_dict:
+        gen_queue = GenQueue()
         for _model_name, _model in model_manager.llm_dict.items():
             await _model.chat_raw(
                 prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
@@ -88,15 +88,21 @@ async def startup_event():
                 request=None,
             )
 
+            logger.info(f"LLM| {_model_name} | warmed up")
         gen_queue = None
-        logger.info("LLM warmed up")
 
     if model_manager.stt_dict:
         logger.info("STT warmed up NOT YET IMPLEMENTED")
 
     if model_manager.tts_dict:
-
-        logger.info("TTS warmed up NOT YET IMPLEMENTED")
+        for _model_name, tts in model_manager.tts_dict.items():
+            _, _ = await tts.text_to_speech(
+                text="hello",
+                stream=False,
+                batching=False,
+                batch_size=1
+            )
+            logger.info(f"TTS| {_model_name} | warmed up")
 
     if model_manager.embedding_dict:
         logger.info("Embedding warmed up NOT YET IMPLEMENTED")

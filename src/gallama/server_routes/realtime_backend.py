@@ -427,7 +427,7 @@ class Response:
         }).model_dump())
 
 
-    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str, write_audio: bool = False):
+    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str):
         """ send text chunk to client as well as update internal state """
 
         if mode=="text":
@@ -439,11 +439,6 @@ class Response:
         elif mode=="audio":
             _type = "response.audio.delta"
             self.audio += chunk
-
-            if write_audio:
-                logger.info("FROG FROG")
-                with open("/home/remichu/work/ML/gallama/experiment/gallama_chunk.txt", "a") as f:
-                    f.write(chunk)
 
         # send chunk delta
         await self.ws_client.send_json(ResponseDelta(**{
@@ -575,7 +570,6 @@ class Response:
                             await self.update_delta(
                                 mode="audio",
                                 chunk=audio_base64,
-                                write_audio=first_chunk
                             )
                             first_chunk = False
                         except Exception as e:
