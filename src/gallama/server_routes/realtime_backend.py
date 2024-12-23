@@ -8,6 +8,7 @@ from collections import OrderedDict
 import json
 import io
 import soundfile as sf
+import numpy as np
 from gallama.logger.logger import logger
 from websockets.exceptions import WebSocketException
 from websockets.protocol import State
@@ -426,7 +427,7 @@ class Response:
         }).model_dump())
 
 
-    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str):
+    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str, write_audio: bool = False):
         """ send text chunk to client as well as update internal state """
 
         if mode=="text":
@@ -438,6 +439,11 @@ class Response:
         elif mode=="audio":
             _type = "response.audio.delta"
             self.audio += chunk
+
+            if write_audio:
+                logger.info("FROG FROG")
+                with open("/home/remichu/work/ML/gallama/experiment/gallama_chunk.txt", "a") as f:
+                    f.write(chunk)
 
         # send chunk delta
         await self.ws_client.send_json(ResponseDelta(**{
@@ -539,14 +545,13 @@ class Response:
 
     async def send_audio_to_client_task(self):
         """Listen for audio chunks from TTS websocket and forward them to the client"""
+        first_chunk = True
         try:
-            # Use the built-in connection management
             if not await self.ws_tts.ensure_connection():
                 raise Exception("Could not establish TTS connection")
 
             while True:
                 try:
-                    # Use receive_message instead of direct connection.recv()
                     message = await self.ws_tts.receive_message()
                     if message is None:
                         logger.error("Failed to receive message from TTS service")
@@ -565,12 +570,14 @@ class Response:
 
                     elif isinstance(message, bytes):
                         try:
-                            # Convert audio bytes to base64 string
+                            # Convert to base64 and send
                             audio_base64 = base64.b64encode(message).decode('utf-8')
                             await self.update_delta(
                                 mode="audio",
-                                chunk=audio_base64
+                                chunk=audio_base64,
+                                write_audio=first_chunk
                             )
+                            first_chunk = False
                         except Exception as e:
                             logger.error(f"Error processing audio chunk: {str(e)}")
                             continue
@@ -579,7 +586,6 @@ class Response:
                     logger.error("TTS websocket connection closed")
                     break
 
-            # Mark content part as done when audio generation completes
             if self.audio_done and self.transcription_done:
                 await self.content_part_done(generation_type="audio")
                 await self.response_done()

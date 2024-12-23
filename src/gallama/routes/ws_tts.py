@@ -74,8 +74,67 @@ class TTSConnection:
         """Process and send audio chunks to the client"""
         try:
             resampler = samplerate.Resampler('sinc_medium', channels=1)
-            buffer_threshold = 2048  # Experiment with this value
+            buffer_threshold = 2048  # Buffer size for processing
             accumulated_chunk = np.array([], dtype=np.float32)
+            prev_chunk_end = np.zeros(256, dtype=np.float32)  # Store end of previous chunk for crossfade
+            is_first_chunk = True  # Flag to track first chunk for initial fade-in
+
+            def apply_crossfade(current_chunk: np.ndarray, prev_end: np.ndarray, fade_length: int = 256) -> np.ndarray:
+                """Apply crossfade between chunks to prevent popping"""
+                if len(current_chunk) < fade_length:
+                    return current_chunk
+
+                # Create fade curves
+                fade_in = np.linspace(0, 1, fade_length)
+                fade_out = np.linspace(1, 0, fade_length)
+
+                # Apply crossfade at the beginning
+                current_chunk[:fade_length] = (current_chunk[:fade_length] * fade_in) + (prev_end * fade_out)
+                return current_chunk
+
+            def apply_initial_fade_in(audio_data: np.ndarray, fade_length: int = 512) -> np.ndarray:
+                """Apply a longer, smoother fade-in for the very first chunk"""
+                if len(audio_data) < fade_length:
+                    fade_length = len(audio_data)
+
+                # Create smooth fade-in curve using half of a Hann window
+                fade_curve = np.hanning(fade_length * 2)[:fade_length]
+
+                # Apply fade-in
+                audio_data = audio_data.copy()  # Create a copy to prevent modifying original
+                audio_data[:fade_length] *= fade_curve
+                return audio_data
+
+            def normalize_audio(audio_data: np.ndarray) -> np.ndarray:
+                """
+                Normalize audio to match OpenAI's range (~0.45 peak amplitude)
+                """
+                # Remove DC offset first as you were doing
+                audio_data = audio_data - np.mean(audio_data)
+
+                # Target peak of 0.45 to match OpenAI's observed range
+                target_peak = 0.45
+
+                # Calculate current peak
+                max_val = np.max(np.abs(audio_data))
+                if max_val > 0:  # Prevent division by zero
+                    audio_data = audio_data * (target_peak / max_val)
+
+                # Add safety clip to ensure we're within PCM_16 valid range
+                audio_data = np.clip(audio_data, -0.99, 0.99)
+
+                return audio_data
+
+            def process_chunk(audio_data: np.ndarray, is_first: bool = False) -> np.ndarray:
+                """Process a single chunk of audio data"""
+                # First normalize the audio
+                audio_data = normalize_audio(audio_data)
+
+                # Apply initial fade-in only to the first chunk
+                if is_first:
+                    audio_data = apply_initial_fade_in(audio_data)
+
+                return audio_data
 
             while True:
                 try:
@@ -93,16 +152,18 @@ class TTSConnection:
                     if chunk and self.state.mode != "idle":
                         sampling_rate, audio_data = chunk
 
-                        # Ensure audio data is float32 and normalized to [-1, 1]
+                        # Convert to float32
                         audio_data = audio_data.astype(np.float32)
-                        if audio_data.max() > 1.0 or audio_data.min() < -1.0:
-                            audio_data = audio_data / np.max(np.abs(audio_data))
+
+                        # First normalization pass with initial fade-in if it's the first chunk
+                        audio_data = process_chunk(audio_data, is_first_chunk)
 
                         # Accumulate chunks
                         accumulated_chunk = np.concatenate([accumulated_chunk, audio_data])
 
                         # Only process when we have enough data
                         if len(accumulated_chunk) >= buffer_threshold:
+                            # Resample if needed
                             if sampling_rate != self.target_sample_rate:
                                 ratio = self.target_sample_rate / sampling_rate
                                 resampled_audio = resampler.process(
@@ -113,21 +174,44 @@ class TTSConnection:
                             else:
                                 resampled_audio = accumulated_chunk
 
-                            # Reset accumulation
+                            # Second normalization pass after resampling
+                            resampled_audio = normalize_audio(resampled_audio)
+
+                            # Apply crossfade with previous chunk
+                            if not is_first_chunk:  # Skip crossfade for the first chunk
+                                resampled_audio = apply_crossfade(resampled_audio, prev_chunk_end)
+
+                            # Save end of current chunk for next crossfade
+                            prev_chunk_end = resampled_audio[-256:].copy()
+
+                            # Reset accumulation and update first chunk flag
                             accumulated_chunk = np.array([], dtype=np.float32)
+                            is_first_chunk = False
+
+                            # async with self.send_lock:
+                            #     try:
+                            #         buffer = io.BytesIO()
+                            #         # Convert to int16 for sending
+                            #         sf.write(
+                            #             buffer,
+                            #             resampled_audio,
+                            #             self.target_sample_rate,
+                            #             format=self.response_format,
+                            #             subtype="PCM_16"
+                            #         )
+                            #         buffer.seek(0)
+                            #         await self.websocket.send_bytes(buffer.getvalue())
+                            #     except RuntimeError as e:
+                            #         logger.info(f"Websocket send failed: {e}")
+                            #         break
 
                             async with self.send_lock:
                                 try:
-                                    buffer = io.BytesIO()
-                                    sf.write(
-                                        buffer,
-                                        resampled_audio,
-                                        self.target_sample_rate,
-                                        format=self.response_format,
-                                        subtype="PCM_16"
-                                    )
-                                    buffer.seek(0)
-                                    await self.websocket.send_bytes(buffer.getvalue())
+                                    # Since resampled_audio is already normalized to [-0.99, 0.99] from your normalize_audio function,
+                                    # and the worklet will divide by 32768, we need to multiply by 32768 here
+                                    int16_data = (resampled_audio * 32768).astype(np.int16)
+                                    raw_bytes = int16_data.tobytes()
+                                    await self.websocket.send_bytes(raw_bytes)
                                 except RuntimeError as e:
                                     logger.info(f"Websocket send failed: {e}")
                                     break
