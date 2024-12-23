@@ -286,27 +286,43 @@ class Response:
         self.response_done_status: bool = False
 
     async def content_part_done(self, generation_type: Literal["text", "audio", "transcription"]):
+        logger.info(f"content part done is called with type: {generation_type}")
+        logger.info(f"transcription: {self.transcription_done}")
+        logger.info(f"audio: {self.audio_done}")
+        logger.info(f"text: {self.text_done}")
+
         done_check: bool = False
         content_part: Dict = {}
 
         # for text type, just the text finish is enough
         allowed_modalities = self.session.config.modalities
-        if generation_type == "text" and "text" in allowed_modalities and "audio" not in allowed_modalities and self.text_done:
-            done_check = True
-            content_part = {
-                "type": "text",
-                "text": self.text
-            }
+        if generation_type == "text" and "text" in allowed_modalities and "audio" not in allowed_modalities:
+            if self.text_done:
+                done_check = True
+                content_part = {
+                    "type": "text",
+                    "text": self.text
+                }
+            else:
+                raise Exception("text generation not finished but content part is marked as done")
 
         # for audio type, we need both transcript and audio to finish
-        if generation_type in ["audio", "transcription"] and "audio" in allowed_modalities and self.transcription_done:
-            done_check = True
-            content_part = {
-                "type": "audio",
-                "audio": self.audio,
-                "transcript": self.transcription
-            }
+        if generation_type in ["audio", "transcription"] and "audio" in allowed_modalities:
+            if generation_type=="transcription" and not self.transcription_done:
+                raise Exception("Transcription generation not finished but content part is marked as done")
 
+            if generation_type=="audio" and not self.audio_done:
+                raise Exception("Audio generation not finished but content part is marked as done")
+
+            if self.transcription_done and self.audio_done:
+                done_check = True
+                content_part = {
+                    "type": "audio",
+                    #"audio": self.audio,       # this is not included, despite what said in documentation
+                    "transcript": self.transcription
+                }
+
+        # if done_check achieved meaning text finished or audio & transcription finished
         if done_check:
             await self.ws_client.send_json(ResponseContentPartDoneEvent(**{
                 "event_id": await self.event_id_generator(),
@@ -318,6 +334,7 @@ class Response:
 
             # mark status of content_part as done
             self.content_part_done_status = True
+            logger.info(f"Content part done")
 
 
     async def response_done(self):
@@ -325,22 +342,8 @@ class Response:
             if not self.response_done_status and self.content_part_done_status:   # content part must be done first
                 _output = None
                 allowed_modalities = self.session.config.modalities
-                if "text" in allowed_modalities and "audio" not in allowed_modalities:
-                    # send response done
-                    _output = parse_conversation_item({
-                        "id": self.item_id,
-                        "object": "realtime.item",
-                        "type": "message",
-                        "status": "completed",
-                        "role": "assistant",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": self.text
-                            }
-                        ]
-                    })
-                elif "audio" not in allowed_modalities:
+
+                if "audio" in allowed_modalities:
                     _output = parse_conversation_item({
                         "id": self.item_id,
                         "object": "realtime.item",
@@ -352,6 +355,21 @@ class Response:
                                 "type": "audio",
                                 "audio": self.audio,
                                 "transcript": self.transcription
+                            }
+                        ]
+                    })
+                elif "text" in allowed_modalities and "audio" not in allowed_modalities:
+                    # send response done
+                    _output = parse_conversation_item({
+                        "id": self.item_id,
+                        "object": "realtime.item",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": self.text
                             }
                         ]
                     })
@@ -378,8 +396,12 @@ class Response:
                 else:
                     raise Exception("Invalid Response Type")
 
-            # update response_done tracker
-            self.response_done_status = True
+                # update response_done tracker
+                self.response_done_status = True
+            elif self.response_done_status:
+                raise Exception("Response already sent")
+            elif not self.content_part_done_status:
+                raise Exception("Content part done must be sent before response done")
 
         except Exception as e:
             logger.error(f"{e}")
@@ -454,18 +476,40 @@ class Response:
         """ send usage to client as well as update internal state """
         self.usage = usage
 
-    async def update_text_done(self):
+    async def update_content_done(self, content_type: Literal["text", "audio", "transcription"]):
         """update client that generation is done"""
-        # send content_part.added
-        await self.ws_client.send_json(ResponseTextDone(**{
-            "event_id": await self.event_id_generator(),
-            "type": "response.text.done",
-            "response_id": self.response_id,
-            "item_id": self.item_id,
-            "text": self.text
-        }).model_dump())
+        # send done status for one type of content
 
-        self.text_done = True
+        # text content
+        if content_type=="text":
+            await self.ws_client.send_json(ResponseTextDone(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.text.done",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+                "text": self.text
+            }).model_dump())
+            self.text_done = True
+
+        elif content_type=="audio":
+            await self.ws_client.send_json(ResponseAudioDone(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.audio.done",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+            }).model_dump())
+            self.audio_done = True
+
+        elif content_type=="transcription":
+            await self.ws_client.send_json(ResponseTranscriptDone(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.audio_transcript.done",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+                "transcript": self.transcription
+            }).model_dump())
+            self.transcription_done = True
+
 
 
     async def update_text_or_transcription_task(self, mode: Literal["text", "audio"]):
@@ -508,8 +552,8 @@ class Response:
                     elif llm_response.get("type") == "generation.complete":
                         await self.tts_queue.put(None)  # mark that text generation completed for TTS
 
-                        await self.update_text_done()
-                        await self.content_part_done(generation_type="text")
+                        await self.update_content_done(content_type="transcription" if mode=="audio" else "text")
+                        await self.content_part_done(generation_type="transcription")
                         await self.response_done()
                     else:
                         pass
@@ -555,10 +599,11 @@ class Response:
                     if isinstance(message, str):
                         try:
                             tts_response = json.loads(message)
-                            if tts_response.get("status") == "complete" or \
-                                    tts_response.get("type") == "tts_complete":
+                            if tts_response.get("type") == "tts_complete":
                                 logger.info("TTS response complete")
+                                # mark audio generation as done
                                 self.audio_done = True
+                                await self.update_content_done(content_type="audio")
                                 break
                         except json.JSONDecodeError:
                             logger.warning(f"Received unexpected string message: {message[:100]}...")
@@ -571,18 +616,23 @@ class Response:
                                 mode="audio",
                                 chunk=audio_base64,
                             )
-                            first_chunk = False
                         except Exception as e:
                             logger.error(f"Error processing audio chunk: {str(e)}")
                             continue
 
+
+                except asyncio.TimeoutError:
+                    continue
+
                 except websockets.exceptions.ConnectionClosed:
                     logger.error("TTS websocket connection closed")
                     break
+                except Exception as e:
+                    raise Exception(f"Unexpected error occurred in send_audio_to_client_task: {str(e)}")
 
-            if self.audio_done and self.transcription_done:
-                await self.content_part_done(generation_type="audio")
-                await self.response_done()
+
+            await self.content_part_done(generation_type="audio")
+            await self.response_done()
 
         except Exception as e:
             logger.error(f"Error in audio_to_client_task: {str(e)}")
@@ -871,7 +921,7 @@ class WebSocketMessageHandler:
         session.config = SessionConfig(**{**session.config.model_dump(), **message["session"]})
 
         await websocket.send_json({
-            "event_id": generate_event_id_uuid(),
+            "event_id": await session.queues.next_event(),
             "type": "session.updated",
             "session": {
                 "id": session.id,
@@ -928,7 +978,7 @@ class WebSocketManager:
         session = self.session_manager.create_session(session_id)
 
         await websocket.send_json({
-            "event_id": generate_event_id_uuid(),
+            "event_id": await session.queues.next_event(),
             "type": "session.created",
             "session": session.config.model_dump()
         })
@@ -1069,158 +1119,158 @@ class WebSocketManager:
             finally:
                 session.queues.unprocessed.task_done()
 
-    async def send_client_conversation_item_created(self, client_ws: WebSocket):
-        pass
+    # async def send_client_conversation_item_created(self, client_ws: WebSocket):
+    #     pass
+    #
+    # async def send_llm_result_to_client(self, client_ws: WebSocket, llm_ws: WebSocketClient, response_id: str, session: WebSocketSession):
+    #     """
+    #     Forward LLM websocket responses to the client websocket.
+    #
+    #     Args:
+    #         client_ws (WebSocket): The client's websocket connection
+    #         llm_ws (WebSocketClient): The LLM websocket client
+    #         response_id (str): The ID of the response being processed
+    #     """
+    #     item_id = response_id       # TODO not sure how this is used
+    #     final_text = ""
+    #     first_message = False
+    #
+    #     try:
+    #         while True:
+    #             # Ensure LLM connection is active
+    #             if not llm_ws.connection:
+    #                 await llm_ws.connect()
+    #
+    #             # send the initial content part added with empty text
+    #             if not first_message:
+    #                 event_id = await session.queues.next_resp()
+    #                 await client_ws.send_json(ResponseContentPartAddedEvent(**{
+    #                     "event_id": event_id,
+    #                     "type": "response.content_part.added",
+    #                     "response_id": response_id,
+    #                     "item_id": "msg_" + str(item_id),
+    #                     "output_index": 0,
+    #                     "content_index": 0,
+    #                     "part": {
+    #                         "type": "text",
+    #                         "text": ""          # initial response is empty text
+    #                     }
+    #                 }).model_dump())
+    #                 first_message = True
+    #
+    #             # Receive message from LLM
+    #             message = await llm_ws.connection.recv()
+    #
+    #             try:
+    #                 # Parse the message
+    #                 llm_response = json.loads(message)
+    #
+    #                 try:
+    #                     chat_completion_chunk = ChatCompletionResponse(**llm_response)
+    #                     text_chunk = chat_completion_chunk.choices[0].delta.content
+    #
+    #                     # Forward completion message to client
+    #                     # item_id = item_id + 1
+    #                     await client_ws.send_json(ResponseDelta(**{
+    #                         "event_id": event_id,
+    #                         "type": "response.text.delta",
+    #                         "response_id": response_id,
+    #                         "item_id": "msg_" + str(item_id),
+    #                         "output_index": 0,
+    #                         "content_index": 0,
+    #                         "delta": text_chunk
+    #                     }).model_dump())
+    #                     final_text = final_text + text_chunk
+    #
+    #                 except Exception as e:
+    #                     # send response Done
+    #                     # item_id = item_id + 1
+    #                     await client_ws.send_json(ResponseTextDone(**{
+    #                         "event_id": event_id,
+    #                         "type": "response.text.delta",
+    #                         "response_id": response_id,
+    #                         "item_id": "msg_" + str(item_id),
+    #                         "output_index": 0,
+    #                         "content_index": 0,
+    #                         "text": final_text
+    #                     }).model_dump())
+    #
+    #
+    #
+    #                 # # Check if this is a function call
+    #                 # elif llm_response.get("type") == "function_call":
+    #                 #     await client_ws.send_json({
+    #                 #         "type": "conversation.item.created",
+    #                 #         "item": {
+    #                 #             "id": f"item_{uuid.uuid4().hex[:20]}",
+    #                 #             "type": "function_call",
+    #                 #             "function_call": llm_response.get("function_call"),
+    #                 #             "status": "in_progress"
+    #                 #         }
+    #                 #     })
+    #                 #
+    #                 # # Handle streaming text chunks
+    #                 # elif llm_response.get("type") == "content_block_delta":
+    #                 #     await client_ws.send_json({
+    #                 #         "type": "conversation.item.message.created",
+    #                 #         "item": {
+    #                 #             "id": f"item_{uuid.uuid4().hex[:20]}",
+    #                 #             "type": "message",
+    #                 #             "role": "assistant",
+    #                 #             "content": [{
+    #                 #                 "type": "text",
+    #                 #                 "text": llm_response.get("delta", "")
+    #                 #             }],
+    #                 #             "status": "in_progress"
+    #                 #         }
+    #                 #     })
+    #
+    #             except json.JSONDecodeError:
+    #                 logger.error(f"Failed to parse LLM message: {message}")
+    #                 continue
+    #
+    #     except websockets.exceptions.ConnectionClosed:
+    #         logger.error("LLM websocket connection closed unexpectedly")
+    #         # Send error message to client
+    #         await client_ws.send_json({
+    #             "type": "response.failed",
+    #             "response": {
+    #                 "id": response_id,
+    #                 "object": "realtime.response",
+    #                 "status": "failed",
+    #                 "last_error": {
+    #                     "code": "internal_error",
+    #                     "message": "LLM connection terminated unexpectedly"
+    #                 }
+    #             }
+    #         })
+    #
+    #     except Exception as e:
+    #         logger.error(f"Error in send_llm_result_to_client: {str(e)}")
+    #         # Send error message to client
+    #         await client_ws.send_json({
+    #             "type": "response.failed",
+    #             "response": {
+    #                 "id": response_id,
+    #                 "object": "realtime.response",
+    #                 "status": "failed",
+    #                 "last_error": {
+    #                     "code": "internal_error",
+    #                     "message": str(e)
+    #                 }
+    #             }
+    #         })
+    #
+    # async def process_llm_queue(self, session: WebSocketSession, websocket: WebSocket):
+    #     """Process LLM responses"""
+    #     # Implementation similar to your original process_llm_queue
+    #     pass
+    #
+    #
+    # async def process_audio_to_client(self, session: WebSocketSession, websocket: WebSocket):
+    #     """Process audio responses"""
+    #     # Implementation similar to your original process_audio_to_client
+    #     pass
 
-    async def send_llm_result_to_client(self, client_ws: WebSocket, llm_ws: WebSocketClient, response_id: str, session: WebSocketSession):
-        """
-        Forward LLM websocket responses to the client websocket.
-
-        Args:
-            client_ws (WebSocket): The client's websocket connection
-            llm_ws (WebSocketClient): The LLM websocket client
-            response_id (str): The ID of the response being processed
-        """
-        item_id = response_id       # TODO not sure how this is used
-        final_text = ""
-        first_message = False
-
-        try:
-            while True:
-                # Ensure LLM connection is active
-                if not llm_ws.connection:
-                    await llm_ws.connect()
-
-                # send the initial content part added with empty text
-                if not first_message:
-                    event_id = await session.queues.next_resp()
-                    await client_ws.send_json(ResponseContentPartAddedEvent(**{
-                        "event_id": event_id,
-                        "type": "response.content_part.added",
-                        "response_id": response_id,
-                        "item_id": "msg_" + str(item_id),
-                        "output_index": 0,
-                        "content_index": 0,
-                        "part": {
-                            "type": "text",
-                            "text": ""          # initial response is empty text
-                        }
-                    }).model_dump())
-                    first_message = True
-
-                # Receive message from LLM
-                message = await llm_ws.connection.recv()
-
-                try:
-                    # Parse the message
-                    llm_response = json.loads(message)
-
-                    try:
-                        chat_completion_chunk = ChatCompletionResponse(**llm_response)
-                        text_chunk = chat_completion_chunk.choices[0].delta.content
-
-                        # Forward completion message to client
-                        # item_id = item_id + 1
-                        await client_ws.send_json(ResponseDelta(**{
-                            "event_id": event_id,
-                            "type": "response.text.delta",
-                            "response_id": response_id,
-                            "item_id": "msg_" + str(item_id),
-                            "output_index": 0,
-                            "content_index": 0,
-                            "delta": text_chunk
-                        }).model_dump())
-                        final_text = final_text + text_chunk
-
-                    except Exception as e:
-                        # send response Done
-                        # item_id = item_id + 1
-                        await client_ws.send_json(ResponseTextDone(**{
-                            "event_id": event_id,
-                            "type": "response.text.delta",
-                            "response_id": response_id,
-                            "item_id": "msg_" + str(item_id),
-                            "output_index": 0,
-                            "content_index": 0,
-                            "text": final_text
-                        }).model_dump())
-
-
-
-                    # # Check if this is a function call
-                    # elif llm_response.get("type") == "function_call":
-                    #     await client_ws.send_json({
-                    #         "type": "conversation.item.created",
-                    #         "item": {
-                    #             "id": f"item_{uuid.uuid4().hex[:20]}",
-                    #             "type": "function_call",
-                    #             "function_call": llm_response.get("function_call"),
-                    #             "status": "in_progress"
-                    #         }
-                    #     })
-                    #
-                    # # Handle streaming text chunks
-                    # elif llm_response.get("type") == "content_block_delta":
-                    #     await client_ws.send_json({
-                    #         "type": "conversation.item.message.created",
-                    #         "item": {
-                    #             "id": f"item_{uuid.uuid4().hex[:20]}",
-                    #             "type": "message",
-                    #             "role": "assistant",
-                    #             "content": [{
-                    #                 "type": "text",
-                    #                 "text": llm_response.get("delta", "")
-                    #             }],
-                    #             "status": "in_progress"
-                    #         }
-                    #     })
-
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse LLM message: {message}")
-                    continue
-
-        except websockets.exceptions.ConnectionClosed:
-            logger.error("LLM websocket connection closed unexpectedly")
-            # Send error message to client
-            await client_ws.send_json({
-                "type": "response.failed",
-                "response": {
-                    "id": response_id,
-                    "object": "realtime.response",
-                    "status": "failed",
-                    "last_error": {
-                        "code": "internal_error",
-                        "message": "LLM connection terminated unexpectedly"
-                    }
-                }
-            })
-
-        except Exception as e:
-            logger.error(f"Error in send_llm_result_to_client: {str(e)}")
-            # Send error message to client
-            await client_ws.send_json({
-                "type": "response.failed",
-                "response": {
-                    "id": response_id,
-                    "object": "realtime.response",
-                    "status": "failed",
-                    "last_error": {
-                        "code": "internal_error",
-                        "message": str(e)
-                    }
-                }
-            })
-
-    async def process_llm_queue(self, session: WebSocketSession, websocket: WebSocket):
-        """Process LLM responses"""
-        # Implementation similar to your original process_llm_queue
-        pass
-
-
-    async def process_audio_to_client(self, session: WebSocketSession, websocket: WebSocket):
-        """Process audio responses"""
-        # Implementation similar to your original process_audio_to_client
-        pass
-
-def generate_event_id_uuid():
-    return f"event_{uuid.uuid4().hex[:20]}"
+# def generate_event_id_uuid():
+#     return f"event_{uuid.uuid4().hex[:20]}"

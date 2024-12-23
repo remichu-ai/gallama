@@ -182,7 +182,7 @@ class WebSocketLoggingMiddleware:
             server_logger.debug(f"Error details:", exc_info=True)
 
 # Add WebSocket middleware
-manager_app.add_middleware(WebSocketLoggingMiddleware)
+# manager_app.add_middleware(WebSocketLoggingMiddleware)
 
 # Add CORS middleware
 manager_app.add_middleware(

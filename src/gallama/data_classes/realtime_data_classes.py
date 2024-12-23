@@ -71,14 +71,14 @@ class AudioBufferClear(BaseModel):
 
 
 class SessionConfig(BaseModel):
-    modalities: List[Literal["text", "audio"]]
+    modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])
     instructions: Optional[str] = ""    # system prompt
     voice: Optional[Voice] = None
     input_audio_format: Optional[AudioFormat] = None
     output_audio_format: Optional[AudioFormat] = None
     input_audio_transcription: Optional[AudioTranscriptionConfig] = None
     turn_detection: Optional[TurnDetectionConfig] = None
-    tools: Optional[List[Tool]] = []
+    tools: Optional[List[Tool]] = Field(default_factory=list)
     tool_choice: Optional[Union[ToolChoice, str]] = "auto"
     temperature: Optional[float] = Field(0.8, ge=0.6, le=1.2)
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
@@ -92,10 +92,42 @@ class SessionConfig(BaseModel):
             raise ValueError("max_response_output_tokens must be between 1 and 4096 or 'inf'")
         return v
 
+    def merge(self, other: Union[dict, "SessionConfig"]) -> "SessionConfig":
+        """
+        Merge this SessionConfig with another SessionConfig or dictionary.
+        The values from 'other' will overwrite existing values if present.
+
+        Args:
+            other: Either a dictionary or another SessionConfig instance containing
+                  configuration values to merge.
+
+        Returns:
+            A new SessionConfig instance with merged values.
+        """
+        # Convert self to dict
+        current_config = self.dict()
+
+        # If other is a SessionConfig instance, convert it to dict
+        if isinstance(other, SessionConfig):
+            other_config = other.dict()
+        else:
+            other_config = other
+
+        # Merge the dictionaries, with other_config taking precedence
+        merged_config = {
+            **current_config,
+            **{k: v for k, v in other_config.items() if v is not None}
+        }
+
+        # Create and return a new SessionConfig instance
+        return SessionConfig(**merged_config)
+
+
 class ContentType(str, Enum):
     INPUT_TEXT = "input_text"
     INPUT_AUDIO = "input_audio"
     TEXT = "text"
+
 
 class ItemType(str, Enum):
     MESSAGE = "message"
@@ -189,8 +221,16 @@ class SessionUpdate(BaseModel):
 
 # Server side event ####################################################################################
 
+
+class ContentTypeServer(str, Enum):
+    INPUT_TEXT = "input_text"
+    INPUT_AUDIO = "input_audio"
+    TEXT = "text"
+    AUDIO = "audio"
+
+
 class MessageContentServer(BaseModel):
-    type: Literal["input_text", "input_audio", "text", "item_reference"]
+    type: Literal["input_text", "input_audio", "text", "item_reference", "audio"]
     text: Optional[str] = None
     audio: Optional[str] = None         # base64 encoded audio type
     transcript: Optional[str] = None
@@ -206,7 +246,7 @@ class ConversationItemBaseServer(BaseModel):
 class ConversationItemMessageServer(ConversationItemBaseServer):
     type: Literal["message"] = "message"
     role: Role
-    content: List[MessageContent]
+    content: List[MessageContentServer]
 
 class ConversationItemFunctionCallServer(ConversationItemBaseServer):
     type: Literal["function_call"] = "function_call"
@@ -279,7 +319,7 @@ class ServerResponse(BaseModel):
     object: Literal["realtime.response"] = "realtime.response"
     status: Literal["in_progress", "completed", "cancelled", "failed", "incomplete"]
     status_details: Optional[Dict] = None
-    output: Optional[List[ConversationItem]] = []
+    output: Optional[List[ConversationItemServer]] = []
     usage: Optional[Dict] = None
 
 
@@ -346,4 +386,21 @@ class ResponseTextDone(BaseModel):
     content_index: int = 0
     text: str
 
+
+class ResponseAudioDone(BaseModel):
+    event_id: str
+    type: Literal["response.audio.done"] = "response.audio.done"
+    response_id: str
+    item_id: str
+    output_index: int = 0
+    content_index: int = 0
+
+class ResponseTranscriptDone(BaseModel):
+    event_id: str
+    type: Literal["response.audio_transcript.done"] = "response.audio_transcript.done"
+    response_id: str
+    item_id: str
+    output_index: int = 0
+    content_index: int = 0
+    transcript: str
 

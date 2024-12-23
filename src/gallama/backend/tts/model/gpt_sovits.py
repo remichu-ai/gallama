@@ -201,10 +201,13 @@ class TTS_GPT_SoVITS(TTSBase):
         else:
             # For non-streaming mode, create a temporary queue and collect all chunks
             temp_queue = asyncio.Queue()
+            temp_session_tracker = set()  # Create temporary session tracker if none provided
+            session_tracker_to_use = session_tracker if session_tracker is not None else temp_session_tracker
+
             await self.model.stream_audio(
                 inputs=params,
                 queue=temp_queue,
-                session_tracker = session_tracker
+                session_tracker=session_tracker_to_use
             )
 
             try:
@@ -212,21 +215,27 @@ class TTS_GPT_SoVITS(TTSBase):
                 audio_chunks = []
                 sample_rate = None
 
-                while True:
-                    chunk = await temp_queue.get()
-                    if chunk is None:  # End of stream
-                        break
-                    if isinstance(chunk, Exception):
-                        raise chunk
+                # Process chunks while the session is active or queue has items
+                while session_tracker_to_use or not temp_queue.empty():
+                    try:
+                        # Use asyncio.wait_for with a timeout for the queue.get()
+                        chunk = await asyncio.wait_for(temp_queue.get(), timeout=0.1)
+                        if isinstance(chunk, Exception):
+                            raise chunk
 
-                    current_sample_rate, audio_data = chunk
-                    if sample_rate is None:
-                        sample_rate = current_sample_rate
-                    elif sample_rate != current_sample_rate:
-                        raise ValueError(f"Inconsistent sample rates detected: {sample_rate} vs {current_sample_rate}")
+                        current_sample_rate, audio_data = chunk
+                        if sample_rate is None:
+                            sample_rate = current_sample_rate
+                        elif sample_rate != current_sample_rate:
+                            raise ValueError(
+                                f"Inconsistent sample rates detected: {sample_rate} vs {current_sample_rate}")
 
-                    if audio_data.shape[0] > 0:  # Only add non-empty chunks
-                        audio_chunks.append(audio_data)
+                        if audio_data.shape[0] > 0:  # Only add non-empty chunks
+                            audio_chunks.append(audio_data)
+                        temp_queue.task_done()
+                    except asyncio.TimeoutError:
+                        # Timeout is expected when queue is empty, just continue the loop
+                        continue
 
                 if not audio_chunks:
                     return 0, np.array([], dtype=np.int16)

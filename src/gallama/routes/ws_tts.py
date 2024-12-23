@@ -145,9 +145,15 @@ class TTSConnection:
                         continue
 
                     if isinstance(chunk, TTSEvent) and chunk.type == "text_end":
+                        logger.info("TTS Done")
                         async with self.state.lock:
                             self.state.mode = "idle"
-                            break
+
+                        # send client response that TTS completed
+                        await self.websocket.send_json({
+                            "type": "tts_complete"
+                        })
+                        break
 
                     if chunk and self.state.mode != "idle":
                         sampling_rate, audio_data = chunk
