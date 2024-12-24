@@ -48,3 +48,6 @@ pypinyin
 jieba-fast
 wordsegment
 g2p-en
+
+#tts
+samplerate

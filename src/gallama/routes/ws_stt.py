@@ -3,16 +3,20 @@ import numpy as np
 import soundfile
 import io
 import librosa
-from typing import Dict, Optional
+from typing import Dict, Optional, Literal
+from pydantic import BaseModel
 from ..dependencies import get_model_manager
+from ..data_classes.internal_ws import WSInterSTT
 from gallama.logger.logger import logger
+import base64
 
 router = APIRouter(prefix="", tags=["audio"])
 
-MIN_CHUNK_SECONDS = 0.5  # Minimum chunk size in seconds
 
 
 class TranscriptionConnectionManager:
+    MIN_CHUNK_SECONDS = 0.5
+
     def __init__(self):
         self.active_connections: Dict[WebSocket, Dict] = {}
 
@@ -21,14 +25,14 @@ class TranscriptionConnectionManager:
         websocket: WebSocket,
         model: str,
         language: str = None,
-        sample_rate: int = 16000  # Add sample rate parameter
+        sample_rate: int = 16000
     ) -> bool:
         try:
             await websocket.accept()
 
             model_manager = get_model_manager()
             asr_processor = model_manager.stt_dict.get(model)
-            if not asr_processor:   # just pick the first available model
+            if not asr_processor:
                 try:
                     asr_processor = next(iter(model_manager.stt_dict.values()))
                 except Exception as e:
@@ -39,9 +43,8 @@ class TranscriptionConnectionManager:
                 await websocket.close(code=4000, reason="Model not found")
                 return False
 
-            # Initialize ASR state and connection data
             asr_processor.reset_state()
-            min_chunk_samples = int(MIN_CHUNK_SECONDS * sample_rate)  # Use provided sample rate
+            min_chunk_samples = int(self.MIN_CHUNK_SECONDS * sample_rate)
 
             self.active_connections[websocket] = {
                 "asr_processor": asr_processor,
@@ -49,7 +52,7 @@ class TranscriptionConnectionManager:
                 "raw_buffer": bytearray(),
                 "min_chunk_samples": min_chunk_samples,
                 "is_first": True,
-                "sample_rate": sample_rate  # Store the sample rate
+                "sample_rate": sample_rate
             }
             return True
 
@@ -66,18 +69,15 @@ class TranscriptionConnectionManager:
             logger.error(f"Error in disconnect: {str(e)}")
 
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
-        """Convert accumulated raw bytes to numpy array with correct sampling rate"""
         try:
-            # Create a SoundFile object from the accumulated raw bytes
             with soundfile.SoundFile(
-                    io.BytesIO(raw_buffer),
-                    channels=1,
-                    endian="LITTLE",
-                    samplerate=sample_rate,  # Use the provided sample rate
-                    subtype="PCM_16",
-                    format="RAW"
+                io.BytesIO(raw_buffer),
+                channels=1,
+                endian="LITTLE",
+                samplerate=sample_rate,
+                subtype="PCM_16",
+                format="RAW"
             ) as sf:
-                # Load and resample if needed
                 audio, curr_sr = librosa.load(sf, sr=asr_processor.SAMPLING_RATE, dtype=np.float32)
                 return audio
         except Exception as e:
@@ -96,23 +96,15 @@ class TranscriptionConnectionManager:
         sample_rate = connection["sample_rate"]
 
         try:
-            # Accumulate raw bytes
             raw_buffer.extend(audio_chunk)
+            num_samples = len(raw_buffer) // 2
 
-            # Calculate number of samples based on 16-bit PCM
-            num_samples = len(raw_buffer) // 2  # 2 bytes per sample for PCM_16
-
-            # Modified condition: Process if we have enough samples, not first chunk, or it's the final chunk
             if num_samples >= min_chunk_samples or not is_first or is_final:
-                # Convert accumulated raw bytes to audio
                 audio_data = self.process_raw_buffer(raw_buffer, asr_processor, sample_rate)
                 if audio_data is None:
                     return False
 
-                # Add to ASR processor
                 asr_processor.add_audio_chunk(audio_data)
-
-                # Process the audio and get transcription
                 start_time, end_time, transcription = asr_processor.process_audio()
 
                 if transcription:
@@ -124,13 +116,11 @@ class TranscriptionConnectionManager:
                     }
                     await websocket.send_json(response)
 
-                # Clear buffer after processing
                 connection["raw_buffer"] = bytearray()
                 connection["is_first"] = False
-
                 return True
 
-            connection["raw_buffer"] = raw_buffer  # Store updated buffer
+            connection["raw_buffer"] = raw_buffer
             return True
 
         except Exception as e:
@@ -138,11 +128,7 @@ class TranscriptionConnectionManager:
             await websocket.close(code=4000, reason="Processing error")
             return False
 
-
-
-
 manager = TranscriptionConnectionManager()
-
 
 @router.websocket("/speech-to-text")
 async def websocket_endpoint(
@@ -157,19 +143,35 @@ async def websocket_endpoint(
             return
 
         while True:
-            message = await websocket.receive()
+            data = await websocket.receive_json()
+            message = WSInterSTT.parse_obj(data)
 
-            if message.get("type") == "websocket.receive":
-                if "bytes" in message:
-                    connection = manager.active_connections[websocket]
-                    audio_data = manager.process_raw_buffer(
-                        message["bytes"],
-                        connection["asr_processor"],
-                        connection["sample_rate"]
-                    )
-                    if audio_data is not None:
-                        asr_processor = connection["asr_processor"]
-                        asr_processor.add_audio_chunk(audio_data)
+            if message.type == "stt.add_sound_chunk" and message.sound:
+                audio_bytes = base64.b64decode(message.sound)
+                connection = manager.active_connections[websocket]
+                audio_data = manager.process_raw_buffer(
+                    audio_bytes,
+                    connection["asr_processor"],
+                    connection["sample_rate"]
+                )
+                if audio_data is not None:
+                    asr_processor = connection["asr_processor"]
+                    asr_processor.add_audio_chunk(audio_data)
+                    start_time, end_time, transcription = asr_processor.process_audio(is_final=False)
+                    if transcription:
+                        await websocket.send_json({
+                            "text": transcription,
+                            "start": start_time,
+                            "end": end_time,
+                            "is_final": False
+                        })
+
+            elif message.type == "stt.sound_done":
+                connection = manager.active_connections.get(websocket)
+                if connection:
+                    asr_processor = connection["asr_processor"]
+
+                    if len(asr_processor.audio_buffer) > 0:
                         start_time, end_time, transcription = asr_processor.process_audio(is_final=False)
                         if transcription:
                             await websocket.send_json({
@@ -179,34 +181,15 @@ async def websocket_endpoint(
                                 "is_final": False
                             })
 
-                elif message.get("text") == "EOS":
-                    # Process the final transcription with improved handling
-                    connection = manager.active_connections.get(websocket)
-                    if connection:
-                        asr_processor = connection["asr_processor"]
-
-                        # Force a final processing of any remaining audio
-                        if len(asr_processor.audio_buffer) > 0:
-                            # First process without final flag to get any pending words
-                            start_time, end_time, transcription = asr_processor.process_audio(is_final=False)
-                            if transcription:
-                                await websocket.send_json({
-                                    "text": transcription,
-                                    "start": start_time,
-                                    "end": end_time,
-                                    "is_final": False
-                                })
-
-                            # Then do final processing to catch any remaining words
-                            start_time, end_time, transcription = asr_processor.process_audio(is_final=True)
-                            if transcription:
-                                await websocket.send_json({
-                                    "text": transcription,
-                                    "start": start_time,
-                                    "end": end_time,
-                                    "is_final": True
-                                })
-                    break
+                        start_time, end_time, transcription = asr_processor.process_audio(is_final=True)
+                        if transcription:
+                            await websocket.send_json({
+                                "text": transcription,
+                                "start": start_time,
+                                "end": end_time,
+                                "is_final": True
+                            })
+                break
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")

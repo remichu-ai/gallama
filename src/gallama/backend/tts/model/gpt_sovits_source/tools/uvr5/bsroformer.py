@@ -10,6 +10,9 @@ import soundfile as sf
 import torch.nn as nn
 
 import warnings
+
+import gallama.realtime.message_queue
+
 warnings.filterwarnings("ignore")
 from bs_roformer.bs_roformer import BSRoformer
 
@@ -163,7 +166,7 @@ class BsRoformer_Loader:
         mixture = torch.tensor(mix, dtype=torch.float32)
         res = self.demix_track(self.model, mixture, self.device)
 
-        estimates = res['vocals'].T
+        estimates = gallama.realtime.message_queue.T
         
         if format in ["wav", "flac"]:
             sf.write("{}/{}_{}.{}".format(vocal_root, os.path.basename(path)[:-4], 'vocals', format), estimates, sr)

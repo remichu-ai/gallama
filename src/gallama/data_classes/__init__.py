@@ -24,9 +24,12 @@ from .data_class import (
 from .audio_data_class import (
     TranscriptionResponse,
     TimeStampedWord,
-    TTSRequest,
+    TTSRequest
+)
+from .internal_ws import (
+    WSInterTTS,
     TTSEvent,
-    WSMessageTTS
+    WSInterConfigUpdate
 )
 
 from .generation_data_class import (

@@ -10,6 +10,8 @@ from torch import IntTensor, LongTensor, Tensor, nn
 from torch.nn import functional as F
 
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+import gallama.realtime.message_queue
 from feature_extractor import cnhubert
 
 from AR.models.t2s_lightning_module import Text2SemanticLightningModule
@@ -617,10 +619,10 @@ def export(gpt_path, vits_path, ref_audio_path, ref_text, output_path, export_be
 
     ref_seq_id,ref_bert_T,ref_norm_text = get_phones_and_bert(ref_text,"all_zh",'v2')
     ref_seq = torch.LongTensor([ref_seq_id]).to(device)
-    ref_bert = ref_bert_T.T.to(ref_seq.device)
+    ref_bert = gallama.realtime.message_queue.T.to(ref_seq.device)
     text_seq_id,text_bert_T,norm_text = get_phones_and_bert("这是一条测试语音，说什么无所谓，只是给它一个例子","all_zh",'v2')
     text_seq = torch.LongTensor([text_seq_id]).to(device)
-    text_bert = text_bert_T.T.to(text_seq.device)
+    text_bert = gallama.realtime.message_queue.T.to(text_seq.device)
 
     ssl_content = ssl(ref_audio).to(device)
 
@@ -731,7 +733,7 @@ def test():
 
     ref_seq_id,ref_bert_T,ref_norm_text = get_phones_and_bert(ref_text,"all_zh",'v2')
     ref_seq = torch.LongTensor([ref_seq_id])
-    ref_bert = ref_bert_T.T.to(ref_seq.device)
+    ref_bert = gallama.realtime.message_queue.T.to(ref_seq.device)
     # text_seq_id,text_bert_T,norm_text = get_phones_and_bert("昨天晚上看见征兵文书,知道君主在大规模征兵,那么多卷征兵文册,每一卷上都有父亲的名字.","all_zh",'v2')
     text = "昨天晚上看见征兵文书,知道君主在大规模征兵,那么多卷征兵文册,每一卷上都有父亲的名字."
 
@@ -754,7 +756,7 @@ def test():
     )
     
     text_seq = torch.LongTensor([text_seq_id])
-    text_bert = text_bert_T.T.to(text_seq.device)
+    text_bert = gallama.realtime.message_queue.T.to(text_seq.device)
 
     print('text_bert:',text_bert.shape,text_bert)
     print('test_bert:',test_bert.shape,test_bert)

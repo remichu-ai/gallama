@@ -2,9 +2,8 @@ from typing import Any, AsyncIterator, Dict, List
 import asyncio
 from .text_processor import TextToTextSegment
 from .TTSQueueHandler import TTSQueueHandler
-from ...data_classes import ModelSpec
+from ...data_classes import ModelSpec, TTSEvent
 from ...logger import logger
-from ...routes.ws_tts import TTSEvent
 import time
 
 

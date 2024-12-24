@@ -74,6 +74,12 @@ class WebSocketSession:
         """Convert conversation history to ChatML format"""
         messages = []
 
+        if session_config.instructions != "":
+            messages.append(BaseMessage(
+                role="system",
+                content=session_config.instructions
+            ))
+
         for item_id, item in self.conversation_history.items():
             role = item.role.value if hasattr(item, 'role') and item.role else "user"
 

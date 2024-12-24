@@ -1,6 +1,6 @@
 from typing import AsyncIterator, List, Callable, Optional, Literal
 from ...logger.logger import logger
-from ...routes.ws_tts import TTSEvent
+from ...data_classes import TTSEvent
 import asyncio
 
 

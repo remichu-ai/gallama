@@ -4,11 +4,13 @@ import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
-from ..data_classes import TTSEvent, WSMessageTTS
+from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate
 import samplerate
 import numpy as np
 import json
 from pathlib import Path
+
+from ..data_classes.realtime_data_classes import SessionConfig
 from ..dependencies import get_model_manager
 from gallama.logger.logger import logger
 router = APIRouter(prefix="", tags=["tts"])
@@ -58,6 +60,7 @@ class TTSConnection:
     """Class to handle a single TTS WebSocket connection"""
 
     def __init__(self, websocket: WebSocket, tts_model, response_format: str = "wav"):
+        self.session_config = SessionConfig()
         self.websocket = websocket
         self.tts_model = tts_model
         self.response_format = response_format
@@ -243,12 +246,12 @@ class TTSConnection:
                 break
 
 
-    async def handle_message(self, message: WSMessageTTS):
+    async def handle_message(self, message: WSInterTTS | WSInterConfigUpdate):
         """Handle incoming WebSocket messages"""
-        if message.type == "interrupt":
+        if message.type == "tts.interrupt":
             pass
             # await self.clear_processing()   # TODO
-        elif message.type == "add_text" and message.text:
+        elif message.type == "tts.add_text" and message.text:
             if self.state.mode == "idle":
                 async with self.state.lock:
                     self.state.reset()
@@ -272,8 +275,11 @@ class TTSConnection:
             else:
                 await self.state.text_queue.put(message.text)
                 self.state.last_text_event_time = time.time()
-        elif message.type == "text_done":
+        elif message.type == "tts.text_done":
             await self.state.text_queue.put(TTSEvent(type="text_end"))
+        elif message.type == "common.config_update":
+            self.session_config = self.session_config.merge(message.config)
+
 
 
     async def clear_processing(self):
@@ -340,11 +346,18 @@ class TTSConnection:
                 break
 
 
-async def validate_message(raw_data: str) -> WSMessageTTS:
+async def validate_message(raw_data: str) -> WSInterTTS:
     """Validate and parse incoming WebSocket messages"""
     try:
         json_data = json.loads(raw_data)
-        return WSMessageTTS(**json_data)
+        event_type = json_data.get("type")
+        if "common" in event_type:
+            if "config_update" in event_type:
+                return WSInterConfigUpdate(**json_data)
+            else:
+                raise Exception(f"Event of unrecognized type {event_type}")
+        else:
+            return WSInterTTS(**json_data)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON: {str(e)}")
     except Exception as e:
@@ -377,7 +390,7 @@ async def websocket_endpoint(websocket: WebSocket):
             parsed_message = await validate_message(message)
 
             # Track the tasks created by handle_message
-            if parsed_message.type == "add_text" and parsed_message.text:
+            if parsed_message.type == "tts.add_text" and parsed_message.text:
                 connection.tasks = []  # Clear previous tasks
                 await connection.handle_message(parsed_message)
             else:

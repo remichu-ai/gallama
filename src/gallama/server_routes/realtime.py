@@ -1,13 +1,8 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter, Query
-import asyncio
-import uuid
-from typing import Dict, Optional
 import logging
-from typing import List
-from gallama.data_classes.realtime_data_classes import (
-    SessionConfig
-)
-from .realtime_backend import MessageQueues, WebSocketMessageHandler, WebSocketManager, WebSocketSession, SessionManager
+from gallama.realtime.websocket_handler import WebSocketMessageHandler
+from ..realtime.websocket_manager import WebSocketManager
+from ..realtime.session_manager import SessionManager
 
 # Create router
 router = APIRouter(prefix="", tags=["realtime"])

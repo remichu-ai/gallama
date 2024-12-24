@@ -1,12 +1,6 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, APIRouter
 from pydantic import BaseModel, Field, validator
-from typing_extensions import Annotated
 from typing import List, Optional, Union, Dict, Any, Literal
 from enum import Enum
-import json
-import asyncio
-import base64
-from datetime import datetime
 
 
 # Enums and Pydantic models
@@ -80,7 +74,7 @@ class SessionConfig(BaseModel):
     turn_detection: Optional[TurnDetectionConfig] = None
     tools: Optional[List[Tool]] = Field(default_factory=list)
     tool_choice: Optional[Union[ToolChoice, str]] = "auto"
-    temperature: Optional[float] = Field(0.8, ge=0.6, le=1.2)
+    temperature: Optional[float] = Field(0.4, ge=0.1, le=1.2)
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
 
     # extra
@@ -403,4 +397,5 @@ class ResponseTranscriptDone(BaseModel):
     output_index: int = 0
     content_index: int = 0
     transcript: str
+
 

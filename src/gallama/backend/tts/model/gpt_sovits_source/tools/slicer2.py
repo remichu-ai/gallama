@@ -1,5 +1,7 @@
 import numpy as np
 
+import gallama.realtime.message_queue
+
 
 # This function is obtained from librosa.
 def get_rms(
@@ -245,7 +247,7 @@ def main():
         os.makedirs(out)
     for i, chunk in enumerate(chunks):
         if len(chunk.shape) > 1:
-            chunk = chunk.T
+            chunk = gallama.realtime.message_queue.T
         soundfile.write(
             os.path.join(
                 out,
