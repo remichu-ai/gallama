@@ -8,10 +8,10 @@ from typing import Literal, List, Union, BinaryIO
 import numpy as np
 
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel, BatchedInferencePipeline
     from faster_whisper.transcribe import TranscriptionOptions, TranscriptionInfo, Segment
 except ImportError:
-    WhisperModel, TranscriptionOptions, TranscriptionInfo, Segment = None, None, None, None
+    WhisperModel, BatchedInferencePipeline, TranscriptionOptions, TranscriptionInfo, Segment = None, None, None, None, None
 
 
 
@@ -42,6 +42,8 @@ class ASRFasterWhisper(ASRBase):
             compute_type=self.compute_type,
             # download_root=cache_dir
         )
+
+        model = BatchedInferencePipeline(model)
 
         return model
 
@@ -74,6 +76,8 @@ class ASRFasterWhisper(ASRBase):
             word_timestamps=True,               # timestamp is used for sequence matching when streaming
             condition_on_previous_text=True,
             temperature=temperature,
+            batch_size = 8,
+            repetition_penalty=1.1,
             **self.transcribe_kargs
         )
 

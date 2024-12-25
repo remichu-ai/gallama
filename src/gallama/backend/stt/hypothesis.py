@@ -18,6 +18,63 @@ class HypothesisBuffer:
         self.is_final = False  # New flag for final processing
 
 
+        # Parameters for detecting repetition patterns
+        self.min_word_gap = 0.1  # Minimum expected gap between distinct words
+        self.max_merge_window = 2.0  # Maximum window to consider for merging
+
+    def detect_repetition_pattern(self, words):
+        """
+        Analyze sequence of words to detect abnormal repetition patterns
+        Returns list of indices that are likely part of a repetition pattern
+        """
+        if len(words) < 2:
+            return []
+
+        repetition_indices = []
+        for i in range(1, len(words)):
+            prev_time = words[i - 1][1]  # End time of previous word
+            curr_time = words[i][0]  # Start time of current word
+            time_gap = curr_time - prev_time
+
+            # Check for suspiciously small gaps between words
+            if time_gap < self.min_word_gap:
+                # Look for repetition of single characters or very short segments
+                if len(words[i][2]) <= 2 and words[i][2] == words[i - 1][2]:
+                    repetition_indices.extend([i - 1, i])
+
+        return list(set(repetition_indices))
+
+    def merge_adjacent_segments(self, words):
+        """
+        Merge adjacent word segments that might be part of the same word
+        """
+        if len(words) < 2:
+            return words
+
+        merged = []
+        i = 0
+        while i < len(words):
+            if i == len(words) - 1:
+                merged.append(words[i])
+                break
+
+            curr_word = words[i]
+            next_word = words[i + 1]
+
+            # Check if these segments should be merged
+            time_gap = next_word[0] - curr_word[1]
+            if time_gap < self.min_word_gap and len(curr_word[2]) <= 2 and len(next_word[2]) <= 2:
+                # Merge the segments
+                merged_text = curr_word[2] + next_word[2]
+                merged_segment = (curr_word[0], next_word[1], merged_text)
+                merged.append(merged_segment)
+                i += 2
+            else:
+                merged.append(curr_word)
+                i += 1
+
+        return merged
+
     def insert(self, new: TimeStampedWord, offset: float):  # TODO
         """
         Adjusts the timestamps of the new hypotheses by offset.
@@ -29,21 +86,35 @@ class HypothesisBuffer:
         the new tail is added to self.new
         """
 
+        # Apply offset to timestamps
         new = [(a + offset, b + offset, t) for a, b, t in new]
 
         # Filter based on timestamp
-        self.new = [(a, b, t) for a, b, t in new if a > self.last_commited_time - 0.1]
+        filtered_new = [(a, b, t) for a, b, t in new if a > self.last_commited_time - 0.5]
 
-        if len(self.new) >= 1:
-            a, b, t = self.new[0]
-            if abs(a - self.last_commited_time) < 1:
+        if filtered_new:
+            # Detect repetition patterns
+            rep_indices = self.detect_repetition_pattern(filtered_new)
+
+            # Remove detected repetitions
+            filtered_new = [word for i, word in enumerate(filtered_new)
+                            if i not in rep_indices]
+
+            # Merge adjacent segments that might be part of the same word
+            filtered_new = self.merge_adjacent_segments(filtered_new)
+
+            self.new = filtered_new
+
+            # Perform n-gram matching with existing buffer
+            if self.new and abs(self.new[0][0] - self.last_commited_time) < 1:
                 if self.commited_in_buffer:
-                    # N-gram matching for overlap removal
                     cn = len(self.commited_in_buffer)
                     nn = len(self.new)
                     for i in range(1, min(min(cn, nn), 5) + 1):
-                        c = " ".join([self.commited_in_buffer[-j][2] for j in range(1, i + 1)][::-1])
-                        tail = " ".join(self.new[j - 1][2] for j in range(1, i + 1))
+                        c = " ".join([self.commited_in_buffer[-j][2]
+                                      for j in range(1, i + 1)][::-1])
+                        tail = " ".join(self.new[j - 1][2]
+                                        for j in range(1, i + 1))
                         if c == tail:
                             for j in range(i):
                                 self.new.pop(0)
