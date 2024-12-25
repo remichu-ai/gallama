@@ -5,7 +5,7 @@ import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
 
 # logger
-from gallama.logger.logger import logger
+from gallama.logger import logger
 
 # format enforcement
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData

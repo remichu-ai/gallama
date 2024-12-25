@@ -89,7 +89,7 @@ class ASRFasterWhisper(ASRBase):
         self,
         audio: Union[str, BinaryIO, np.ndarray],
         init_prompt: str = "",
-        temperature: float = 0.0,
+        temperature: float = 0.2,
         language: str = None,
         include_segments: bool = False,
     ) -> TranscriptionResponse:

@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from websockets import WebSocketException
 from websockets.protocol import State
 
-from gallama import logger
+from gallama.logger import logger
 
 
 class WebSocketClient:
@@ -134,13 +134,13 @@ class WebSocketClient:
                 return await self.send_pydantic_message(message)
             return False
 
-    async def receive_message(self) -> Optional[str]:
+    async def receive_message(self, timeout=10) -> Optional[str]:
         """Receives a message from the WebSocket connection."""
         try:
             if not await self.ensure_connection():
                 return None
 
-            return await self.connection.recv()
+            return await asyncio.wait_for(self.connection.recv(),timeout=timeout)
         except WebSocketException as e:
             logger.error(f"Error receiving message: {str(e)}")
             if self.auto_reconnect:

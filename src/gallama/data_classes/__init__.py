@@ -29,7 +29,8 @@ from .audio_data_class import (
 from .internal_ws import (
     WSInterTTS,
     TTSEvent,
-    WSInterConfigUpdate
+    WSInterConfigUpdate,
+    WSInterSTTResponse
 )
 
 from .generation_data_class import (

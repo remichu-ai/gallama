@@ -13,8 +13,14 @@ class WSInterConfigUpdate(BaseModel):
 
 # STT
 class WSInterSTT(BaseModel):
-    type: Literal["stt.add_sound_chunk", "stt.sound_done"]
-    sound: Optional[bytes] = None
+    type: Literal["stt.add_sound_chunk", "stt.sound_done", "stt.clear_buffer"]
+    sound: Optional[str] = None
+
+class WSInterSTTResponse(BaseModel):
+    type: Literal["stt.add_transcription", "stt.transcription_complete", "stt.clear_buffer_done", "stt.transcription_complete"]
+    transcription: Optional[str] = None
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
 
 
 # TTS

@@ -3,7 +3,7 @@ from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from typing import Dict, List, Optional, Literal, Union, AsyncGenerator, TypeVar
 from pydantic import BaseModel
 from collections import OrderedDict
-from gallama.logger.logger import logger
+from ..logger import logger
 from gallama.data_classes.realtime_data_classes import *
 from ..routes.chat import validate_api_request
 from ..data_classes.data_class import (
@@ -87,10 +87,10 @@ class WebSocketSession:
                 message_content: List[Union[MultiModalTextContent, MultiModalImageContent]] = []
 
                 for content in item.content:
-                    if content.type in [ContentType.INPUT_TEXT, ContentType.TEXT]:
+                    if content.type in [ContentTypeServer.INPUT_TEXT, ContentTypeServer.TEXT, ContentTypeServer.INPUT_AUDIO, ContentTypeServer.AUDIO]:
                         message_content.append(MultiModalTextContent(
                             type="text",
-                            text=content.text
+                            text=content.text or content.transcript
                         ))
 
                 messages.append(BaseMessage(
@@ -98,6 +98,7 @@ class WebSocketSession:
                     content=message_content
                 ))
 
+        logger.info(f"----- FROG FROG messages: {self.conversation_history.items()}")
         query = ChatMLQuery(
             messages=messages,
             model=session_config.model,
@@ -216,13 +217,28 @@ class WebSocketSession:
             else:
                 await asyncio.sleep(0.1)
 
+    @staticmethod
+    def update_ordered_dict(od: OrderedDict, target_key, new_value) -> OrderedDict:
+        return OrderedDict((k, new_value if k == target_key else v) for k, v in od.items())
+
+
     async def handle_message(self, message: dict):
         """Handle incoming WebSocket messages for this session"""
         logger.info(f"Received message: {message}")
 
         if message.get("object") == "realtime.item":
             item = parse_conversation_item(message)
-            self.conversation_history[item.id] = item
+
+            if item.id not in self.conversation_history.keys():
+                # new item
+                self.conversation_history[item.id] = item
+            else:
+                # update existing item
+                self.conversation_history = self.update_ordered_dict(
+                    od=self.conversation_history,
+                    target_key=item.id,
+                    new_value=item,
+                )
 
             await self.websocket.send_json({
                 "type": "conversation.update.ack",

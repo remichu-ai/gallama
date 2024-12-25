@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Union, Dict, Any, Literal
 from enum import Enum
+from copy import deepcopy
+import numpy as np
 
 
 # Enums and Pydantic models
@@ -79,6 +81,9 @@ class SessionConfig(BaseModel):
 
     # extra
     model: Optional[str] = None
+
+    # extra for gallama backend
+    streaming_transcription: bool = False
 
     @validator('max_response_output_tokens')
     def validate_max_tokens(cls, v):
@@ -191,6 +196,16 @@ class ConversationItemDelete(BaseModel):
     type: Literal["conversation.item.delete"]
     item_id: str
 
+class ConversationItemInputAudioTranscriptionComplete(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["conversation.item.input_audio_transcription.completed"] = "conversation.item.input_audio_transcription.completed"
+    item_id: str
+    content_index: int = 0
+    transcript: str
+
+
+
+
 class ResponseCreate(BaseModel):
     event_id: Optional[str] = None
     type: Literal["response.create"]
@@ -226,15 +241,39 @@ class ContentTypeServer(str, Enum):
 class MessageContentServer(BaseModel):
     type: Literal["input_text", "input_audio", "text", "item_reference", "audio"]
     text: Optional[str] = None
-    audio: Optional[str] = None         # base64 encoded audio type
+    audio: Optional[np.ndarray] = None         # bytes audio, this is different to client class
     transcript: Optional[str] = None
     id: Optional[str] = None            # for item_reference type
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class ConversationItemBaseServer(BaseModel):
     id: Optional[str] = None
     object: Literal["realtime.item"] = "realtime.item"
     status: Optional[Literal["in_progress","completed", "incomplete"]] = None
+
+    def strip_audio(self) -> "ConversationItemServer":
+        """
+        Creates a deep copy of the conversation item with audio fields removed from message content.
+
+        Returns:
+            A new conversation item with audio stripped from message content
+        """
+        # Create a deep copy
+        stripped_item = deepcopy(self)
+
+        # Only process message types that have content
+        if isinstance(stripped_item, ConversationItemMessageServer):
+            for content in stripped_item.content:
+                content.audio = None
+                # If this is an audio type message with no transcript,
+                # provide empty string for text to ensure valid message
+                if content.type == "audio" and not content.transcript:
+                    content.text = ""
+
+        return stripped_item
 
 
 class ConversationItemMessageServer(ConversationItemBaseServer):

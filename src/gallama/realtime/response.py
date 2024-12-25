@@ -2,12 +2,12 @@ import asyncio
 import base64
 import json
 from typing import Callable, Awaitable, Literal, Dict
-
+import numpy as np
 import websockets
 from starlette.websockets import WebSocket
 from websockets.protocol import State
 
-from gallama import logger
+from gallama.logger import logger
 from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS
 from gallama.data_classes.realtime_data_classes import UsageResponseRealTime, ResponseContentPartDoneEvent, \
     parse_conversation_item, ServerResponse, ResponseDone, ResponseCreated, ConversationItemCreated, \
@@ -46,7 +46,7 @@ class Response:
         self.item_id: str = None
         self.previous_item_id: str = None
 
-        self.audio: str = ""
+        self.audio: np.ndarray = np.array([], dtype=np.float32)
         self.audio_done: bool = False
 
         self.text: str = ""
@@ -92,7 +92,7 @@ class Response:
                 done_check = True
                 content_part = {
                     "type": "audio",
-                    #"audio": self.audio,       # this is not included, despite what said in documentation
+                    #"audio": self.audio,       # this is not included in data sent to client, despite what said in documentation
                     "transcript": self.transcription
                 }
 
@@ -131,7 +131,8 @@ class Response:
                         "content": [
                             {
                                 "type": "audio",
-                                "audio": self.audio,
+                                # "audio": self.audio,
+                                "audio": None,      # different to documentation, audio is not resent, also this is in bytes, not base64
                                 "transcript": self.transcription
                             }
                         ]
@@ -152,7 +153,7 @@ class Response:
                         ]
                     })
                 else:
-                    raise Exception("Unknown modalities type")
+                    raise Exception("Unknown modalities type in response_done()")
 
                 # send user status
                 if _output:
@@ -177,12 +178,12 @@ class Response:
                 # update response_done tracker
                 self.response_done_status = True
             elif self.response_done_status:
-                raise Exception("Response already sent")
+                raise Exception("Response already sent error in response_done()")
             elif not self.content_part_done_status:
-                raise Exception("Content part done must be sent before response done")
+                raise Exception("Content part done must be sent before response done, in response_done()")
 
         except Exception as e:
-            logger.error(f"{e}")
+            logger.error(f"Error in response_done(): {e}")
 
 
     async def response_initialize(self):
@@ -226,19 +227,33 @@ class Response:
             "item": initial_item_created_object.item
         }).model_dump())
 
-
-    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str):
+    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str,
+                           chunk_in_byte: bytes = None):
         """ send text chunk to client as well as update internal state """
 
-        if mode=="text":
+        if mode == "text":
             _type = "response.text.delta"
             self.text += chunk
-        elif mode=="transcription":
+        elif mode == "transcription":
             _type = "response.audio_transcript.delta"
             self.transcription += chunk
-        elif mode=="audio":
+        elif mode == "audio":
             _type = "response.audio.delta"
-            self.audio += chunk
+            if chunk_in_byte is None:
+                raise Exception("chunk_in_byte must be provided for audio mode")
+
+            # Convert bytes to numpy array with specific dtype
+            chunk_array = np.frombuffer(chunk_in_byte, dtype=np.float32)
+
+            # Ensure chunk_array is 1D
+            if chunk_array.ndim == 0:
+                chunk_array = chunk_array.reshape(1)
+
+            # Concatenate arrays
+            if self.audio.size == 0:
+                self.audio = chunk_array
+            else:
+                self.audio = np.concatenate([self.audio, chunk_array])
 
         # send chunk delta
         await self.ws_client.send_json(ResponseDelta(**{
@@ -246,8 +261,9 @@ class Response:
             "type": _type,
             "response_id": self.response_id,
             "item_id": self.item_id,
-            "delta": chunk
+            "delta": chunk  # for audio, send to client base64 string
         }).model_dump())
+
 
 
     async def update_usage(self, usage: UsageResponse):
@@ -301,7 +317,7 @@ class Response:
                     raise Exception("Could not establish LLM connection")
 
                 # Receive message from LLM
-                message = await self.ws_llm.connection.recv()
+                message = await asyncio.wait_for(self.ws_llm.connection.recv(), timeout=20)
 
                 # Parse the message
                 try:
@@ -318,7 +334,8 @@ class Response:
                             mode="transcription" if mode=="audio" else "text",
                             chunk=text_chunk
                         )
-
+                    elif llm_response.get("type") == "conversation.update.ack":
+                        logger.info("Received conversation update acknowledgement from ws_llm")
                     elif llm_response.get("type") == "usage.update":
                         usage_completion = ChatCompletionResponse(**json.loads(llm_response.get("usage"))).usage
                         usage_data = UsageResponseRealTime(
@@ -332,44 +349,34 @@ class Response:
 
                         await self.update_content_done(content_type="transcription" if mode=="audio" else "text")
                         await self.content_part_done(generation_type="transcription")
+                        break   # exit the function
                         # await self.response_done()
                     else:
-                        pass
+                        raise Exception(f"Unknown response type in update_text_or_transcription_task: {llm_response}")
 
                 except json.JSONDecodeError:
                     logger.error(f"Failed to parse LLM message: {message}")
+                    continue
+                except asyncio.TimeoutError:
+                    logger.error("LLM connection timed out")
                     continue
                 except Exception as e:
                     logger.error(f"Failed to parse LLM message: {e}")
 
         except websockets.exceptions.ConnectionClosed:
             logger.error("LLM websocket connection closed unexpectedly")
-            # Send error message to client
-            await self.ws_client.send_json({
-                "type": "response.failed",
-                "response": {
-                    "id": self.response_id,
-                    "object": "realtime.response",
-                    "status": "failed",
-                    "last_error": {
-                        "code": "internal_error",
-                        "message": "LLM connection terminated unexpectedly"
-                    }
-                }
-            })
         except Exception as e:
             logger.error(f"Unexpected error occurred: {str(e)}")
 
     async def send_audio_to_client_task(self):
         """Listen for audio chunks from TTS websocket and forward them to the client"""
-        first_chunk = True
         try:
             if not await self.ws_tts.ensure_connection():
                 raise Exception("Could not establish TTS connection")
 
             while True:
                 try:
-                    message = await self.ws_tts.receive_message()
+                    message = await asyncio.wait_for(self.ws_tts.receive_message(), timeout=10)
                     if message is None:
                         logger.error("Failed to receive message from TTS service")
                         break
@@ -382,7 +389,7 @@ class Response:
                                 # mark audio generation as done
                                 self.audio_done = True
                                 await self.update_content_done(content_type="audio")
-                                break
+                                break   # exit the function
                         except json.JSONDecodeError:
                             logger.warning(f"Received unexpected string message: {message[:100]}...")
 
@@ -393,6 +400,7 @@ class Response:
                             await self.update_delta(
                                 mode="audio",
                                 chunk=audio_base64,
+                                chunk_in_byte=message
                             )
                         except Exception as e:
                             logger.error(f"Error processing audio chunk: {str(e)}")
@@ -400,7 +408,8 @@ class Response:
 
 
                 except asyncio.TimeoutError:
-                    continue
+                    logger.error("TTS websocket connection timed out")
+                    break
 
                 except websockets.exceptions.ConnectionClosed:
                     logger.error("TTS websocket connection closed")
@@ -517,3 +526,4 @@ class Response:
             task_list = [text_task]
 
         await asyncio.gather(*task_list)
+        logger.info(f"Response task finished")

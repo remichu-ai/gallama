@@ -1,4 +1,4 @@
-from gallama.logger.logger import logger
+from ..logger.logger import logger
 from gallama.realtime.websocket_client import WebSocketClient
 from gallama.realtime.websocket_session import WebSocketSession
 from fastapi import WebSocket
@@ -50,14 +50,14 @@ class WebSocketMessageHandler:
             "session.update": self._session_update,
 
             # audio
-            # "input_audio_buffer.append": self._input_audio_buffer_append,
-            # "input_audio_buffer.commit": self._input_audio_buffer_commit,
-            # "input_audio_buffer.clear": self._input_audio_buffer_clear,
+            "input_audio_buffer.append": self._input_audio_buffer_append,
+            "input_audio_buffer.commit": self._input_audio_buffer_commit,
+            "input_audio_buffer.clear": self._input_audio_buffer_clear,
 
             # converssation
             "conversation.item.create": self._conversation_item_create,
-            # "conversation.item.truncate": self._conversation_item_truncate,
-            # "conversation.item.delete": self._conversation_item_delete,
+            "conversation.item.truncate": self._conversation_item_truncate,
+            "conversation.item.delete": self._conversation_item_delete,
 
             # response
             "response.create": self._response_create,
@@ -104,7 +104,17 @@ class WebSocketMessageHandler:
             }
         })
 
-    # TODO
+
+    async def _input_audio_buffer_append(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        # no confirmation event to client for this
+        await session.queues.append_unprocessed_audio(message["audio"], ws_stt=self.ws_stt)
+
+    async def _input_audio_buffer_commit(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        await session.queues.commit_unprocessed_audio(ws_stt=self.ws_stt)
+
+    async def _input_audio_buffer_clear(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        await session.queues.clear_unprocessed_audio(ws_stt=self.ws_stt)
+
     async def _conversation_item_create(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         # for conversation.item.created, it is a completed item, hence no need to do streaming
         event = ConversationItemCreate(**message)
@@ -116,7 +126,11 @@ class WebSocketMessageHandler:
         item = ResponseCreate(**message)
         await session.queues.unprocessed.put(item)
 
+    async def _conversation_item_truncate(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        pass
 
+    async def _conversation_item_delete(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        pass
 
 
 
