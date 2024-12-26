@@ -180,6 +180,8 @@ class MessageQueues:
     async def clear_transcription(self):
         async with self.lock_transcript_buffer:
             self.transcript_buffer = ""
+        async with self.lock_transcript_complete:
+            self.transcription_complete = False
 
     async def clear_audio_buffer(self):
         async with self.lock_audio_buffer:
@@ -212,8 +214,8 @@ class MessageQueues:
 
     async def reset_after_response(self):
         # for now only audio need to reset
-        return await self.reset_audio()
-
+        _ = await self.reset_audio()
+        logger.info(f"reset after response completed")
 
 
     async def wait_for_transcription_done(self):

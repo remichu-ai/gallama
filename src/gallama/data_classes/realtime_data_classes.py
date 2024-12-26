@@ -83,7 +83,7 @@ class SessionConfig(BaseModel):
     model: Optional[str] = None
 
     # extra for gallama backend
-    streaming_transcription: bool = False
+    streaming_transcription: bool = True
 
     @validator('max_response_output_tokens')
     def validate_max_tokens(cls, v):

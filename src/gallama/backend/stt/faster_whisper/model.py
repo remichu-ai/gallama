@@ -76,7 +76,7 @@ class ASRFasterWhisper(ASRBase):
             word_timestamps=True,               # timestamp is used for sequence matching when streaming
             condition_on_previous_text=True,
             temperature=temperature,
-            batch_size = 8,
+            batch_size = 16,
             repetition_penalty=1.1,
             **self.transcribe_kargs
         )

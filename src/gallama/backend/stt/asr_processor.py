@@ -21,11 +21,12 @@ class ASRProcessor:
     SAMPLING_RATE = 16000  # Standard audio sampling rate
 
     def __init__(
-            self,
-            asr: ASRBase,
-            tokenizer=None,
-            buffer_trimming=("segment", 15),
-            debug_audio_dir=None  # New parameter for debug audio directory
+        self,
+        asr: ASRBase,
+        tokenizer=None,
+        buffer_trimming=("segment", 15),
+        min_context_needed = 5.0,   # require 5 second for a content to be process -> higher number better accuracy
+        debug_audio_dir=None  # New parameter for debug audio directory
     ):
         """
         Initializes the ASR processor.
@@ -41,6 +42,7 @@ class ASRProcessor:
         self.asr = asr
         self.tokenizer = tokenizer
         self.debug_audio_dir = debug_audio_dir
+        self.min_context_needed = min_context_needed
 
         # Create debug directory if it doesn't exist
         if debug_audio_dir and not os.path.exists(debug_audio_dir):
@@ -188,6 +190,12 @@ class ASRProcessor:
 
         # Generate the prompt and context
         prompt, context = self.construct_prompt()
+
+        current_duration = len(self.audio_buffer) / self.SAMPLING_RATE
+
+        if current_duration < self.min_context_needed and not is_final:
+            return None, None, ""  # Wait for more context
+
         logger.debug(f"PROMPT: {prompt}")
         logger.debug(f"CONTEXT: {context}")
         logger.debug(
