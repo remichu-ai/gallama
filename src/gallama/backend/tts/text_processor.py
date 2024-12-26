@@ -63,27 +63,55 @@ class TextToTextSegment:
             logger.info(f"Increased segment size to: {self.current_segment_size}")
 
     def _find_quick_start_break(self, text: str) -> int:
-        """
-        Find an appropriate break point for the quick start first segment.
-        Returns the index where the first segment should end.
-        """
+        # First check if we have complete words by looking at word boundaries
         words = text.split()
         if len(words) < self.quick_start_min_words:
             return -1
 
-        # First try to find a natural break point within our word limits
-        current_text = ' '.join(words[:self.quick_start_max_words])
-        for i in range(len(current_text)):
-            if current_text[i] in self.PUNCTUATION_MARKS:
-                word_count = len(current_text[:i + 1].split())
-                if word_count >= self.quick_start_min_words:
-                    return i + 1
+        # Find actual word boundaries in the original text
+        word_boundaries = []
+        start = 0
+        in_word = False
 
-        # If no punctuation found, break at max words
-        if len(words) > self.quick_start_max_words:
-            return len(' '.join(words[:self.quick_start_max_words]))
+        # Find all word boundaries
+        for i, char in enumerate(text):
+            if char.isspace():
+                if in_word:
+                    word_boundaries.append((start, i))
+                    in_word = False
+            else:
+                if not in_word:
+                    start = i
+                    in_word = True
 
-        return len(current_text)
+        # Add last word if it's complete (ends with space or punctuation)
+        if in_word and (len(text) == len(text.rstrip()) or text[-1] in self.PUNCTUATION_MARKS):
+            word_boundaries.append((start, len(text)))
+
+        # Not enough complete words yet
+        if len(word_boundaries) < self.quick_start_min_words:
+            return -1
+
+        # Try to find punctuation break at word boundary
+        current_word_count = 0
+        for start, end in word_boundaries:
+            current_word_count += 1
+            if current_word_count > self.quick_start_max_words:
+                # Return the end of previous word boundary
+                return word_boundaries[current_word_count - 2][1]
+
+            if text[end - 1] in self.PUNCTUATION_MARKS and current_word_count >= self.quick_start_min_words:
+                return end
+
+        # If we have enough words but no punctuation, break at max words
+        if len(word_boundaries) > self.quick_start_max_words:
+            return word_boundaries[self.quick_start_max_words - 1][1]
+
+        # Use all complete words if between min and max
+        if len(word_boundaries) >= self.quick_start_min_words:
+            return word_boundaries[-1][1]
+
+        return -1
 
     def _is_complete_sentence(self, text: str) -> bool:
         """Check if text ends with a sentence-ending punctuation mark."""
@@ -110,14 +138,15 @@ class TextToTextSegment:
         if (self.text_buffer and
                 not self.text_buffer.endswith(' ') and
                 not text.startswith(' ')):
-            self.text_buffer += ' '
+            if any(self.text_buffer.rstrip().endswith(p) for p in self.PUNCTUATION_MARKS | {' '}):
+                self.text_buffer += ' '
         self.text_buffer += text
 
         if self.quick_start and not self.first_segment_processed:
             break_point = self._find_quick_start_break(self.text_buffer)
             if break_point > 0:
                 complete_text = self.text_buffer[:break_point]
-                self.text_buffer = self.text_buffer[break_point:]
+                self.text_buffer = self.text_buffer[break_point:].lstrip()
                 self.first_segment_processed = True
                 return complete_text
             elif len(self.text_buffer) > self.max_buffer_size:
