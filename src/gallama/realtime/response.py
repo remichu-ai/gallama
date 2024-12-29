@@ -454,7 +454,7 @@ class Response:
                     raise Exception("Could not establish TTS connection")
 
                 try:
-                    message = await asyncio.wait_for(self.ws_tts.receive_message(), timeout=10)
+                    message = await self.ws_tts.receive_message()
                     if message is None:
                         logger.error("Failed to receive message from TTS service")
                         break
@@ -488,7 +488,7 @@ class Response:
 
                 except asyncio.TimeoutError:
                     logger.error("TTS websocket connection timed out")
-                    break
+                    continue  # Changed from break to continue to retry
                 except websockets.exceptions.ConnectionClosed:
                     logger.error("TTS websocket connection closed")
                     break

@@ -6,6 +6,7 @@ from sympy.codegen.ast import continue_
 from websockets import ConnectionClosed, WebSocketException
 from gallama.logger import logger
 from gallama.data_classes.realtime_data_classes import (
+    SessionConfig,
     ConversationItem,
     ConversationItemMessage,
     ContentType,
@@ -31,8 +32,7 @@ class WebSocketManager:
         self.session_manager = session_manager
         self.message_handler = message_handler
 
-
-    async def initialize_session(self, websocket: WebSocket, model:str, api_key:str = None) -> WebSocketSession:
+    async def initialize_session(self, websocket: WebSocket, model: str, api_key: str = None) -> WebSocketSession:
         protocols = websocket.headers.get("sec-websocket-protocol", "").split(", ")
         if "openai-beta.realtime-v1" in protocols:
             await websocket.accept(subprotocol="openai-beta.realtime-v1")
@@ -40,14 +40,28 @@ class WebSocketManager:
             await websocket.accept()
 
         session_id = str(id(websocket))
-        session = self.session_manager.create_session(session_id)
 
-        await websocket.send_json({
+        # Create session config with the model parameter
+        config = SessionConfig(
+            model=model,
+            modalities=["text"],  # or ["text", "audio"] if you're supporting audio
+            instructions="",
+            streaming_transcription=True
+        )
+
+        session = self.session_manager.create_session(session_id, config)
+
+        # Format the session data according to OpenAI's expected structure
+        session_data = {
             "event_id": await session.queues.next_event(),
             "type": "session.created",
-            "session": session.config.model_dump()
-        })
+            "session": {
+                **config.model_dump(exclude_none=True),  # This ensures null values aren't included
+                "id": session_id  # Add the session ID explicitly
+            }
+        }
 
+        await websocket.send_json(session_data)
         return session
 
     async def start_background_tasks(self, session: WebSocketSession, websocket: WebSocket):

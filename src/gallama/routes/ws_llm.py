@@ -102,12 +102,13 @@ class WebSocketSession:
                 ))
 
         # logger.info(f"messages: {self.conversation_history.items()}")
+        max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens!="inf" else None
         query = ChatMLQuery(
             messages=messages,
             model=session_config.model,
             temperature=session_config.temperature if session_config else 0.8,
             stream=True,
-            max_tokens=session_config.max_response_output_tokens if session_config else None,
+            max_tokens=max_token_to_use,
             artifact="No"
         )
 

@@ -63,7 +63,7 @@ class AudioBufferClear(BaseModel):
 
 
 class TurnDetectionConfig(BaseModel):
-    type: Literal["server_vad"]
+    type: Literal["server_vad"] = "server_vad"
     threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
     prefix_padding_ms: Optional[int] = Field(ge=0, default=500)
     silence_duration_ms: Optional[int] = Field(ge=0, default=700)
@@ -76,7 +76,7 @@ class SessionConfig(BaseModel):
     input_audio_format: Optional[AudioFormat] = None
     output_audio_format: Optional[AudioFormat] = None
     input_audio_transcription: Optional[AudioTranscriptionConfig] = None
-    turn_detection: Optional[TurnDetectionConfig] = None
+    turn_detection: Optional[TurnDetectionConfig] = Field(default_factory=TurnDetectionConfig)
     tools: Optional[List[Tool]] = Field(default_factory=list)
     tool_choice: Optional[Union[ToolChoice, str]] = "auto"
     temperature: Optional[float] = Field(0.4, ge=0.1, le=1.2)
@@ -89,6 +89,8 @@ class SessionConfig(BaseModel):
     streaming_transcription: bool = True
     user_interrupt_token: Optional[str] = Field(description= "Custom word to insert everytime user interrupt the assistant",default=" <user_interrupt>")
 
+    class Config:
+        extra = "allow"  # Allow extra fields
 
     @validator('max_response_output_tokens')
     def validate_max_tokens(cls, v):

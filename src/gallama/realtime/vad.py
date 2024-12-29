@@ -27,7 +27,7 @@ class VADProcessor:
         self.threshold = turn_detection_config.threshold
         self.silence_duration_ms = turn_detection_config.silence_duration_ms
         self.prefix_padding_ms = turn_detection_config.prefix_padding_ms
-        self.min_speech_duration_ms = 150  # Hardcoded minimum speech duration
+        self.min_speech_duration_ms = 250  # Hardcoded minimum speech duration
         self.create_response = turn_detection_config.create_response
 
         # Fixed parameters
