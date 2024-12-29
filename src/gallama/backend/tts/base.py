@@ -28,11 +28,24 @@ class TTSBase:
         # each subclass must implement the model loading method
         self.load_model(model_spec)
 
+        # for stopping
+        self._stop_event = asyncio.Event()
+        self._current_session_tracker: set = None
+
 
     def load_model(self, model_spec: ModelSpec):
         raise NotImplementedError(
             "The load_model method must be implemented by the derived class."
         )
+
+    def stop(self):
+        """Stop current processing"""
+        if self._current_session_tracker is not None:
+            self._stop_event.set()
+            if self._current_session_tracker:
+                self._current_session_tracker.clear()
+            self._current_session_tracker = None
+
 
     async def text_to_speech(
         self,
@@ -56,11 +69,9 @@ class TTSBase:
             queue: asyncio.Queue,
             language: str = "auto",
             speed_factor: float = 1.0,
-            text_stream_end: asyncio.Event = None,
-            audio_stream_end: asyncio.Event = None,
+            stream: bool = True,
             **kwargs: Any
     ) -> None:
-
         pipeline = TextToTextSegment(
             quick_start=True,
             initial_segment_size=1,  # Start with single sentences
@@ -69,7 +80,8 @@ class TTSBase:
         )
 
         # Create a set to track generations specific to this streaming session
-        session_generations = set()
+        self._current_session_tracker = set()
+        self._stop_event.clear()
 
         try:
             processing_task = asyncio.create_task(
@@ -78,11 +90,11 @@ class TTSBase:
 
             last_log_time = time.time()
 
-            while True:
+            while not self._stop_event.is_set():
                 try:
                     segment = await pipeline.get_next_segment(timeout=0.1, raise_timeout=True)
 
-                    if segment:
+                    if segment and not self._stop_event.is_set():
                         segment = segment.strip()
                         await self.text_to_speech(
                             queue=queue,
@@ -90,41 +102,43 @@ class TTSBase:
                             language=language,
                             stream=True,
                             speed_factor=speed_factor,
-                            session_tracker=session_generations,
+                            session_tracker=self._current_session_tracker,
                         )
 
                 except asyncio.TimeoutError:
-                    # current_time = time.time()
-                    # # Only log if 3 seconds have passed since the last log
-                    # if current_time - last_log_time >= 3.0:
-                    #     queue_size = pipeline.processing_queue.qsize()
-                    #     logger.info(f"-------------------Timeout reached, queue is {pipeline.processing_queue}")
-                    #     logger.info(f"-------------------Queue size: {queue_size}-------------------")
-                    #     logger.info(f"-------------------Text buffer is: {pipeline.text_buffer}-------------------")
-                    #     logger.info(f"-------------------Text Processing task is: {processing_task.done()}-------------------")
-                    #     # Update the last log time
-                    #     last_log_time = current_time
-
-
-                    if not session_generations and pipeline.processing_queue.qsize()==0 and pipeline.text_buffer=="" and processing_task.done():
-                        # logger.info("------------------ break frog here------------------------")
-                        # queue_size = pipeline.processing_queue.qsize()
-                        # logger.info(f"-------------------Timeout reached, queue is {pipeline.processing_queue}")
-                        # logger.info(f"-------------------Queue size: {queue_size}-------------------")
-                        # logger.info(f"-------------------Text buffer is: {pipeline.text_buffer}-------------------")
-                        # logger.info(f"-------------------Text Processing task is: {processing_task.done()}-------------------")
+                    # Check if processing is complete
+                    if (not self._current_session_tracker and
+                            pipeline.processing_queue.qsize() == 0 and
+                            pipeline.text_buffer == "" and
+                            processing_task.done()):
+                        break
+                    elif self._stop_event.is_set():
                         break
                     else:
                         continue
+
         except Exception as e:
             logger.error(f"Error in text_stream_to_speech_to_queue: {str(e)}", exc_info=True)
             await queue.put(Exception(f"Text-to-speech error: {str(e)}"))
             if hasattr(self, 'model') and hasattr(self.model, 'stop'):
                 self.model.stop()
             raise
+
         finally:
             logger.info("Cleaning up pipeline")
+            # Cancel the processing task if it's still running
+            if not processing_task.done():
+                processing_task.cancel()
+                try:
+                    await processing_task
+                except asyncio.CancelledError:
+                    pass
+
             await queue.put(TTSEvent(type="text_end"))
             await pipeline.stop_processing()
             await pipeline.reset()
             await pipeline.clear_queue()
+
+            # Clear session tracker
+            self._current_session_tracker = None
+            self._stop_event.clear()

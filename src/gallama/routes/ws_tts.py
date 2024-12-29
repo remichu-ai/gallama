@@ -4,7 +4,7 @@ import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
-from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate
+from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate, WSInterCancel
 import samplerate
 import numpy as np
 import json
@@ -69,9 +69,62 @@ class TTSConnection:
         self.send_lock = asyncio.Lock()
         self.target_sample_rate = 24000
 
+        self._active_tasks: set[asyncio.Task] = set()  # Track active tasks
+
     async def start(self):
         """Initialize the connection and start processing tasks"""
         await self.websocket.accept()
+
+    async def cancel_processing(self):
+        """Cancel all ongoing processing and reset state"""
+        logger.info("Canceling TTS processing")
+
+        # Stop the TTS model processing if needed
+        if hasattr(self.tts_model, 'stop'):
+            self.tts_model.stop()
+
+        # Create a copy of the tasks set to avoid modification during iteration
+        tasks_to_cancel = list(self._active_tasks)
+
+        # Cancel all tasks
+        for task in tasks_to_cancel:
+            if not task.done():
+                task.cancel()
+
+        # Wait for all tasks to complete
+        if tasks_to_cancel:
+            try:
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
+
+        # Clear the active tasks set after all tasks are cancelled
+        self._active_tasks.clear()
+
+        # Reset state
+        async with self.state.lock:
+            self.state.reset()
+            self.state.mode = "idle"
+
+        # Clear all queues
+        await self.clear_queues()
+
+        # Notify client that processing was cancelled
+        try:
+            await self.websocket.send_json({
+                "type": "tts_cancelled"
+            })
+        except RuntimeError:
+            # Websocket might be closed
+            pass
+
+
+    def create_task(self, coroutine) -> asyncio.Task:
+        """Create a new task and add it to active tasks set"""
+        task = asyncio.create_task(coroutine)
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
+        return task
 
     async def process_audio_queue(self):
         """Process and send audio chunks to the client"""
@@ -246,32 +299,28 @@ class TTSConnection:
                 break
 
 
-    async def handle_message(self, message: WSInterTTS | WSInterConfigUpdate):
+    async def handle_message(self, message: WSInterTTS | WSInterConfigUpdate | WSInterCancel):
         """Handle incoming WebSocket messages"""
-        if message.type == "tts.interrupt":
-            pass
-            # await self.clear_processing()   # TODO
+        if message.type == "common.cancel":
+            await self.cancel_processing()
         elif message.type == "tts.add_text" and message.text:
             if self.state.mode == "idle":
                 async with self.state.lock:
                     self.state.reset()
-                    logger.info("-------------------------------------------reset state")
                     self.state.mode = "processing"
-                    # reset state to ensure empty queue
-
 
                 await self.state.text_queue.put(TTSEvent(type="text_start"))
                 await self.state.text_queue.put(message.text)
                 self.state.last_text_event_time = time.time()
 
-                asyncio.create_task(self.track_incoming_text())
-                asyncio.create_task(self.tts_model.text_stream_to_speech_to_queue(
+                # Use create_task to track these tasks
+                self.create_task(self.track_incoming_text())
+                self.create_task(self.tts_model.text_stream_to_speech_to_queue(
                     text_queue=self.state.text_queue,
                     queue=self.state.audio_queue,
                     stream=True,
                 ))
-                asyncio.create_task(self.process_audio_queue())
-
+                self.create_task(self.process_audio_queue())
             else:
                 await self.state.text_queue.put(message.text)
                 self.state.last_text_event_time = time.time()
@@ -354,6 +403,8 @@ async def validate_message(raw_data: str) -> WSInterTTS:
         if "common" in event_type:
             if "config_update" in event_type:
                 return WSInterConfigUpdate(**json_data)
+            elif "cancel" in event_type:
+                return WSInterCancel(**json_data)
             else:
                 raise Exception(f"Event of unrecognized type {event_type}")
         else:

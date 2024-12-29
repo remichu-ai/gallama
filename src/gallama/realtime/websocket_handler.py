@@ -2,6 +2,8 @@ from ..logger.logger import logger
 from gallama.realtime.websocket_client import WebSocketClient
 from gallama.realtime.websocket_session import WebSocketSession
 from fastapi import WebSocket
+from .vad import VADProcessor
+import base64
 # from gallama.data_classes.realtime_data_classes import (
 #     SessionConfig,
 #     ConversationItem,
@@ -25,6 +27,7 @@ from fastapi import WebSocket
 # )
 
 from gallama.data_classes.realtime_data_classes import *
+from gallama.data_classes.internal_ws import *
 
 
 class WebSocketMessageHandler:
@@ -61,7 +64,7 @@ class WebSocketMessageHandler:
 
             # response
             "response.create": self._response_create,
-            # "response.cancel": self._response_cancel
+            "response.cancel": self._response_cancel
         }
 
     async def initialize(self):
@@ -79,19 +82,22 @@ class WebSocketMessageHandler:
         else:
             logger.warning(f"Unknown message type: {message['type']}")
 
-
     async def _session_update(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         update_config = SessionConfig(**message["session"])
 
-        # Don't update voice if it's been used
-        # This is because voice will stick for the whole session following OpenAI spec
-        # can consider change this down the road
-
-        # TODO support changing voice on the fly
         if 'voice' in message["session"] and session.voice_used:
             del message["session"]["voice"]
 
         session.config = SessionConfig(**{**session.config.model_dump(), **message["session"]})
+
+        # Reset VAD state when configuration changes
+        if 'turn_detection' in message["session"]:
+            if session.config.turn_detection:
+                session.vad_processor = VADProcessor(session.config.turn_detection)
+                session.vad_item_id = None
+            else:
+                session.vad_processor = None
+                session.vad_item_id = None
 
         await websocket.send_json({
             "event_id": await session.queues.next_event(),
@@ -104,13 +110,79 @@ class WebSocketMessageHandler:
             }
         })
 
-
     async def _input_audio_buffer_append(self, websocket: WebSocket, session: WebSocketSession, message: dict):
-        # no confirmation event to client for this
-        await session.queues.append_unprocessed_audio(message["audio"], ws_stt=self.ws_stt)
+        """
+        Process audio with or without VAD based on session configuration
+        """
 
-    async def _input_audio_buffer_commit(self, websocket: WebSocket, session: WebSocketSession, message: dict):
-        await session.queues.commit_unprocessed_audio(ws_stt=self.ws_stt)
+        try:
+            if session.config.turn_detection and session.vad_processor:
+                # Process with VAD
+                audio_bytes = base64.b64decode(message["audio"])
+                should_buffer, speech_event = session.vad_processor.process_audio_chunk(audio_bytes)
+                # logger.info(f"VAD speech event: {speech_event}")
+                # logger.info(f"VAD should buffer: {should_buffer}")
+
+
+                if speech_event is not None:
+                    if not session.vad_item_id:
+                        session.vad_item_id = await session.queues.next_item()
+
+                    if 'start' in speech_event:
+                        logger.info(f"VAD speech started: {speech_event}")
+                        # Speech started event
+                        speech_started_event = InputAudioBufferSpeechStarted(
+                            event_id=await session.queues.next_event(),
+                            audio_start_ms=int(speech_event['start'] * 1000),
+                            item_id=session.vad_item_id
+                        )
+                        logger.info(f"VAD speech start: {speech_started_event.model_dump()}")
+                        await websocket.send_json(speech_started_event.model_dump())
+
+                        # tell stt to clear any buffer it currently has
+                        await self.ws_stt.send_pydantic_message(WSInterSTT(
+                            type="stt.buffer_clear"
+                        ))
+
+                    elif 'end' in speech_event:
+                        # Speech ended event
+                        logger.info(f"VAD speech ended: {speech_event}")
+
+                        speech_stopped_event = InputAudioBufferSpeechStopped(
+                            event_id=await session.queues.next_event(),
+                            audio_end_ms=int(speech_event['end'] * 1000),
+                            item_id=session.vad_item_id,
+                            type="input_audio_buffer.speech_stopped"
+                        )
+
+                        logger.info(f"speech_stopped_event: {speech_stopped_event.model_dump()}")
+                        await websocket.send_json(speech_stopped_event.model_dump())
+
+                        # Commit buffer and create response if configured
+                        if session.vad_processor.create_response:
+                            await self._input_audio_buffer_commit(websocket, session, message, item_id=session.vad_item_id)
+
+                            response_event = ResponseCreate(
+                                id=await session.queues.next_resp(),
+                            )
+                            await session.queues.unprocessed.put(response_event)
+
+                        # reset vad id:
+                        session.vad_item_id = None
+
+                if should_buffer:
+                    await session.queues.append_unprocessed_audio(message["audio"], ws_stt=self.ws_stt)
+
+            else:
+                # Process without VAD
+                await session.queues.append_unprocessed_audio(message["audio"], ws_stt=self.ws_stt)
+
+        except Exception as e:
+            logger.error(f"Error processing audio: {str(e)}")
+            raise
+
+    async def _input_audio_buffer_commit(self, websocket: WebSocket, session: WebSocketSession, message: dict, item_id: str = None):
+        await session.queues.commit_unprocessed_audio(ws_stt=self.ws_stt, item_id=item_id)
 
     async def _input_audio_buffer_clear(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         await session.queues.clear_unprocessed_audio(ws_stt=self.ws_stt)
@@ -118,7 +190,17 @@ class WebSocketMessageHandler:
     async def _conversation_item_create(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         # for conversation.item.created, it is a completed item, hence no need to do streaming
         event = ConversationItemCreate(**message)
+        await session.queues.unprocessed.put(event)
+
+
+    async def _conversation_item_truncate(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        event = ConversationItemTruncate(**message)
+        await session.queues.unprocessed.put(event)
+
+    async def _conversation_item_delete(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        event = ConversationItemDelete(**message)
         await session.queues.unprocessed.put(event.item)
+
 
     async def _response_create(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         # add a Conversation Item into unprocess queue
@@ -126,12 +208,25 @@ class WebSocketMessageHandler:
         item = ResponseCreate(**message)
         await session.queues.unprocessed.put(item)
 
-    async def _conversation_item_truncate(self, websocket: WebSocket, session: WebSocketSession, message: dict):
-        pass
+    async def _response_cancel(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        """Handle response.cancel event"""
+        try:
+            async with session.current_response_lock:
+                if not session.current_response:
+                    logger.warning("No current response to cancel")
+                else:
+                    # Since response is handled synchronously in process_unprocessed_queue,
+                    # we just need to add a cancel event to the queue
+                    cancel_event = ResponseCancel(**message)
+                    await session.current_response.cancel(cancel_event)
 
-    async def _conversation_item_delete(self, websocket: WebSocket, session: WebSocketSession, message: dict):
-        pass
-
-
-
+        except Exception as e:
+            logger.error(f"Error in response cancellation: {str(e)}")
+            await websocket.send_json({
+                "type": "error",
+                "error": {
+                    "code": "internal_error",
+                    "message": "Failed to cancel response"
+                }
+            })
 

@@ -63,6 +63,9 @@ class WebSocketSession:
         self.conversation_history = OrderedDict()
         self.session_config = SessionConfig()
 
+        # job cancelling
+        self.stop_event = asyncio.Event()
+
     def update_session_config(self, new_session_config: SessionConfig):
         """Update session config"""
         self.session_config = SessionConfig(**{
@@ -98,7 +101,7 @@ class WebSocketSession:
                     content=message_content
                 ))
 
-        logger.info(f"----- FROG FROG messages: {self.conversation_history.items()}")
+        # logger.info(f"messages: {self.conversation_history.items()}")
         query = ChatMLQuery(
             messages=messages,
             model=session_config.model,
@@ -120,6 +123,10 @@ class WebSocketSession:
         gen_stats = None
 
         while not eos:
+            # Check if generation should be stopped
+            if self.stop_event.is_set():
+                break
+
             accumulated_text = ""
 
             try:
@@ -244,8 +251,22 @@ class WebSocketSession:
                 "type": "conversation.update.ack",
                 "item_id": item.id
             })
+        elif message.get("type") == "conversation.item.deleted":
+            # Handle deletion event
+            item_id = message.get("item_id")
+            if item_id in self.conversation_history:
+                del self.conversation_history[item_id]
+
+            await self.websocket.send_json({
+                "type": "conversation.update.ack",
+                "item_id": item_id
+            })
+
 
         elif message.get("type") in ["response.create", "generate_cache"]:
+            # Reset stop event before starting new generation
+            self.stop_event.clear()
+
             gen_queue = GenQueue()
             response_config = self.session_config.merge(message.get("response"))
             query = self.convert_conversation_to_chatml(response_config)
@@ -272,7 +293,8 @@ class WebSocketSession:
                     query=query,
                     prompt_eng=llm.prompt_eng,
                     gen_queue=gen_queue,
-                    request=None
+                    request=None,
+                    stop_event=self.stop_event,
                 )
             )
 
@@ -289,6 +311,9 @@ class WebSocketSession:
                 await self.websocket.send_json({
                     "type": "pre_cache.complete",
                 })
+        elif message.get("type") == "common.cancel":
+            # abort generation
+            self.stop_event.set()
 
 
 class LLMWebSocketServer:

@@ -6,22 +6,22 @@ import numpy as np
 import websockets
 from starlette.websockets import WebSocket
 from websockets.protocol import State
-
+import samplerate
 from gallama.logger import logger
 from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS
 from gallama.data_classes.realtime_data_classes import UsageResponseRealTime, ResponseContentPartDoneEvent, \
     parse_conversation_item, ServerResponse, ResponseDone, ResponseCreated, ConversationItemCreated, \
-    ResponseOutput_ItemAdded, ResponseDelta, ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, \
+    ResponseOutput_ItemAdded, ResponseDelta, ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, ResponseCancel,\
     ResponseCreate, SessionConfig, ResponseContentPartAddedEvent
+from gallama.data_classes.internal_ws import WSInterCancel
 from gallama.realtime.websocket_client import WebSocketClient
-from gallama.realtime.websocket_session import WebSocketSession
 
 
 class Response:
     """ this class managing the current response to client"""
     def __init__(
         self,
-        session: WebSocketSession,
+        session: "WebSocketSession",
         ws_client: WebSocket,
         ws_stt: WebSocketClient,
         ws_llm: WebSocketClient,
@@ -58,6 +58,26 @@ class Response:
         # some tracker
         self.content_part_done_status: bool = False
         self.response_done_status: bool = False
+
+        # Add cancellation control
+        self.cancel_event = asyncio.Event()
+
+
+    async def cancel(self, cancel_event: ResponseCancel):
+        """Cancel the current response while preserving partial results"""
+        try:
+            self.cancel_event.set()
+
+            # send event to llm and tts to stop generation
+            if self.ws_llm and self.ws_llm.connection:
+                await self.ws_llm.send_pydantic_message(WSInterCancel(type="common.cancel"))
+
+            # Cancel TTS generation
+            if self.ws_tts and self.ws_tts.connection:
+                await self.ws_tts.send_pydantic_message(WSInterCancel(type="common.cancel"))
+        except Exception as e:
+            logger.error(f"Error during response cancellation: {str(e)}")
+            raise
 
     async def content_part_done(self, generation_type: Literal["text", "audio", "transcription"]):
         logger.info(f"content part done is called with type: {generation_type}")
@@ -117,6 +137,9 @@ class Response:
 
     async def response_done(self):
         try:
+            content_part_status = "completed" if not self.cancel_event.is_set() else "incomplete"
+            server_response_status = "completed" if not self.cancel_event.is_set() else "cancelled"
+
             if not self.response_done_status and self.content_part_done_status:   # content part must be done first
                 _output = None
                 allowed_modalities = self.session.config.modalities
@@ -126,7 +149,7 @@ class Response:
                         "id": self.item_id,
                         "object": "realtime.item",
                         "type": "message",
-                        "status": "completed",
+                        "status": content_part_status,
                         "role": "assistant",
                         "content": [
                             {
@@ -143,7 +166,7 @@ class Response:
                         "id": self.item_id,
                         "object": "realtime.item",
                         "type": "message",
-                        "status": "completed",
+                        "status": content_part_status,
                         "role": "assistant",
                         "content": [
                             {
@@ -160,7 +183,7 @@ class Response:
                     _response = ServerResponse(**{
                         "id": self.response_id,
                         "object": "realtime.response",
-                        "status": "completed",
+                        "status": server_response_status,
                         "usage": self.usage.model_dump(),
                         "output": [_output.model_dump()]        # it must be an array
                     })
@@ -242,18 +265,57 @@ class Response:
             if chunk_in_byte is None:
                 raise Exception("chunk_in_byte must be provided for audio mode")
 
-            # Convert bytes to numpy array with specific dtype
-            chunk_array = np.frombuffer(chunk_in_byte, dtype=np.float32)
+            try:
+                # STT generated audio at 24000. However, keep it at 16000 to be consistent with source
 
-            # Ensure chunk_array is 1D
-            if chunk_array.ndim == 0:
-                chunk_array = chunk_array.reshape(1)
+                # Convert bytes to numpy array as int16 first (PCM16 format)
+                chunk_array = np.frombuffer(chunk_in_byte, dtype=np.int16)
 
-            # Concatenate arrays
-            if self.audio.size == 0:
-                self.audio = chunk_array
-            else:
-                self.audio = np.concatenate([self.audio, chunk_array])
+                # Convert to float32 and normalize to [-1, 1]
+                chunk_array = chunk_array.astype(np.float32) / 32768.0
+
+                # Ensure chunk_array is 1D
+                if chunk_array.ndim == 0:
+                    chunk_array = chunk_array.reshape(1)
+
+                # Validate chunk size
+                if chunk_array.size == 0:
+                    logger.warning("Received empty audio chunk, skipping")
+                    return
+
+                # Perform sample rate conversion from 24000 Hz to 16000 Hz
+                ratio = 16000 / 24000  # Target rate / Source rate
+                chunk_array = samplerate.resample(chunk_array, ratio, 'sinc_best')
+
+                # Concatenate arrays
+                if self.audio.size == 0:
+                    self.audio = chunk_array
+                else:
+                    try:
+                        # Validate shapes before concatenation
+                        if chunk_array.shape[0] == 0:
+                            logger.warning("Skipping empty chunk")
+                            return
+
+                        self.audio = np.concatenate([self.audio, chunk_array])
+
+                    except Exception as e:
+                        logger.error(f"Error concatenating audio chunks: {str(e)}")
+                        raise
+
+                # Log some debug information periodically
+                if hasattr(self, '_chunk_counter'):
+                    self._chunk_counter += 1
+                else:
+                    self._chunk_counter = 1
+
+                if self._chunk_counter % 10 == 0:
+                    logger.debug(f"Audio stats - shape: {self.audio.shape}, "
+                                 f"min: {np.min(self.audio)}, max: {np.max(self.audio)}")
+
+            except Exception as e:
+                logger.error(f"Error processing audio chunk: {str(e)}")
+                raise
 
         # send chunk delta
         await self.ws_client.send_json(ResponseDelta(**{
@@ -307,11 +369,10 @@ class Response:
 
 
     async def update_text_or_transcription_task(self, mode: Literal["text", "audio"]):
+        content_done_tracker = False
+
         try:
-            while True:
-                # Ensure LLM connection is active
-                # if not self.ws_llm.connection:
-                #     await self.ws_llm.connect()
+            while not self.cancel_event.is_set():
 
                 if not await self.ws_llm.ensure_connection():
                     raise Exception("Could not establish LLM connection")
@@ -349,8 +410,9 @@ class Response:
 
                         await self.update_content_done(content_type="transcription" if mode=="audio" else "text")
                         await self.content_part_done(generation_type="transcription")
+                        content_done_tracker = True
                         break   # exit the function
-                        # await self.response_done()
+
                     else:
                         raise Exception(f"Unknown response type in update_text_or_transcription_task: {llm_response}")
 
@@ -362,19 +424,35 @@ class Response:
                     continue
                 except Exception as e:
                     logger.error(f"Failed to parse LLM message: {e}")
-
+                    raise
+        except asyncio.CancelledError:
+            logger.info("Text generation task cancelled")
+            raise
         except websockets.exceptions.ConnectionClosed:
             logger.error("LLM websocket connection closed unexpectedly")
         except Exception as e:
             logger.error(f"Unexpected error occurred: {str(e)}")
 
+
+        if not content_done_tracker and not self.cancel_event.is_set():
+            logger.error("Text generation task did not complete due to task cancelling")
+            await self.tts_queue.put(None)  # mark that text generation completed for TTS
+
+            await self.update_content_done(content_type="transcription" if mode == "audio" else "text")
+            await self.content_part_done(generation_type="transcription")
+            content_done_tracker = True
+
+
+
     async def send_audio_to_client_task(self):
         """Listen for audio chunks from TTS websocket and forward them to the client"""
-        try:
-            if not await self.ws_tts.ensure_connection():
-                raise Exception("Could not establish TTS connection")
 
-            while True:
+        content_done_tracker = False
+        try:
+            while not self.cancel_event.is_set():
+                if not await self.ws_tts.ensure_connection():
+                    raise Exception("Could not establish TTS connection")
+
                 try:
                     message = await asyncio.wait_for(self.ws_tts.receive_message(), timeout=10)
                     if message is None:
@@ -389,6 +467,7 @@ class Response:
                                 # mark audio generation as done
                                 self.audio_done = True
                                 await self.update_content_done(content_type="audio")
+                                content_done_tracker = True
                                 break   # exit the function
                         except json.JSONDecodeError:
                             logger.warning(f"Received unexpected string message: {message[:100]}...")
@@ -410,16 +489,24 @@ class Response:
                 except asyncio.TimeoutError:
                     logger.error("TTS websocket connection timed out")
                     break
-
                 except websockets.exceptions.ConnectionClosed:
                     logger.error("TTS websocket connection closed")
                     break
+                except asyncio.CancelledError:
+                    logger.info("Audio generation task cancelled")
+                    raise
                 except Exception as e:
-                    raise Exception(f"Unexpected error occurred in send_audio_to_client_task: {str(e)}")
+                    logger.error(f"Unexpected error occurred in send_audio_to_client_task: {str(e)}")
+                    raise
 
+            if not content_done_tracker and not self.cancel_event.is_set():
+                logger.info("Audio generation task did not complete due to task cancelling")
+                self.audio_done = True
+                await self.update_content_done(content_type="audio")
+                content_done_tracker = True
 
             await self.content_part_done(generation_type="audio")
-            # await self.response_done()
+
 
         except Exception as e:
             logger.error(f"Error in audio_to_client_task: {str(e)}")
@@ -443,7 +530,7 @@ class Response:
             if not await self.ws_tts.ensure_connection():
                 raise Exception("Could not establish TTS connection")
 
-            while True:
+            while not self.cancel_event.is_set():
                 # Get text chunk from queue
                 text = await self.tts_queue.get()
 
@@ -474,56 +561,56 @@ class Response:
 
     async def response_start(self, response_create_request: ResponseCreate, session_config: SessionConfig):
         """ send empty event to client to signal response is created """
+        try:
+            # send response_create_request to LLM
+            request_session_config = response_create_request.response.model_dump() if response_create_request.response else {}
 
-        # send response_create_request to LLM
-        if not response_create_request.response:
-            request_session_config = {}
-        else:
-            request_session_config = response_create_request.response.model_dump()
-
-        # find the merged config for this generation
-        current_session_config = session_config.merge(request_session_config)
-        response_create_request.response = current_session_config
+            # find the merged config for this generation
+            current_session_config = session_config.merge(request_session_config)
+            response_create_request.response = current_session_config
 
 
-        # at this point, the ws_llm state should already sync with user audio
-        await self.ws_llm.send_pydantic_message(response_create_request)
+            # at this point, the ws_llm state should already sync with user audio
+            await self.ws_llm.send_pydantic_message(response_create_request)
 
-        # send content_part added for text to let front end know that there is text coming
-        if "audio" in current_session_config.modalities:
-            # Send initial audio content part added event
-            await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
-                "event_id": await self.event_id_generator(),
-                "type": "response.content_part.added",
-                "response_id": self.response_id,
-                "item_id": self.item_id,
-                "part": {
-                    "type": "audio",
-                    "audio": "",
-                    "transcript": ""
-                }
-            }).model_dump())
-        else:
-            await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
-                "event_id": await self.event_id_generator(),
-                "type": "response.content_part.added",
-                "response_id": self.response_id,
-                "item_id": self.item_id,
-                "part": {
-                   "type": "text",
-                    "text": ""
-                }
-            }).model_dump())
+            # send content_part added for text to let front end know that there is text coming
+            if "audio" in current_session_config.modalities:
+                # Send initial audio content part added event
+                await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
+                    "event_id": await self.event_id_generator(),
+                    "type": "response.content_part.added",
+                    "response_id": self.response_id,
+                    "item_id": self.item_id,
+                    "part": {
+                        "type": "audio",
+                        "audio": "",
+                        "transcript": ""
+                    }
+                }).model_dump())
+            else:
+                await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
+                    "event_id": await self.event_id_generator(),
+                    "type": "response.content_part.added",
+                    "response_id": self.response_id,
+                    "item_id": self.item_id,
+                    "part": {
+                       "type": "text",
+                        "text": ""
+                    }
+                }).model_dump())
 
-        task_list = []
-        if "audio" in current_session_config.modalities:
-            text_task = self.update_text_or_transcription_task(mode="audio")
-            text_to_ws_tts_task = self.send_text_to_ws_tts()
-            audio_to_client_task = self.send_audio_to_client_task()
-            task_list = [text_to_ws_tts_task, audio_to_client_task, text_task]
-        else:
-            text_task =self.update_text_or_transcription_task(mode="text")
-            task_list = [text_task]
+            tasks = []
+            if "audio" in current_session_config.modalities:
+                text_task = self.update_text_or_transcription_task(mode="audio")
+                text_to_ws_tts_task = self.send_text_to_ws_tts()
+                audio_to_client_task = self.send_audio_to_client_task()
+                tasks = [text_to_ws_tts_task, audio_to_client_task, text_task]
+            else:
+                text_task = self.update_text_or_transcription_task(mode="text")
+                tasks = [text_task]
 
-        await asyncio.gather(*task_list)
-        logger.info(f"Response task finished")
+            await asyncio.gather(*tasks)
+
+        except Exception as e:
+            logger.error(f"Error in response_start: {str(e)}")
+            raise

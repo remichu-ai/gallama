@@ -14,7 +14,9 @@ from gallama.data_classes.realtime_data_classes import (
     ConversationItemMessageServer,
     MessageContentServer,
     ConversationItemServer,
-    ConversationItemInputAudioTranscriptionComplete
+    ConversationItemInputAudioTranscriptionComplete,
+    ConversationItemCreate,
+    ConversationItemTruncate
 )
 from gallama.data_classes.internal_ws import WSInterSTTResponse, WSInterSTT
 from gallama.realtime.response import Response
@@ -28,6 +30,7 @@ class WebSocketManager:
     def __init__(self, session_manager: SessionManager, message_handler: WebSocketMessageHandler):
         self.session_manager = session_manager
         self.message_handler = message_handler
+
 
     async def initialize_session(self, websocket: WebSocket, model:str, api_key:str = None) -> WebSocketSession:
         protocols = websocket.headers.get("sec-websocket-protocol", "").split(", ")
@@ -114,7 +117,7 @@ class WebSocketManager:
                 if not await ws_stt.ensure_connection():
                     raise Exception("Could not establish STT connection")
 
-                # Receive message from LLM
+                # Receive message from STT
                 message = await ws_stt.connection.recv()
 
                 # Parse the message
@@ -128,7 +131,7 @@ class WebSocketManager:
                         logger.info(f"Transcription complete")
                         await session.queues.mark_transcription_done()
                         # break     # not break as this is meant to run forever
-                    elif stt_response.type == "stt.clear_buffer_done":
+                    elif stt_response.type == "stt.buffer_cleared":
                         # clear transcription
                         await session.queues.clear_transcription()
                     else:
@@ -150,15 +153,22 @@ class WebSocketManager:
     async def process_unprocessed_queue(self, session: WebSocketSession, ws_client: WebSocket):
         """Process items in unprocessed queue one at a time"""
         while True:
-            item: ConversationItem | ResponseCreate = await session.queues.unprocessed.get()
+            item: ConversationItemCreate | ResponseCreate = await session.queues.unprocessed.get()
 
             try:
-                if isinstance(item, ConversationItem):
-                    item = await self.handle_message_item(item)
+                if isinstance(item, ConversationItemCreate):
+                    item_to_create = await self.handle_message_item(item.item)
                     await session.queues.update_conversation_item_ordered_dict(
                         ws_client=ws_client,
                         ws_llm=self.message_handler.ws_llm,
-                        item=item
+                        item=item_to_create
+                    )
+                elif isinstance(item, ConversationItemTruncate):
+                    await session.queues.truncate_conversation_item(
+                        ws_client=ws_client,
+                        ws_llm=self.message_handler.ws_llm,
+                        event=item,
+                        user_interrupt_token=session.config.user_interrupt_token,
                     )
                 elif isinstance(item, ResponseCreate):
                     # if there is audio commited, create an item for it
@@ -169,14 +179,11 @@ class WebSocketManager:
                         modalities = "audio"
                         if not session.queues.audio_commited:
                             raise Exception("Audio buffer is not commited before create response")
-                        # # send signal to ws_stt to complete the transcription
-                        # await self.message_handler.ws_stt.send_pydantic_message(
-                        #     WSInterSTT(type="stt.sound_done")
-                        # )
 
                         # wait for audio transcription to finish
                         transcription_done = await session.queues.wait_for_transcription_done()
 
+                        # update user transcription as one item to the conversation item list
                         if transcription_done and session.queues.transcript_buffer:
                             # create a new item
                             item_id_to_use = await session.queues.next_item()
@@ -212,7 +219,6 @@ class WebSocketManager:
 
 
                     # get response counter
-                    #event_id = await session.queues.next_event()
                     response_id = await session.queues.next_resp()
 
                     # create new response object that will manage this response
@@ -225,6 +231,11 @@ class WebSocketManager:
                         response_id=response_id,
                         event_id_generator=session.queues.next_event
                     )
+
+                    # set the current response for cancellation
+                    async with session.current_response_lock:
+                        logger.info(f"-------------------Set Current response")
+                        session.current_response = response
 
                     # at this point stt already completed, and text send to the llm
                     await response.response_initialize()
@@ -241,6 +252,13 @@ class WebSocketManager:
                     )
 
                     await session.queues.reset_after_response()
+
+                    logger.info(f"---------------------Response created: {response_id}")
+
+                    # remove current response
+                    async with session.current_response_lock:
+                        logger.info(f"-------------------Reset current response")
+                        session.current_response = None
 
 
             except Exception as e:

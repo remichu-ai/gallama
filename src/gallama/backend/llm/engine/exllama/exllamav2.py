@@ -479,6 +479,7 @@ class ModelExllama(ModelInterface):
         max_tokens: int = None,
         quiet=False,
         messages: List = None,  # query.message for multimodal
+        stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
         try:
@@ -591,7 +592,7 @@ class ModelExllama(ModelInterface):
             try :
                 # start the generation
                 async for result in job:
-                    if eos:
+                    if eos or stop_event.is_set():
                         await job.cancel()
                         break
 

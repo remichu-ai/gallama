@@ -30,7 +30,10 @@ async def create_transcription(
     Transcribe an audio file into the input language.
     """
     model_manager = get_model_manager()
-    stt = model_manager.stt_dict.get(model)
+    stt = model_manager.stt_dict.get(model, None)
+    # TODO to implement a global change
+    if not stt:
+        model_name, stt = next(iter(model_manager.stt_dict.items()))
 
     if stt is None:
         raise HTTPException(status_code=400, detail="Model not found")

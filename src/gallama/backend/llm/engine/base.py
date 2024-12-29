@@ -147,13 +147,21 @@ class ModelInterface(ABC):
         max_tokens: int = None,
         quiet: bool = False,
         messages: List = None,  # query.message is used for multimodal
+        stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
         pass
 
 
     ## ******************************************************************************
-    async def chat(self, query: ChatMLQuery, prompt_eng: PromptEngine, gen_queue: GenQueue, request: Request):
+    async def chat(
+        self,
+        query: ChatMLQuery,
+        prompt_eng: PromptEngine,
+        gen_queue: GenQueue,
+        request: Request,
+        stop_event: asyncio.Event = asyncio.Event()
+    ):
         """
         This function will route the request to chat with tool or without tool accordingly
         """
@@ -161,12 +169,21 @@ class ModelInterface(ABC):
             chat_method = self.chat_with_tool
         else:
             chat_method = self.chat_no_tool
-        return await chat_method(
-            query=query,
-            prompt_eng=prompt_eng,
-            gen_queue=gen_queue,
-            request=request
-        )
+        try:
+            await chat_method(
+                query=query,
+                prompt_eng=prompt_eng,
+                gen_queue=gen_queue,
+                request=request,
+                stop_event=stop_event,
+            )
+        except Exception as e:
+            if stop_event.is_set():
+                logger.info("Stop event is set, aborting chat")
+            else:
+                logger.error("Error while generating response: " + str(e))
+                raise Exception("Error while generating chat response: " + str(e))
+        return True
 
     async def chat_raw(
         self,
@@ -176,6 +193,7 @@ class ModelInterface(ABC):
         # stream: bool = False,
         max_tokens: int = None,
         quiet=False,    # to disable any logging, mostly used for initialization cache prefill
+        stop_event: asyncio.Event = asyncio.Event()
     ):
         """
         This function handle chat with input as a string prompt.
@@ -186,7 +204,8 @@ class ModelInterface(ABC):
             max_tokens=max_tokens,
             gen_queue=gen_queue,
             quiet=quiet,
-            request=request
+            request=request,
+            stop_event=stop_event,
         )
 
     def validate_token_length(self, token_length):
@@ -198,7 +217,13 @@ class ModelInterface(ABC):
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
 
-    async def chat_no_tool(self, query: ChatMLQuery, prompt_eng: PromptEngine, gen_queue, request: Request):
+    async def chat_no_tool(
+        self,
+        query: ChatMLQuery,
+        prompt_eng: PromptEngine,
+        gen_queue, request: Request,
+        stop_event: asyncio.Event = None
+    ):
 
         prompt = prompt_eng.get_prompt(
             query,
@@ -252,6 +277,7 @@ class ModelInterface(ABC):
                 prefix_strings=f"<{thinking.root_tag}>",
                 stop_words=thinking.root_key_stop_words,
                 request=request,
+                stop_event=stop_event,
             )
             thinking_response, _ = await get_response_from_queue(thinking_queue)
 
@@ -283,6 +309,7 @@ class ModelInterface(ABC):
                 prefix_strings=query.prefix_strings,
                 request=request,
                 # stop_words=query.stop_words,
+                stop_event=stop_event,
             )
 
             first_response, _ = await get_response_from_queue(prefix_queue)
@@ -330,10 +357,18 @@ class ModelInterface(ABC):
                 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                 'banned_strings': banned_strings,
                 'request': request,
+                'stop_event': stop_event,
             }
         )
 
-    async def chat_with_tool(self, query: ChatMLQuery, prompt_eng, gen_queue, request: Request):
+    async def chat_with_tool(
+        self,
+        query: ChatMLQuery,
+        prompt_eng,
+        gen_queue,
+        request: Request,
+        stop_event: asyncio.Event = None
+    ):
         # use_tool marker
         use_tool_bool = False  # this will be set to True if tool is used
         fall_back_bool = False  # this will decide if fallback generation with regex enforcement is required
@@ -376,6 +411,8 @@ class ModelInterface(ABC):
             prefix_strings=f"<{tool_thinking_to_use.root_tag}>",
             request=request,
             # formatter=formatter_regex  # no longer enforce format
+            stop_event=stop_event,
+
         )
 
         # evaluate tool usage necessity
@@ -438,7 +475,8 @@ class ModelInterface(ABC):
                 request=request,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
-                formatter=formatter_regex  # no longer enforce format
+                formatter=formatter_regex,  # no longer enforce format
+                stop_event = stop_event,
             )
 
             # evaluate tool usage necessity
@@ -518,6 +556,7 @@ arg_dict = """
                 formatter=formatter_json,
                 max_tokens=query.max_tokens,
                 request=request,
+                stop_event=stop_event,
             )
 
         # NOT USE TOOL
@@ -538,6 +577,7 @@ arg_dict = """
                     prefix_strings=query.prefix_strings,
                     max_tokens=query.max_tokens,
                     request=request,
+                    stop_event=stop_event,
                 )
             else:
                 # tool choice is forced -> return empty tool calling

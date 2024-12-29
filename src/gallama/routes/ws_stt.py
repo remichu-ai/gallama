@@ -58,7 +58,8 @@ class TranscriptionConnectionManager:
                 "accumulated_duration": 0.0,
                 "streaming_mode": config.streaming_transcription,
                 "complete_audio": bytearray() if not config.streaming_transcription else None,
-                "processing_complete": False  # New flag to track processing status
+                "processing_complete": False,
+                "transcription_enabled": True  # Add this line
             }
             return True
 
@@ -67,12 +68,57 @@ class TranscriptionConnectionManager:
             await websocket.close(code=4000, reason="Connection initialization failed")
             return False
 
+
     async def disconnect(self, websocket: WebSocket):
         try:
             if websocket in self.active_connections:
                 del self.active_connections[websocket]
         except Exception as e:
             logger.error(f"Error in disconnect: {str(e)}")
+
+
+    async def process_one_time_transcription(self, websocket: WebSocket, audio_base64: str) -> bool:
+        """Handle one-time transcription request"""
+        connection = self.active_connections.get(websocket)
+        if not connection:
+            return False
+
+        asr_processor = connection["asr_processor"]
+        sample_rate = connection["sample_rate"]
+
+        try:
+            # Decode base64 audio
+            audio_bytes = base64.b64decode(audio_base64)
+
+            # Process the audio
+            processed_audio = self.process_raw_buffer(audio_bytes, asr_processor, sample_rate)
+            if processed_audio is None:
+                return False
+
+            # Perform transcription
+            transcription = await asr_processor.transcribe_async(
+                processed_audio,
+                language=connection["language"],
+                include_segments=True
+            )
+
+            # Send response
+            response = WSInterSTTResponse(
+                type="stt.one_time_transcribe",
+                transcription=transcription.text,
+                start_time=0,
+                end_time=len(processed_audio) / asr_processor.SAMPLING_RATE
+            )
+            await websocket.send_json(response.dict())
+
+            # Mark processing as complete
+            connection["processing_complete"] = True
+            return True
+
+        except Exception as e:
+            logger.error(f"Error in one-time transcription: {str(e)}")
+            return False
+
 
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
@@ -94,6 +140,10 @@ class TranscriptionConnectionManager:
         connection = self.active_connections.get(websocket)
         if not connection:
             return False
+
+        # Add check for transcription_enabled
+        if not connection.get("transcription_enabled", True):
+            return True  # Successfully ignored chunk due to disabled transcription
 
         asr_processor = connection["asr_processor"]
         streaming_mode = connection["streaming_mode"]
@@ -245,6 +295,38 @@ async def websocket_endpoint(
                 except Exception as e:
                     logger.error(f"Error during sound_done processing: {str(e)}")
                     raise  # Re-raise the exception to trigger proper cleanup
+
+
+            elif message.type == "stt.buffer_clear" or message.type=="common.cancel":
+                logger.info("STT: received clear_buffer message.")
+
+                connection = manager.active_connections.get(websocket)
+                if connection:
+                    # Reset the ASR processor state
+                    connection["asr_processor"].reset_state()
+                    # Reset all buffers
+                    connection["raw_buffer"] = bytearray()
+                    connection["audio_buffer"] = np.array([], dtype=np.float32)
+                    connection["accumulated_duration"] = 0.0
+                    connection["is_first"] = True
+
+                    if not connection["streaming_mode"]:
+                        connection["complete_audio"] = bytearray()
+                    connection["processing_complete"] = False
+
+                    # Send confirmation back to client
+                    clear_response = WSInterSTTResponse(type="stt.buffer_cleared")
+                    await websocket.send_json(clear_response.model_dump())
+            elif message.type == "stt.one_time_transcribe":
+                if not message.sound:
+                    logger.error("Received one_time_transcribe without audio data")
+                    continue
+
+                success = await manager.process_one_time_transcription(websocket, message.sound)
+                if not success:
+                    logger.error("Failed to process one-time transcription")
+
+
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")

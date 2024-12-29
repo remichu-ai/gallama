@@ -3,6 +3,7 @@ from typing import List
 
 from gallama.data_classes.realtime_data_classes import SessionConfig
 from gallama.realtime.message_queue import MessageQueues
+from .vad import VADProcessor
 from fastapi import WebSocket
 
 from gallama.realtime.websocket_client import WebSocketClient
@@ -17,6 +18,14 @@ class WebSocketSession:
         self.voice_used = False
         self.queues = MessageQueues()
         self.tasks: List[asyncio.Task] = []
+
+        self.current_response_lock = asyncio.Lock()
+        self.current_response: "Response" = None  # this is to track the current response
+
+        # Initialize VAD processor only if turn_detection is configured
+        self.vad_processor = VADProcessor(config.turn_detection) if config.turn_detection else None
+        self.vad_item_id: str = None
+
 
     def mark_voice_used(self):
         self.voice_used = True
@@ -52,6 +61,6 @@ class WebSocketSession:
 
 
         # send all internal ws update config
-        ws_stt.send_message(self.config.stt)
-        ws_llm.send_message(self.config.llm)
-        ws_tts.send_message(self.config.tts)
+        await ws_stt.send_message(self.config.stt)
+        await ws_llm.send_message(self.config.llm)
+        await ws_tts.send_message(self.config.tts)

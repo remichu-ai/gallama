@@ -33,11 +33,7 @@ class AudioTranscriptionConfig(BaseModel):
     model: Literal["whisper-1"]
 
 
-class TurnDetectionConfig(BaseModel):
-    type: Literal["server_vad"]
-    threshold: float = Field(ge=0.0, le=1.0)
-    prefix_padding_ms: int = Field(ge=0)
-    silence_duration_ms: int = Field(ge=0)
+
 
 
 class ToolParameter(BaseModel):
@@ -66,6 +62,13 @@ class AudioBufferClear(BaseModel):
     type: Literal["input_audio_buffer.clear"]
 
 
+class TurnDetectionConfig(BaseModel):
+    type: Literal["server_vad"]
+    threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
+    prefix_padding_ms: Optional[int] = Field(ge=0, default=500)
+    silence_duration_ms: Optional[int] = Field(ge=0, default=700)
+    create_response: bool = True
+
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])
     instructions: Optional[str] = ""    # system prompt
@@ -84,6 +87,8 @@ class SessionConfig(BaseModel):
 
     # extra for gallama backend
     streaming_transcription: bool = True
+    user_interrupt_token: Optional[str] = Field(description= "Custom word to insert everytime user interrupt the assistant",default=" <user_interrupt>")
+
 
     @validator('max_response_output_tokens')
     def validate_max_tokens(cls, v):
@@ -184,17 +189,18 @@ class ConversationItemCreate(BaseModel):
     previous_item_id: Optional[str] = None
     item: ConversationItem
 
+class ConversationItemDelete(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["conversation.item.delete"] = "conversation.item.delete"
+    item_id: str
+
+
 class ConversationItemTruncate(BaseModel):
     event_id: Optional[str] = None
     type: Literal["conversation.item.truncate"] = "conversation.item.truncate"
     item_id: str
-    content_index: int
+    content_index: int = 0
     audio_end_ms: int
-
-class ConversationItemDelete(BaseModel):
-    event_id: Optional[str] = None
-    type: Literal["conversation.item.delete"]
-    item_id: str
 
 class ConversationItemInputAudioTranscriptionComplete(BaseModel):
     event_id: Optional[str] = None
@@ -208,13 +214,14 @@ class ConversationItemInputAudioTranscriptionComplete(BaseModel):
 
 class ResponseCreate(BaseModel):
     event_id: Optional[str] = None
-    type: Literal["response.create"]
+    type: Literal["response.create"] = "response.create"
     response: Optional[SessionConfig] = Field(description="Optional session config object to overwrite the session config for this response", default=None)
 
 
 class ResponseCancel(BaseModel):
     event_id: Optional[str] = None
     type: Literal["response.cancel"]
+    response_id: Optional[str] = None
 
 class SessionCreated(BaseModel):
     event_id: Optional[str] = None
@@ -438,3 +445,33 @@ class ResponseTranscriptDone(BaseModel):
     transcript: str
 
 
+class ConversationItemDeleted(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["conversation.item.deleted"] = "conversation.item.deleted"
+    item_id: str
+
+class ConversationItemTruncated(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["conversation.item.truncated"] = "conversation.item.truncated"
+    item_id: str
+    content_index: int = 0
+    audio_end_ms: int
+
+
+class InputAudioBufferSpeechStarted(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["input_audio_buffer.speech_started"] = "input_audio_buffer.speech_started"
+    audio_start_ms: int = Field(description="Milliseconds from the start of all audio written to the buffer during the session when speech was first detected. This will correspond to the beginning of audio sent to the model, and thus includes the prefix_padding_ms configured in the Session.")
+    item_id: str
+
+class InputAudioBufferSpeechStopped(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["input_audio_buffer.speech_stopped"] = "input_audio_buffer.speech_stopped"
+    audio_end_ms: int = Field(description="Milliseconds since the session started when speech stopped. This will correspond to the end of audio sent to the model, and thus includes the min_silence_duration_ms configured in the Session.")
+    item_id: str
+
+# open ai actually doesnt return this event
+# class ResponseCancelled(BaseModel):
+#     event_id: Optional[str] = None
+#     type: Literal["response.cancel"]
+#     response_id: Optional[str] = None

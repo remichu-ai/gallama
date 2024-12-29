@@ -30,7 +30,8 @@ from .internal_ws import (
     WSInterTTS,
     TTSEvent,
     WSInterConfigUpdate,
-    WSInterSTTResponse
+    WSInterSTTResponse,
+    WSInterCancel
 )
 
 from .generation_data_class import (

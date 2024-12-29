@@ -10,14 +10,17 @@ class WSInterConfigUpdate(BaseModel):
     type: Literal["common.config_update"]
     config: SessionConfig
 
+class WSInterCancel(BaseModel):
+    type: Literal["common.cancel"]
+
 
 # STT
 class WSInterSTT(BaseModel):
-    type: Literal["stt.add_sound_chunk", "stt.sound_done", "stt.clear_buffer"]
+    type: Literal["stt.add_sound_chunk", "stt.sound_done", "stt.buffer_clear", "stt.one_time_transcribe"]
     sound: Optional[str] = None
 
 class WSInterSTTResponse(BaseModel):
-    type: Literal["stt.add_transcription", "stt.transcription_complete", "stt.clear_buffer_done", "stt.transcription_complete"]
+    type: Literal["stt.add_transcription", "stt.transcription_complete", "stt.buffer_cleared", "stt.transcription_complete", "stt.one_time_transcribe"]
     transcription: Optional[str] = None
     start_time: Optional[float] = None
     end_time: Optional[float] = None
