@@ -67,7 +67,7 @@ class ModelInterface(ABC):
                 self.cache_size = max(self.cache_size, self.max_seq_len)
 
         # self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
-        self.cache_quant = model_spec.cache_quant or "Q4"       # default to cache quant 4
+        self.cache_quant = model_spec.cache_quant or "Q6"       # default to cache quant 6
         # self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.backend = model_spec.backend   # default should be set as exllama if not defined
         # self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)

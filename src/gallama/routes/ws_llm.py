@@ -1,10 +1,11 @@
 # llm_server.py
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
-from typing import Dict, List, Optional, Literal, Union, AsyncGenerator, TypeVar
-from pydantic import BaseModel
+from typing import AsyncGenerator, TypeVar
 from collections import OrderedDict
+
+from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item
 from ..logger import logger
-from gallama.data_classes.realtime_data_classes import *
+from gallama.data_classes.realtime_client_proto import *
 from ..routes.chat import validate_api_request
 from ..data_classes.data_class import (
     BaseMessage,
@@ -25,7 +26,7 @@ from ..data_classes.generation_data_class import (
     GenEnd,
     GenStart,
 )
-from ..data_classes.realtime_data_classes import (
+from ..data_classes.realtime_client_proto import (
     SessionConfig
 )
 import time

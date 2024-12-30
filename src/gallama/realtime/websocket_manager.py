@@ -2,29 +2,28 @@ import asyncio
 import json
 import traceback
 from starlette.websockets import WebSocket
-from sympy.codegen.ast import continue_
-from websockets import ConnectionClosed, WebSocketException
-from gallama.logger import logger
-from gallama.data_classes.realtime_data_classes import (
+from websockets import ConnectionClosed
+from gallama.data_classes.realtime_client_proto import (
     SessionConfig,
     ConversationItem,
     ConversationItemMessage,
     ContentType,
     MessageContent,
     ResponseCreate,
-    ConversationItemMessageServer,
-    MessageContentServer,
-    ConversationItemServer,
     ConversationItemInputAudioTranscriptionComplete,
     ConversationItemCreate,
     ConversationItemTruncate
 )
+from gallama.data_classes.realtime_server_proto import MessageContentServer, ConversationItemMessageServer, \
+    ConversationItemServer
 from gallama.data_classes.internal_ws import WSInterSTTResponse, WSInterSTT
 from gallama.realtime.response import Response
 from gallama.realtime.session_manager import SessionManager
 from gallama.realtime.websocket_handler import WebSocketMessageHandler
 from gallama.realtime.websocket_session import WebSocketSession
+from ..dependencies_server import get_server_logger
 
+logger = get_server_logger()
 
 class WebSocketManager:
     """Orchestrates the overall WebSocket operations"""

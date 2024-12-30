@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 
-from gallama.data_classes.realtime_data_classes import SessionConfig
+from gallama.data_classes.realtime_client_proto import SessionConfig
 from gallama.realtime.websocket_session import WebSocketSession
 
 

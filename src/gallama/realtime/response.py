@@ -7,15 +7,18 @@ import websockets
 from starlette.websockets import WebSocket
 from websockets.protocol import State
 import samplerate
-from gallama.logger import logger
 from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS
-from gallama.data_classes.realtime_data_classes import UsageResponseRealTime, ResponseContentPartDoneEvent, \
-    parse_conversation_item, ServerResponse, ResponseDone, ResponseCreated, ConversationItemCreated, \
-    ResponseOutput_ItemAdded, ResponseDelta, ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, ResponseCancel,\
-    ResponseCreate, SessionConfig, ResponseContentPartAddedEvent
+from gallama.data_classes.realtime_client_proto import ResponseCancel,\
+    ResponseCreate, SessionConfig
+from gallama.data_classes.realtime_server_proto import UsageResponseRealTime, ServerResponse, ResponseCreated, \
+    ResponseOutput_ItemAdded, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent, ResponseDone, ResponseDelta, \
+    ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, parse_conversation_item, ConversationItemCreated
 from gallama.data_classes.internal_ws import WSInterCancel
 from gallama.realtime.websocket_client import WebSocketClient
 
+from ..dependencies_server import get_server_logger
+
+logger = get_server_logger()
 
 class Response:
     """ this class managing the current response to client"""

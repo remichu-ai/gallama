@@ -316,7 +316,7 @@ class TextToTextSegment:
                     if complete_text:
                         segments = self.segment_text(complete_text)
                         for segment in segments:
-                            logger.info(f"segment: {segment}")
+                            logger.debug(f"segment: {segment}")
                             await self.processing_queue.put(segment)
 
                 # Handle TTSEvent

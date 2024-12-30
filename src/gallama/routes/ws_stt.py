@@ -6,7 +6,7 @@ import librosa
 from typing import Dict, Optional, Literal
 from pydantic import BaseModel
 from ..dependencies import get_model_manager
-from ..data_classes.realtime_data_classes import SessionConfig
+from ..data_classes.realtime_client_proto import SessionConfig
 from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse
 from gallama.logger.logger import logger
 import base64

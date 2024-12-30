@@ -1,6 +1,5 @@
 from silero_vad import load_silero_vad, VADIterator
-from ..logger.logger import logger
-from ..data_classes.realtime_data_classes import TurnDetectionConfig
+from ..data_classes.realtime_client_proto import TurnDetectionConfig
 import numpy as np
 from typing import Tuple, Optional, Dict
 import torch
@@ -8,6 +7,9 @@ from dataclasses import dataclass
 from collections import deque
 from .audio_preprocessor import AudioPreprocessor
 
+from ..dependencies_server import get_server_logger
+
+logger = get_server_logger()
 
 @dataclass
 class VADState:

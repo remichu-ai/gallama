@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 
 from pydantic import BaseModel, validator
-from .realtime_data_classes import SessionConfig
+from .realtime_client_proto import SessionConfig
 # this file contain websocket message schema for message sent between internal ws and tts, llm, stt
 
 

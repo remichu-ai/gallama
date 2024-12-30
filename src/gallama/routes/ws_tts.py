@@ -10,7 +10,7 @@ import numpy as np
 import json
 from pathlib import Path
 
-from ..data_classes.realtime_data_classes import SessionConfig
+from ..data_classes.realtime_client_proto import SessionConfig
 from ..dependencies import get_model_manager
 from gallama.logger.logger import logger
 router = APIRouter(prefix="", tags=["tts"])

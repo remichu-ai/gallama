@@ -7,24 +7,23 @@ import base64
 import soundfile as sf
 import aiohttp
 import io
-from gallama.data_classes.realtime_data_classes import (
-    ConversationItemServer,
+from gallama.data_classes.realtime_client_proto import (
     ConversationItem,
-    ConversationItemCreated,
-    parse_conversation_item,
-    ConversationItemMessageServer,
-    MessageContentServer,
-    ConversationItemDeleted,
     ConversationItemDelete,
     ConversationItemTruncate,
-    ConversationItemTruncated,
 )
+from gallama.data_classes.realtime_server_proto import ConversationItemDeleted, ConversationItemTruncated, \
+    MessageContentServer, ConversationItemMessageServer, ConversationItemServer, parse_conversation_item, \
+    ConversationItemCreated
 from gallama.data_classes.internal_ws import (
     WSInterSTT
 )
 from gallama.realtime.websocket_client import WebSocketClient
-from gallama.logger.logger import logger
 from difflib import SequenceMatcher
+
+from ..dependencies_server import get_server_logger
+
+logger = get_server_logger()
 
 
 T = TypeVar("T", bound=ConversationItemServer)

@@ -1,7 +1,7 @@
 import asyncio
 from typing import List
 
-from gallama.data_classes.realtime_data_classes import SessionConfig
+from gallama.data_classes.realtime_client_proto import SessionConfig
 from gallama.realtime.message_queue import MessageQueues
 from .vad import VADProcessor
 from fastapi import WebSocket

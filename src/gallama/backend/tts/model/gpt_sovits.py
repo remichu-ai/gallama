@@ -144,7 +144,7 @@ class TTS_GPT_SoVITS(TTSBase):
             If stream=False: Tuple of (sample_rate, concatenated_audio_data)
             If stream=True: None (audio chunks are sent to the provided queue)
         """
-        logger.info(f"----------Converting: {text}")
+        logger.debug(f"Converting TTS: {text}")
 
         if stream and not queue:
             # for streaming, the result will be written directly to the queue hence it is required parameter

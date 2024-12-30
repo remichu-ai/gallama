@@ -11,10 +11,10 @@ from gallama.config import ConfigManager
 import psutil
 import asyncio
 from gallama.server_engine import log_model_status
-from gallama.dependencies_server import get_server_manager, get_server_logger
+from gallama.dependencies_server import get_server_manager, get_logger
 
 
-server_logger = get_server_logger()
+logger = get_logger()
 
 router = APIRouter(prefix="", tags=["server_management"])
 
@@ -38,7 +38,7 @@ async def load_models(model_request, task_id):
         models_to_load = model_request if isinstance(model_request, List) else [model_request]
         for model in models_to_load:
             await server_manager.model_load_queue.put(model)
-            server_logger.info(f"Model {model} instance queued for loading")
+            logger.info(f"Model {model} instance queued for loading")
 
         # Wait for all models to be loaded
         await server_manager.model_load_queue.join()
@@ -54,13 +54,13 @@ async def add_model(model_request: Union[ModelSpec, List[ModelSpec]], background
 
     task_id = str(uuid.uuid4())
     # Log the incoming request body
-    server_logger.info(f"Received raw request: {await request.body()}")
+    logger.info(f"Received raw request: {await request.body()}")
 
 
-    server_logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}")
+    logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}")
 
     if any(instance.status == "loading" for model in server_manager.models.values() for instance in model.instances):
-        server_logger.warning("Another model is currently loading. Request rejected.")
+        logger.warning("Another model is currently loading. Request rejected.")
         raise HTTPException(status_code=409, detail="Another model is currently loading. Please try again later.")
 
     server_manager.task_status[task_id] = "queued"
@@ -87,7 +87,7 @@ async def stop_model_by_port(request: StopModelByPort):
             break
 
     if not model_to_remove or not instance_to_remove:
-        server_logger.warning(f"Attempted to stop non-existent instance on port {request.port}")
+        logger.warning(f"Attempted to stop non-existent instance on port {request.port}")
         return
 
     try:
@@ -96,17 +96,17 @@ async def stop_model_by_port(request: StopModelByPort):
         try:
             process.wait(timeout=10)
         except psutil.TimeoutExpired:
-            server_logger.warning(f"Instance on port {request.port} did not terminate gracefully. Forcing kill.")
+            logger.warning(f"Instance on port {request.port} did not terminate gracefully. Forcing kill.")
             process.kill()
 
         if process.is_running():
-            server_logger.error(f"Failed to kill process for instance on port {request.port}")
+            logger.error(f"Failed to kill process for instance on port {request.port}")
         else:
-            server_logger.info(f"Successfully stopped instance on port {request.port}")
+            logger.info(f"Successfully stopped instance on port {request.port}")
     except psutil.NoSuchProcess:
-        server_logger.warning(f"Process for instance on port {request.port} no longer exists")
+        logger.warning(f"Process for instance on port {request.port} no longer exists")
     except Exception as e:
-        server_logger.exception(f"Error stopping instance on port {request.port}: {str(e)}")
+        logger.exception(f"Error stopping instance on port {request.port}: {str(e)}")
     finally:
         # Remove the instance from the model
         server_manager.models[model_to_remove].instances = [
@@ -117,8 +117,8 @@ async def stop_model_by_port(request: StopModelByPort):
         if not server_manager.models[model_to_remove].instances:
             del server_manager.models[model_to_remove]
 
-        server_logger.info(f"Cleaned up instance on port {request.port}")
-        log_model_status(server_manager.models, custom_logger=server_logger)  # Log status after removal
+        logger.info(f"Cleaned up instance on port {request.port}")
+        log_model_status(server_manager.models, custom_logger=logger)  # Log status after removal
 
 
 # Add a periodic health check function
@@ -132,22 +132,22 @@ async def periodic_health_check():
                     async with httpx.AsyncClient() as client:
                         response = await client.get(f"http://localhost:{instance.port}/health", timeout=5.0)
                         if response.status_code != 200:
-                            server_logger.warning(f"Instance {instance.port} of model {model_name} is not healthy")
+                            logger.warning(f"Instance {instance.port} of model {model_name} is not healthy")
                             # Implement recovery logic here (e.g., restart the instance)
                 except Exception as e:
-                    server_logger.error(f"Error checking health of instance {instance.port} of model {model_name}: {str(e)}")
+                    logger.error(f"Error checking health of instance {instance.port} of model {model_name}: {str(e)}")
                     # Implement recovery logic here (e.g., restart the instance)
 
 async def stop_model_instance(model: str, port: int):
     server_manager = get_server_manager()
 
     if model not in server_manager.models:
-        server_logger.warning(f"Attempted to stop instance of non-existent model: {model}")
+        logger.warning(f"Attempted to stop instance of non-existent model: {model}")
         return
 
     instance = next((inst for inst in server_manager.models[model].instances if inst.port == port), None)
     if not instance:
-        server_logger.warning(f"Attempted to stop non-existent instance of model {model} on port {port}")
+        logger.warning(f"Attempted to stop non-existent instance of model {model} on port {port}")
         return
 
     try:
@@ -156,23 +156,23 @@ async def stop_model_instance(model: str, port: int):
         try:
             process.wait(timeout=10)
         except psutil.TimeoutExpired:
-            server_logger.warning(f"Model {model} instance on port {port} did not terminate gracefully. Forcing kill.")
+            logger.warning(f"Model {model} instance on port {port} did not terminate gracefully. Forcing kill.")
             process.kill()
 
         if process.is_running():
-            server_logger.error(f"Failed to kill process for model {model} instance on port {port}")
+            logger.error(f"Failed to kill process for model {model} instance on port {port}")
         else:
-            server_logger.info(f"Successfully stopped model {model} instance on port {port}")
+            logger.info(f"Successfully stopped model {model} instance on port {port}")
     except psutil.NoSuchProcess:
-        server_logger.warning(f"Process for model {model} instance on port {port} no longer exists")
+        logger.warning(f"Process for model {model} instance on port {port} no longer exists")
     except Exception as e:
-        server_logger.exception(f"Error stopping model {model} instance on port {port}: {str(e)}")
+        logger.exception(f"Error stopping model {model} instance on port {port}: {str(e)}")
     finally:
         server_manager.models[model].instances = [inst for inst in server_manager.models[model].instances if inst.port != port]
         if not server_manager.models[model].instances:
             del server_manager.models[model]
-        server_logger.info(f"Cleaned up model {model} instance on port {port}")
-        log_model_status(server_manager.models, custom_logger=server_logger)   # Log status after removing a model instance
+        logger.info(f"Cleaned up model {model} instance on port {port}")
+        log_model_status(server_manager.models, custom_logger=logger)   # Log status after removing a model instance
 
 
 @router.get("/task_status/{task_id}")
@@ -212,7 +212,7 @@ async def list_models():
 async def list_available_models():
     config_manager = ConfigManager()
     downloaded_models = config_manager.list_downloaded_models_dict
-    # server_logger.info(downloaded_models)
+    # logger.info(downloaded_models)
     return downloaded_models
 
 

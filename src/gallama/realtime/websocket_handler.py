@@ -1,12 +1,15 @@
-from ..logger.logger import logger
+from ..data_classes.realtime_server_proto import InputAudioBufferSpeechStarted, InputAudioBufferSpeechStopped
+# from ..logger.logger import logger
 from gallama.realtime.websocket_client import WebSocketClient
 from gallama.realtime.websocket_session import WebSocketSession
 from fastapi import WebSocket
 from .vad import VADProcessor
 import base64
-from gallama.data_classes.realtime_data_classes import *
+from gallama.data_classes.realtime_client_proto import *
 from gallama.data_classes.internal_ws import *
+from ..dependencies_server import get_server_logger
 
+logger = get_server_logger()
 
 class WebSocketMessageHandler:
     """
