@@ -30,10 +30,7 @@ class ToolChoice(str, Enum):
 
 
 class AudioTranscriptionConfig(BaseModel):
-    model: Literal["whisper-1"]
-
-
-
+    model: Literal["whisper-1"] = "whisper-1"
 
 
 class ToolParameter(BaseModel):
@@ -65,14 +62,15 @@ class AudioBufferClear(BaseModel):
 class TurnDetectionConfig(BaseModel):
     type: Literal["server_vad"] = "server_vad"
     threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
-    prefix_padding_ms: Optional[int] = Field(ge=0, default=500)
-    silence_duration_ms: Optional[int] = Field(ge=0, default=700)
+    prefix_padding_ms: Optional[int] = Field(ge=0, default=700)
+    silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True
+    enable_preprocessing: Optional[bool] = True
 
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])
     instructions: Optional[str] = ""    # system prompt
-    voice: Optional[Voice] = None
+    voice: Optional[str] = None
     input_audio_format: Optional[AudioFormat] = None
     output_audio_format: Optional[AudioFormat] = None
     input_audio_transcription: Optional[AudioTranscriptionConfig] = None
@@ -177,7 +175,7 @@ class ConversationItemFunctionCallOutput(ConversationItemBase):
     call_id: str
     output: str
 
-# Define the discriminated union
+# Define the union
 ConversationItem = Union[
     ConversationItemMessage,
     ConversationItemFunctionCall,
@@ -213,7 +211,6 @@ class ConversationItemInputAudioTranscriptionComplete(BaseModel):
 
 
 
-
 class ResponseCreate(BaseModel):
     event_id: Optional[str] = None
     type: Literal["response.create"] = "response.create"
@@ -238,7 +235,6 @@ class SessionUpdate(BaseModel):
 
 
 # Server side event ####################################################################################
-
 
 class ContentTypeServer(str, Enum):
     INPUT_TEXT = "input_text"
@@ -334,15 +330,17 @@ class ContentPart(BaseModel):
 
 # Server Response classes from here ###########################################
 class UsageResponseRealTime(BaseModel):
-    class CachedToken(BaseModel):
-        text_tokens: int = 0
-        audio_tokens: int = 0
 
     class InputTokenDetail(BaseModel):
+        class CachedToken(BaseModel):
+            """this class was returned but not even mentioned in docs"""
+            text_tokens: int = 0
+            audio_tokens: int = 0
+
         cached_tokens: int = 0
         text_tokens: int = 0
         audio_tokens: int = 0
-        cached_tokens_details: int = 0
+        cached_tokens_details: CachedToken = Field(default_factory=CachedToken)
 
     class OutputTokenDetail(BaseModel):
         text_tokens: int = 0
@@ -351,8 +349,8 @@ class UsageResponseRealTime(BaseModel):
     total_tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    input_token_details: InputTokenDetail = InputTokenDetail()
-    output_token_details: OutputTokenDetail = OutputTokenDetail()
+    input_token_details: InputTokenDetail = Field(default_factory=InputTokenDetail)
+    output_token_details: OutputTokenDetail = Field(default_factory=OutputTokenDetail)
 
 
 
@@ -362,7 +360,7 @@ class ServerResponse(BaseModel):
     status: Literal["in_progress", "completed", "cancelled", "failed", "incomplete"]
     status_details: Optional[Dict] = None
     output: Optional[List[ConversationItemServer]] = []
-    usage: Optional[Dict] = None
+    usage: Optional[UsageResponseRealTime] = None
 
 
 

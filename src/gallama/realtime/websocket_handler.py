@@ -4,28 +4,6 @@ from gallama.realtime.websocket_session import WebSocketSession
 from fastapi import WebSocket
 from .vad import VADProcessor
 import base64
-# from gallama.data_classes.realtime_data_classes import (
-#     SessionConfig,
-#     ConversationItem,
-#     ResponseCreate,
-#     ConversationItemCreate,
-#     ContentType,
-#     MessageContent,
-#     ConversationItemMessage,
-#     ConversationItemFunctionCall,
-#     ConversationItemFunctionCallOutput,
-#     ResponseCreateServer,
-#     ContentPart,
-#     ResponseContentPartAddedEvent,
-#     ResponseTextDelta,
-#     ResponseTextDone,
-#     ConversationItemCreated,
-#     ConversationItemMessageServer,
-#     ConversationItemServer,
-#     ResponseCreated,
-#     ResponseOutput_ItemAdded
-# )
-
 from gallama.data_classes.realtime_data_classes import *
 from gallama.data_classes.internal_ws import *
 
@@ -98,6 +76,8 @@ class WebSocketMessageHandler:
             else:
                 session.vad_processor = None
                 session.vad_item_id = None
+
+        logger.info(f"Session updated: {session.config.model_dump()}")
 
         await websocket.send_json({
             "event_id": await session.queues.next_event(),

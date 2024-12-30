@@ -27,7 +27,7 @@ include = ["gallama*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-"gallama" = ["data/*", "data/*/*"]
+"gallama" = ["data/*", "data/*/*", "backend/tts/model/gpt_sovits_source"]
 
 [tool.setuptools]
 include-package-data = true

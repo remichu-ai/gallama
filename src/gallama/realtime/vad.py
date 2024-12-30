@@ -6,6 +6,7 @@ from typing import Tuple, Optional, Dict
 import torch
 from dataclasses import dataclass
 from collections import deque
+from .audio_preprocessor import AudioPreprocessor
 
 
 @dataclass
@@ -18,16 +19,37 @@ class VADState:
     speech_duration: float = 0.0  # Track current speech duration
 
 
+@dataclass
+class PreprocessingConfig:
+    """Separate configuration for audio preprocessing"""
+    enable_highpass: bool = True
+    enable_compression: bool = True
+    highpass_cutoff: float = 100
+    compression_threshold: float = -20
+    compression_ratio: float = 3.0
+    attack_time: float = 0.005
+    release_time: float = 0.1
+    makeup_gain: float = 7.0
+
+
 class VADProcessor:
-    def __init__(self, turn_detection_config: TurnDetectionConfig):
+    def __init__(self, turn_detection_config: TurnDetectionConfig, preprocessing_config: PreprocessingConfig = None):
         self.model = load_silero_vad()
         self.model.eval()
 
-        # Configuration
+        # Initialize audio preprocessor if enabled and config provided
+        if turn_detection_config.enable_preprocessing:
+            if preprocessing_config is None:
+                preprocessing_config = PreprocessingConfig()  # Use defaults if not provided
+            self.audio_preprocessor = AudioPreprocessor(preprocessing_config)
+        else:
+            self.audio_preprocessor = None
+
+        # Rest of your existing initialization code...
         self.threshold = turn_detection_config.threshold
         self.silence_duration_ms = turn_detection_config.silence_duration_ms
         self.prefix_padding_ms = turn_detection_config.prefix_padding_ms
-        self.min_speech_duration_ms = 250  # Hardcoded minimum speech duration
+        self.min_speech_duration_ms = 200
         self.create_response = turn_detection_config.create_response
 
         # Fixed parameters
@@ -54,6 +76,8 @@ class VADProcessor:
 
     def reset(self):
         """Reset all state"""
+        if self.audio_preprocessor:
+            self.audio_preprocessor.reset()
         self.vad_iterator.reset_states()
         self.current_chunk = np.array([], dtype=np.float32)
         self.state = VADState()
@@ -92,8 +116,7 @@ class VADProcessor:
                     self.state.potential_speech_start = self.total_audio_processed
 
                 # Calculate current speech duration
-                current_duration = (
-                                               self.total_audio_processed - self.state.potential_speech_start) * 1000  # Convert to ms
+                current_duration = (self.total_audio_processed - self.state.potential_speech_start) * 1000  # Convert to ms
 
                 # Check if speech duration meets minimum requirement
                 if current_duration >= self.min_speech_duration_ms:
@@ -133,6 +156,10 @@ class VADProcessor:
         Process an audio chunk and determine if it contains speech
         Returns: (should_buffer, speech_dict)
         """
+        # Apply preprocessing if enabled
+        if self.audio_preprocessor:
+            audio_chunk = self.audio_preprocessor.process_chunk(audio_chunk)
+
         # Convert and append audio
         audio_float = self._convert_audio(audio_chunk)
         if len(audio_float) == 0:

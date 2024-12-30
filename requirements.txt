@@ -37,7 +37,6 @@ silero-vad
 faster-whisper
 
 # gpt_sovits
-numpy==1.26.4
 librosa
 soundfile
 ffmpeg-python
@@ -48,6 +47,15 @@ pypinyin
 jieba-fast
 wordsegment
 g2p-en
+matplotlib
+LangSegment
+numpy==1.26.4
+ffmpeg-python
+nltk
+# nltk.download('averaged_perceptron_tagger_eng')
+# sudo apt install ffmpeg
+# cuBLAS
+# https://developer.nvidia.com/cudnn
 
 #tts
 samplerate
