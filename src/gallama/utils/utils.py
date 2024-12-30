@@ -163,44 +163,49 @@ def is_flash_attention_installed() -> (bool, str):
     except ImportError:
         return False, None
 
+
 async def parse_request_body(
     request: Request,
-) -> Tuple[Optional[Union[dict, str]], bool]:
+) -> Tuple[Optional[Union[dict, str, bytes]], bool]:
     """
-    Parse the request body intelligently based on content type.
-    Returns both the parsed body and a flag indicating if it's a multipart request.
-
-    Args:
-        request (Request): The incoming HTTP request.
-
-    Returns:
-        Tuple[Optional[Union[dict, str]], bool]:
-            - First element: Parsed body content
-            - Second element: Boolean indicating if it's a multipart request
+    Parse the request body while preserving it for future use.
     """
     try:
-        content_type = request.headers.get("Content-Type", "")
+        # Ensure we have the raw body
+        if not hasattr(request, '_body'):
+            request._body = await request.body()
+            async def get_body():
+                return request._body
+            request.body = get_body
 
-        # Handle multipart form data (like audio files) differently
-        if "multipart/form-data" in content_type:
-            return await request.body(), True
+        content_type = request.headers.get("Content-Type", "").lower()
+        body = request._body
 
-        body = await request.body()
         if not body:
             return {}, False
 
+        # Handle multipart form data
+        if "multipart/form-data" in content_type:
+            return body, True
+
+        # Handle JSON content
         if "application/json" in content_type:
-            return json.loads(body.decode("utf-8")), False
+            try:
+                return json.loads(body.decode("utf-8")), False
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {e}")
+                return body, False
+
+        # Handle text content
         elif "text/" in content_type:
-            return {"text": body.decode("utf-8")}, False
-        else:
-            # For binary or unknown content types, return raw body
-            return body, False
+            return body.decode("utf-8"), False
+
+        # For other content types, return raw bytes
+        return body, False
 
     except Exception as e:
-        logger.error(f"Error parsing request body: {e}")
+        logger.error(f"Error parsing request body: {e}", exc_info=True)
         return {}, False
-
 
 async def get_model_from_body(request: Request) -> str:
     """

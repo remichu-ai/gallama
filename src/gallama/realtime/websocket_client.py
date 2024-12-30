@@ -12,17 +12,19 @@ from gallama.logger import logger
 
 class WebSocketClient:
     def __init__(
-        self,
-        uri: str,
-        reconnect_interval: float = 5.0,
-        max_retries: int = 5,
-        auto_reconnect: bool = True
+            self,
+            uri: str,
+            reconnect_interval: float = 5.0,
+            max_retries: int = 5,
+            auto_reconnect: bool = True,
+            max_receive_retries: int = 3  # Added parameter for receive_message retries
     ):
         self.uri = uri
         self.connection: Optional[websockets.WebSocketClientProtocol] = None
         self.reconnect_interval = reconnect_interval
         self.max_retries = max_retries
         self.auto_reconnect = auto_reconnect
+        self.max_receive_retries = max_receive_retries  # Store the max receive retries
         self.retry_count = 0
         self.is_connecting = False
 
@@ -50,7 +52,6 @@ class WebSocketClient:
         """Ensures that the connection is active and attempts to reconnect if necessary."""
         try:
             # First check if we have an active connection
-            # test = self.connection.state
             if self.connection and self.connection.state == State.OPEN:
                 try:
                     # Verify connection is truly alive with ping
@@ -134,19 +135,55 @@ class WebSocketClient:
                 return await self.send_pydantic_message(message)
             return False
 
-    async def receive_message(self, timeout=10) -> Optional[str]:
-        """Receives a message from the WebSocket connection."""
-        try:
-            if not await self.ensure_connection():
-                return None
+    async def receive_message(self, timeout: int = 30, max_retries: Optional[int] = None) -> Optional[str]:
+        """
+        Receives a message from the WebSocket connection with retry logic.
 
-            return await asyncio.wait_for(self.connection.recv(),timeout=timeout)
-        except WebSocketException as e:
-            logger.error(f"Error receiving message: {str(e)}")
-            if self.auto_reconnect:
-                self.connection = None
-                return await self.receive_message()
-            return None
+        Args:
+            timeout: Time in seconds to wait for each receive attempt
+            max_retries: Maximum number of retry attempts (defaults to self.max_receive_retries)
+
+        Returns:
+            The received message as a string, or None if receiving failed
+        """
+        retries = 0
+        max_attempts = max_retries if max_retries is not None else self.max_receive_retries
+
+        while retries <= max_attempts:
+            try:
+                if not await self.ensure_connection():
+                    logger.warning(f"Connection failed on receive attempt {retries + 1}")
+                    retries += 1
+                    if retries > max_attempts:
+                        return None
+                    continue
+
+                return await asyncio.wait_for(self.connection.recv(), timeout=timeout)
+
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout on receive attempt {retries + 1}")
+                retries += 1
+                if retries > max_attempts:
+                    logger.error("Max receive retry attempts reached")
+                    return None
+
+            except WebSocketException as e:
+                logger.error(f"Error receiving message on attempt {retries + 1}: {str(e)}")
+                if self.auto_reconnect:
+                    self.connection = None
+                    retries += 1
+                    if retries > max_attempts:
+                        logger.error("Max receive retry attempts reached")
+                        return None
+                    await asyncio.sleep(self.reconnect_interval)
+                else:
+                    return None
+
+            except Exception as e:
+                logger.error(f"Unexpected error on receive attempt {retries + 1}: {str(e)}")
+                retries += 1
+                if retries > max_attempts:
+                    return None
 
     async def close(self):
         """Closes the WebSocket connection."""

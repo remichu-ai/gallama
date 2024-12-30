@@ -192,22 +192,20 @@ def make_server(args):
     async def log_requests(request: Request, call_next):
         try:
             # Log request details for specific methods
-            if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
-                # Get both body content and multipart flag
+            if request.method in ("POST", "PUT", "PATCH"):
+                # Parse body and preserve it
                 body_content, is_multipart = await parse_request_body(request)
 
-                # Format the content for logging
+                # Format content for logging
                 if is_multipart:
                     request_content = "Multipart Form Data (File Upload)"
                 elif isinstance(body_content, dict):
                     request_content = json.dumps(body_content, indent=2)
                 elif isinstance(body_content, str):
                     try:
-                        # Attempt to format as JSON if possible
                         parsed_content = json.loads(body_content)
                         request_content = json.dumps(parsed_content, indent=2)
                     except json.JSONDecodeError:
-                        # Leave as raw string if it's not JSON
                         request_content = body_content
                 else:
                     request_content = str(body_content)
@@ -223,12 +221,14 @@ def make_server(args):
 
             # Proceed with the request
             response = await call_next(request)
+            return response
 
-        except RequestValidationError as e:
-            logger.debug(f"Validation error:\n{e}")
-            response = JSONResponse(status_code=422, content={"detail": "Validation error"})
-
-        return response
+        except Exception as e:
+            logger.error(f"Middleware error: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error in middleware"}
+            )
 
     if model_spec:
         # load model

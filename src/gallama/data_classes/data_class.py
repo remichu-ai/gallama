@@ -134,6 +134,7 @@ class FunctionSpec(BaseModel):
     name: str
     description: Optional[str] = None
     parameters: ParameterSpec = None
+    strict: bool = True     # not making any difference at the moment
 
 
 class ToolSpec(BaseModel):
@@ -316,10 +317,30 @@ class Choice(BaseModel):
         return cls(message=message, finish_reason=finish_reason)
 
 
+class ChoiceDeltaToolCallFunction(BaseModel):
+    arguments: Optional[str] = None
+    name: Optional[str] = None
+
+
+class ChoiceDeltaToolCall(BaseModel):
+    index: Optional[int] = None
+    id: Optional[str] = None
+    function: Optional[ChoiceDeltaToolCallFunction] = None
+    type: Optional[str] = None
+
+
+class ChoiceDelta(BaseModel):
+    content: Optional[str] = None
+    function_call: Optional[str] = None
+    refusal: Optional[str] = None
+    role: Optional[str] = None
+    tool_calls: Optional[List[ChoiceDeltaToolCall]] = None
+
+
 class StreamChoice(BaseModel):
     index: int
-    delta: ChatMessage = None
-    finish_reason: Optional[Literal["stop", "length", "function_call", "tool_calls"]] = None
+    delta: ChoiceDelta
+    finish_reason: Optional[Literal["stop", "length", "tool_calls"]] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -430,51 +451,6 @@ class ModelObjectResponse(BaseModel):
     object: str = Field(description='object type', default="list")
     data: List[ModelObject] = []
 
-# class GenStart(BaseModel):
-#     """ this item signal start of generation"""
-#     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-#
-#     gen_type: Literal["text", "tool", "thinking"]  = Field(description='True to signal end of generation', default="text")
-#
-# class GenEnd(BaseModel):
-#     """ this item signal end of generation"""
-#     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-#
-#     generation_end: bool = Field(description='True to signal end of generation', default=True)
-#
-#
-# class GenText(BaseModel):
-#     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-#
-#     text_type: Literal["text", "thinking", "tool"] = "text"
-#     content: str = Field(description='text or thinking')
-#     @classmethod
-#     def __instancecheck__(cls, instance):
-#         return isinstance(instance, cls)
-#
-#
-# class GenQueue(asyncio.Queue):
-#     def __init__(self, maxsize=0, allowed_types: List[str] = [GenText, GenerationStats, GenStart, GenEnd]):
-#         super().__init__(maxsize)
-#         self.allowed_types = allowed_types
-#
-#     def _check_item(self, item):
-#         if self.allowed_types:
-#             if not any(isinstance(item, allowed_type) for allowed_type in self.allowed_types):
-#                 raise TypeError(f"Item {item} is not an instance of any allowed types: {self.allowed_types}")
-#         return item
-#
-#     def _raise_type_error(self):
-#         raise TypeError(f"Items must be instances of: {', '.join(self.allowed_types)}")
-#
-#     async def put(self, item):
-#         self._check_item(item)
-#         await super().put(item)
-#
-#     def put_nowait(self, item):
-#         self._check_item(item)
-#         super().put_nowait(item)
-
 
 class Thinking(BaseModel):
     xml: str = Field(description='xml string')
@@ -536,11 +512,6 @@ class ModelSpec(BaseModel):
     # dont allow non recognizable option
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    # @validator('model_name', pre=True, always=True)
-    # def set_model_name(cls, v, values):
-    #     if v is None and 'model_id' in values:
-    #         return values['model_id'].split('/')[-1]
-    #     return v
 
     @validator('gpus', pre=True, always=True)
     def validate_gpus(cls, v):
@@ -665,54 +636,6 @@ class ModelSpec(BaseModel):
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
-
-    # def to_arg_string(self) -> str:
-    #     """
-    #     Generate a command-line argument string based on the instance's attributes.
-    #     This is needed for the server to generate the command to load children api server
-    #     Returns:
-    #         str: A string representation of the command-line arguments.
-    #     """
-    #     args = [f"model_id={self.model_id}"]
-    #
-    #     if self.model_name != self.model_id.split('/')[-1]:
-    #         args.append(f"model_name={self.model_name}")
-    #
-    #     if self.gpus is not None:
-    #         args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
-    #
-    #     if self.max_seq_len is not None:
-    #         args.append(f"max_seq_len={self.max_seq_len}")
-    #
-    #     if self.cache_size is not None:
-    #         args.append(f"cache_size={self.cache_size}")
-    #
-    #     if self.cache_quant is not None:
-    #         args.append(f"cache_quant={self.cache_quant}")
-    #
-    #     if self.backend != "exllama":  # Only include if it's not the default value
-    #         args.append(f"backend={self.backend}")
-    #
-    #     if self.tensor_parallel:
-    #         args.append(f"tp={self.tensor_parallel}")
-    #
-    #     # Add draft model parameters
-    #     if self.draft_model_id is not None:
-    #         args.append(f"draft_model_id={self.draft_model_id}")
-    #
-    #     if self.draft_model_name is not None and self.draft_model_name != self.draft_model_id.split('/')[-1]:
-    #         args.append(f"draft_model_name={self.draft_model_name}")
-    #
-    #     if self.draft_gpus is not None:
-    #         args.append(f"draft_gpus={','.join(str(vram) for vram in self.draft_gpus)}")
-    #
-    #     if self.draft_cache_size is not None:
-    #         args.append(f"draft_cache_size={self.draft_cache_size}")
-    #
-    #     if self.draft_cache_quant is not None:
-    #         args.append(f"draft_cache_quant={self.draft_cache_quant}")
-    #
-    #     return " ".join(args)
 
     def get_visible_gpu_indices(self) -> str:
         """

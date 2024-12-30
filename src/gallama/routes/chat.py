@@ -73,8 +73,10 @@ async def chat_completion(request: Request, query: ChatMLQuery):
     query = validate_api_request(query)
 
     try:
-
-        llm = model_manager.llm_dict[query.model]
+        # TODO to set setting for this
+        llm = model_manager.llm_dict.get(query.model)
+        if not llm:
+            llm = model_manager.llm_dict[list(model_manager.llm_dict.keys())[0]]
 
         # log if thinking is used
         if query.thinking_template:

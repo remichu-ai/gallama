@@ -2,7 +2,8 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from typing import AsyncGenerator, TypeVar
 from collections import OrderedDict
-
+from pydantic.json import pydantic_encoder
+from ..api_response.chat_response import chat_completion_response_stream
 from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item
 from ..logger import logger
 from gallama.data_classes.realtime_client_proto import *
@@ -18,6 +19,9 @@ from ..data_classes.data_class import (
     MultiModalTextContent,
     MultiModalImageContent,
     UsageResponse,
+    ToolSpec,
+    FunctionSpec,
+    ParameterSpec,
 )
 from ..data_classes.generation_data_class import (
     GenerationStats,
@@ -91,7 +95,8 @@ class WebSocketSession:
                 message_content: List[Union[MultiModalTextContent, MultiModalImageContent]] = []
 
                 for content in item.content:
-                    if content.type in [ContentTypeServer.INPUT_TEXT, ContentTypeServer.TEXT, ContentTypeServer.INPUT_AUDIO, ContentTypeServer.AUDIO]:
+                    if content.type in [ContentTypeServer.INPUT_TEXT, ContentTypeServer.TEXT,
+                                        ContentTypeServer.INPUT_AUDIO, ContentTypeServer.AUDIO]:
                         message_content.append(MultiModalTextContent(
                             type="text",
                             text=content.text or content.transcript
@@ -102,134 +107,74 @@ class WebSocketSession:
                     content=message_content
                 ))
 
-        # logger.info(f"messages: {self.conversation_history.items()}")
-        max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens!="inf" else None
+        # Convert tools from SessionConfig to ToolSpec format
+        tools = None
+        # if session_config.tools:
+        #     tools = [
+        #         ToolSpec(
+        #             type="function",
+        #             function=FunctionSpec(
+        #                 name=tool.name,
+        #                 description=tool.description,
+        #                 parameters=ParameterSpec(
+        #                     type="object",
+        #                     properties=tool.parameters.properties,
+        #                     required=tool.parameters.required
+        #                 )
+        #             )
+        #         ) for tool in session_config.tools
+        #     ]
+
+        max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens != "inf" else None
         query = ChatMLQuery(
             messages=messages,
             model=session_config.model,
             temperature=session_config.temperature if session_config else 0.8,
             stream=True,
             max_tokens=max_token_to_use,
-            artifact="No"
+            artifact="No",
+            tools=tools,
+            # tool_choice=session_config.tool_choice
         )
 
         return validate_api_request(query)
 
-    async def process_generation_stream(self, gen_queue: GenQueue, model_name: str) -> AsyncGenerator[dict, None]:
-        """Process generation queue and yield response chunks"""
-        unique_id = get_response_uid()
-        created = int(time.time())
-        full_response = ""
-        eos = False
-        gen_type = "text"
-        gen_stats = None
+    async def process_generation_stream(self, gen_queue: GenQueue, model_name: str, query: ChatMLQuery) -> \
+    AsyncGenerator[dict, None]:
+        """Process generation queue and yield response chunks by wrapping chat_completion_response_stream"""
+        # Create a mock request object since chat_completion_response_stream expects one
+        mock_request = type('MockRequest', (), {'is_disconnected': lambda: False})()
 
-        while not eos:
+        async for chunk in chat_completion_response_stream(
+                query=query,
+                gen_queue=gen_queue,
+                model_name=model_name,
+                request=mock_request
+        ):
             # Check if generation should be stopped
             if self.stop_event.is_set():
                 break
 
-            accumulated_text = ""
+            # Handle the [DONE] message
+            if chunk.get("data") == "[DONE]":
+                continue
 
-            try:
-                while True:
-                    item = gen_queue.get_nowait()
-                    if isinstance(item, GenText) and item.text_type == "text":
-                        accumulated_text += item.content
-                    elif isinstance(item, GenText) and item.text_type == "tool":
-                        accumulated_text += item.content
-                    elif isinstance(item, GenEnd):
-                        eos = True
-                        break
-                    elif isinstance(item, GenStart):
-                        gen_type = item.gen_type
-                    elif isinstance(item, GenerationStats):
-                        gen_stats = item
-            except asyncio.QueueEmpty:
-                pass
+            # Parse the chunk data
+            data = json.loads(chunk["data"])
 
-            if accumulated_text:
-                full_response += accumulated_text
-
-                if gen_type == "text":
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChatMessage(
-                                    role="assistant",
-                                    content=accumulated_text
-                                ),
-                            )
-                        ],
-                    )
-                    yield chunk_data.model_dump(exclude_unset=True)
-
-                elif gen_type == "tool":
-                    tool_response = json.loads(accumulated_text)
-                    tools_list = []
-                    for index, tool in enumerate(tool_response.get('functions_calling', [])):
-                        tool_id = get_response_tool_uid()
-                        tools_list.append(
-                            ToolCallResponse(
-                                id=tool_id,
-                                index=index,
-                                function=OneTool(
-                                    name=tool['name'],
-                                    arguments=json.dumps(tool['arguments']),
-                                )
-                            )
-                        )
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChatMessage(
-                                    role="assistant",
-                                    tool_calls=tools_list,
-                                ),
-                                finish_reason="tool_calls",
-                            )
-                        ],
-                    )
-                    yield chunk_data.model_dump(exclude_unset=True)
-
-            if eos:
-                logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
-
-                if gen_stats:
-                    usage_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        choices=[],
-                        usage=UsageResponse(
-                            prompt_tokens=gen_stats.input_tokens_count,
-                            completion_tokens=gen_stats.output_tokens_count,
-                            total_tokens=gen_stats.total_tokens_count,
-                        ),
-                    )
-                    yield {
-                        "type": "usage.update",
-                        "usage": json.dumps(usage_data.model_dump(exclude_unset=True))
-                    }
-
-                    logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+            # Handle usage statistics differently for websocket
+            if "usage" in data:
+                yield {
+                    "type": "usage.update",
+                    "usage": json.dumps(data)
+                }
+            # For normal message chunks, pass through the data
             else:
-                await asyncio.sleep(0.1)
+                yield data
 
     @staticmethod
     def update_ordered_dict(od: OrderedDict, target_key, new_value) -> OrderedDict:
         return OrderedDict((k, new_value if k == target_key else v) for k, v in od.items())
-
 
     async def handle_message(self, message: dict):
         """Handle incoming WebSocket messages for this session"""
@@ -264,7 +209,6 @@ class WebSocketSession:
                 "item_id": item_id
             })
 
-
         elif message.get("type") in ["response.create", "generate_cache"]:
             # Reset stop event before starting new generation
             self.stop_event.clear()
@@ -272,6 +216,9 @@ class WebSocketSession:
             gen_queue = GenQueue()
             response_config = self.session_config.merge(message.get("response"))
             query = self.convert_conversation_to_chatml(response_config)
+
+            # Ensure stream is set to True for streaming responses
+            query.stream = True
 
             model_manager = get_model_manager()
             llm = model_manager.llm_dict.get(query.model)
@@ -301,14 +248,14 @@ class WebSocketSession:
             )
 
             if message["type"] == "response.create":
-                async for chunk in self.process_generation_stream(gen_queue, llm.model_name):
+                async for chunk in self.process_generation_stream(gen_queue, llm.model_name, query):
                     await self.websocket.send_json(chunk)
 
                 await self.websocket.send_json({
                     "type": "generation.complete",
                 })
             else:  # generate_cache
-                async for _ in self.process_generation_stream(gen_queue, llm.model_name):
+                async for _ in self.process_generation_stream(gen_queue, llm.model_name, query):
                     pass
                 await self.websocket.send_json({
                     "type": "pre_cache.complete",
