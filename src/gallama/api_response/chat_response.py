@@ -83,7 +83,6 @@ async def chat_completion_response_stream(
     eos = False
     gen_type = "text"  # Default generation type
     gen_stats = None
-    is_first_chunk = True
 
     while not eos:
         accumulated_text = ""
@@ -111,24 +110,6 @@ async def chat_completion_response_stream(
         except asyncio.QueueEmpty:
             pass
 
-        if is_first_chunk:
-            # First chunk should contain the role
-            chunk_data = ChatCompletionResponse(
-                unique_id=unique_id,
-                model=model_name,
-                object="chat.completion.chunk",
-                created=created,
-                choices=[
-                    StreamChoice(
-                        index=0,
-                        delta=ChoiceDelta(
-                            role="assistant"
-                        )
-                    )
-                ]
-            )
-            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
-            is_first_chunk = False
 
         if accumulated_text or accumulated_thinking:
             full_response += accumulated_thinking + accumulated_text

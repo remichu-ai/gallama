@@ -317,7 +317,7 @@ class Response:
                                  f"min: {np.min(self.audio)}, max: {np.max(self.audio)}")
 
             except Exception as e:
-                logger.error(f"Error processing audio chunk: {str(e)}")
+                logger.error(f"Error update delta chunk: {str(e)}")
                 raise
 
         # send chunk delta
@@ -388,16 +388,17 @@ class Response:
                     llm_response = json.loads(message)
                     if llm_response.get("object") == "chat.completion.chunk":
                         chat_completion_chunk = ChatCompletionResponse(**llm_response)
+
                         text_chunk = chat_completion_chunk.choices[0].delta.content
+                        if text_chunk:
+                            if mode=="audio":
+                                # put generated text into tts queue for converting to audio
+                                await self.tts_queue.put(text_chunk)
 
-                        if mode=="audio":
-                            # put generated text into tts queue for converting to audio
-                            await self.tts_queue.put(text_chunk)
-
-                        await self.update_delta(
-                            mode="transcription" if mode=="audio" else "text",
-                            chunk=text_chunk
-                        )
+                            await self.update_delta(
+                                mode="transcription" if mode=="audio" else "text",
+                                chunk=text_chunk
+                            )
                     elif llm_response.get("type") == "conversation.update.ack":
                         logger.info("Received conversation update acknowledgement from ws_llm")
                     elif llm_response.get("type") == "usage.update":
@@ -420,7 +421,7 @@ class Response:
                         raise Exception(f"Unknown response type in update_text_or_transcription_task: {llm_response}")
 
                 except json.JSONDecodeError:
-                    logger.error(f"Failed to parse LLM message: {message}")
+                    logger.error(f"Failed to parse LLM message to dict: {message}")
                     continue
                 except asyncio.TimeoutError:
                     logger.error("LLM connection timed out")
