@@ -63,7 +63,7 @@ class TurnDetectionConfig(BaseModel):
     prefix_padding_ms: Optional[int] = Field(ge=0, default=700)
     silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True
-    enable_preprocessing: Optional[bool] = True
+    enable_preprocessing: Optional[bool] = False
 
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])

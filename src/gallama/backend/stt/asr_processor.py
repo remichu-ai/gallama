@@ -184,8 +184,12 @@ class ASRProcessor:
         Returns:
             A tuple (start_time, end_time, transcription) for newly committed transcriptions.
         """
-        # Save the audio buffer before processing
+        # Check if audio buffer is empty
+        if len(self.audio_buffer) == 0:
+            logger.debug("Audio buffer is empty, returning early")
+            return None, None, ""
 
+        # Save the audio buffer before processing
         self.save_debug_audio(self.audio_buffer, "_before")
 
         # Generate the prompt and context
@@ -193,52 +197,58 @@ class ASRProcessor:
 
         current_duration = len(self.audio_buffer) / self.SAMPLING_RATE
 
+        # Only check for minimum context if not final
         if current_duration < self.min_context_needed and not is_final:
             return None, None, ""  # Wait for more context
 
         logger.debug(f"PROMPT: {prompt}")
         logger.debug(f"CONTEXT: {context}")
         logger.debug(
-            f"Transcribing {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds from offset {self.audio_time_offset:.2f}")
+            f"Transcribing {current_duration:.2f} seconds from offset {self.audio_time_offset:.2f}")
 
-        # Perform transcription
-        asr_results = self.asr.transcribe_to_segment(self.audio_buffer, init_prompt=prompt)
+        try:
+            # Perform transcription
+            asr_results = self.asr.transcribe_to_segment(self.audio_buffer, init_prompt=prompt)
 
-        # Process timestamped words
-        timestamped_words = self.asr.segment_to_timestamped_words(asr_results)
-        self.transcript_buffer.insert(timestamped_words, self.audio_time_offset)
+            # Process timestamped words
+            timestamped_words = self.asr.segment_to_timestamped_words(asr_results)
+            self.transcript_buffer.insert(timestamped_words, self.audio_time_offset)
 
-        # Get transcriptions based on whether this is final processing or not
-        if is_final:
-            # For final processing, commit all remaining words
-            confirmed_transcriptions = self.transcript_buffer.set_final()
-            # Save final audio buffer
-            self.save_debug_audio(self.audio_buffer, "_final")
-        else:
-            # For normal streaming, use regular flush
-            confirmed_transcriptions = self.transcript_buffer.flush()
+            # Get transcriptions based on whether this is final processing or not
+            if is_final:
+                # For final processing, commit all remaining words
+                confirmed_transcriptions = self.transcript_buffer.set_final()
+                # Save final audio buffer
+                self.save_debug_audio(self.audio_buffer, "_final")
+            else:
+                # For normal streaming, use regular flush
+                confirmed_transcriptions = self.transcript_buffer.flush()
 
-        # Add to committed transcriptions list
-        self.committed_transcriptions.extend(confirmed_transcriptions)
+            # Add to committed transcriptions list
+            self.committed_transcriptions.extend(confirmed_transcriptions)
 
-        # Handle trimming based on confirmed transcriptions
-        if confirmed_transcriptions and self.trimming_mode == "sentence" and not is_final:
-            if len(self.audio_buffer) / self.SAMPLING_RATE > self.trimming_duration:
-                self.trim_to_last_completed_sentence()
+            # Handle trimming based on confirmed transcriptions
+            if confirmed_transcriptions and self.trimming_mode == "sentence" and not is_final:
+                if current_duration > self.trimming_duration:
+                    self.trim_to_last_completed_sentence()
 
-        # Handle segment-based trimming or fallback
-        if not is_final:  # Don't trim on final processing
-            if self.trimming_mode == "segment":
-                if len(self.audio_buffer) / self.SAMPLING_RATE > self.trimming_duration:
-                    # Save audio before trimming
-                    self.save_debug_audio(self.audio_buffer, "_before_trim")
-                    self.trim_to_last_completed_segment(asr_results)
-                    # Save audio after trimming
-                    self.save_debug_audio(self.audio_buffer, "_after_trim")
+            # Handle segment-based trimming or fallback
+            if not is_final:  # Don't trim on final processing
+                if self.trimming_mode == "segment":
+                    if current_duration > self.trimming_duration:
+                        # Save audio before trimming
+                        self.save_debug_audio(self.audio_buffer, "_before_trim")
+                        self.trim_to_last_completed_segment(asr_results)
+                        # Save audio after trimming
+                        self.save_debug_audio(self.audio_buffer, "_after_trim")
 
-        logger.info(
-            f"Audio buffer length after processing: {len(self.audio_buffer) / self.SAMPLING_RATE:.2f} seconds")
-        return self.format_output(confirmed_transcriptions)
+            logger.info(
+                f"Audio buffer length after processing: {current_duration:.2f} seconds")
+            return self.format_output(confirmed_transcriptions)
+
+        except Exception as e:
+            logger.error(f"Error in process_audio: {str(e)}")
+            return None, None, ""  # Return empty result on error
 
 
     def trim_to_last_completed_sentence(self):

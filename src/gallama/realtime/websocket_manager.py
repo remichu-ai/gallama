@@ -152,7 +152,7 @@ class WebSocketManager:
                 except asyncio.TimeoutError:
                     continue
                 except json.JSONDecodeError:
-                    logger.error(f"Failed to parse LLM message: {message}")
+                    logger.error(f"Failed to parse STT message: {message}")
                     continue
                 except ConnectionClosed:
                     logger.error("Stt websocket connection closed unexpectedly")
