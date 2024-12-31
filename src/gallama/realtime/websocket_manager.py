@@ -113,7 +113,7 @@ class WebSocketManager:
                     type=item.type,
                     role=item.role,
                     content=new_content,
-                    status=item.status,
+                    status=item.status if item.status else "completed",
                 )
 
             return processed_item
@@ -186,50 +186,7 @@ class WebSocketManager:
                 elif isinstance(item, ResponseCreate):
                     # if there is audio commited, create an item for it
 
-                    modalities = "text"
-
-                    if await session.queues.audio_exist() and "audio" in session.config.modalities:
-                        modalities = "audio"
-                        if not session.queues.audio_commited:
-                            raise Exception("Audio buffer is not commited before create response")
-
-                        # wait for audio transcription to finish
-                        transcription_done = await session.queues.wait_for_transcription_done()
-
-                        # update user transcription as one item to the conversation item list
-                        if transcription_done and session.queues.transcript_buffer:
-                            # create a new item
-                            item_id_to_use = await session.queues.next_item()
-                            user_audio_item = ConversationItemMessageServer(
-                                id=item_id_to_use,
-                                type="message",
-                                role="user",
-                                content=[
-                                    MessageContentServer(
-                                        type=ContentType.INPUT_AUDIO,
-                                        # text=session.queues.transcript_buffer,
-                                        audio=session.queues.audio_buffer,
-                                        transcript=session.queues.transcript_buffer
-                                    )
-                                ]
-                            )
-
-                            # add this item to the queue
-                            await session.queues.update_conversation_item_ordered_dict(
-                                ws_client=ws_client,
-                                ws_llm=self.message_handler.ws_llm,
-                                item=user_audio_item
-                            )
-
-                            # send user update that the transcription is done
-                            await ws_client.send_json(ConversationItemInputAudioTranscriptionComplete(
-                                event_id=await session.queues.next_event(),
-                                type="conversation.item.input_audio_transcription.completed",
-                                item_id=item_id_to_use,
-                                content_index=0,
-                                transcript=session.queues.transcript_buffer
-                            ).model_dump())
-
+                    modalities = "audio" if await session.queues.audio_exist() and "audio" in session.config.modalities else "text"
 
                     # get response counter
                     response_id = await session.queues.next_resp()

@@ -1,4 +1,12 @@
-from ..data_classes.realtime_server_proto import InputAudioBufferSpeechStarted, InputAudioBufferSpeechStopped
+from ..data_classes.realtime_server_proto import (
+    InputAudioBufferSpeechStarted,
+    InputAudioBufferSpeechStopped,
+    InputAudioBufferCommitted,
+    InputAudioBufferCleared,
+    MessageContentServer,
+    ConversationItemMessageServer,
+    ContentTypeServer
+)
 # from ..logger.logger import logger
 from gallama.realtime.websocket_client import WebSocketClient
 from gallama.realtime.websocket_session import WebSocketSession
@@ -142,13 +150,53 @@ class WebSocketMessageHandler:
                         await websocket.send_json(speech_stopped_event.model_dump())
 
                         # Commit buffer and create response if configured
-                        if session.vad_processor.create_response:
+                        logger.info(f"{session.config}")
+                        logger.info(f"{session.config.turn_detection}")
+                        if session.config.turn_detection.create_response:
                             await self._input_audio_buffer_commit(websocket, session, message, item_id=session.vad_item_id)
+
+                            # wait for audio transcription to finish
+                            transcription_done = await session.queues.wait_for_transcription_done()
+
+                            # update user transcription as one item to the conversation item list
+                            if transcription_done and session.queues.transcript_buffer:
+                                # create a new item
+                                user_audio_item = ConversationItemMessageServer(
+                                    id=session.vad_item_id,
+                                    type="message",
+                                    role="user",
+                                    status="completed",
+                                    content=[
+                                        MessageContentServer(
+                                            type=ContentTypeServer.INPUT_AUDIO,
+                                            # text=session.queues.transcript_buffer,
+                                            audio=session.queues.audio_buffer,
+                                            transcript=session.queues.transcript_buffer
+                                        )
+                                    ]
+                                )
+
+                                # add this item to the queue
+                                await session.queues.update_conversation_item_ordered_dict(
+                                    ws_client=websocket,
+                                    ws_llm=self.ws_llm,
+                                    item=user_audio_item
+                                )
+
+                                # send user update that the transcription is done
+                                await websocket.send_json(ConversationItemInputAudioTranscriptionComplete(
+                                    event_id=await session.queues.next_event(),
+                                    type="conversation.item.input_audio_transcription.completed",
+                                    item_id=session.vad_item_id,
+                                    content_index=0,
+                                    transcript=session.queues.transcript_buffer
+                                ).model_dump())
 
                             response_event = ResponseCreate(
                                 id=await session.queues.next_resp(),
                             )
                             await session.queues.unprocessed.put(response_event)
+
 
                         # reset vad id:
                         session.vad_item_id = None
@@ -165,10 +213,28 @@ class WebSocketMessageHandler:
             raise
 
     async def _input_audio_buffer_commit(self, websocket: WebSocket, session: WebSocketSession, message: dict, item_id: str = None):
+        # handling internal audio commit
         await session.queues.commit_unprocessed_audio(ws_stt=self.ws_stt, item_id=item_id)
 
+        #   send user committed msg
+        await websocket.send_json(InputAudioBufferCommitted(**{
+            "event_id": await session.queues.next_event(),
+            "type": "input_audio_buffer.committed",
+            "previous_item_id": await session.queues.current_item_id(),
+            "item_id": item_id
+        }).model_dump())
+
+
     async def _input_audio_buffer_clear(self, websocket: WebSocket, session: WebSocketSession, message: dict):
+        # handling internal audio buffer clear
         await session.queues.clear_unprocessed_audio(ws_stt=self.ws_stt)
+
+        #   send user committed msg
+        await websocket.send_json(InputAudioBufferCleared(**{
+            "event_id": await session.queues.next_event(),
+            "type": "input_audio_buffer.cleared",
+        }).model_dump())
+
 
     async def _conversation_item_create(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         # for conversation.item.created, it is a completed item, hence no need to do streaming

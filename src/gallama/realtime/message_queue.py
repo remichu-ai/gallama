@@ -20,7 +20,7 @@ from gallama.data_classes.internal_ws import (
 )
 from gallama.realtime.websocket_client import WebSocketClient
 from difflib import SequenceMatcher
-
+import uuid
 from ..dependencies_server import get_server_logger
 
 logger = get_server_logger()
@@ -53,9 +53,9 @@ class MessageQueues:
 
         self.response_queue = asyncio.Queue()
         self.audio_to_client = asyncio.Queue()
-        self.response_counter = 0
-        self.event_counter = 0
-        self.item_counter = 0
+        self.response_counter = ""
+        self.event_counter = ""
+        self.item_counter = ""
 
         self.lock_conversation_item = asyncio.Lock()
         self.lock_response_counter = asyncio.Lock()
@@ -75,19 +75,19 @@ class MessageQueues:
     async def next_event(self) -> str:
         """ return the next counter for event"""
         async with self.lock_event_counter:
-            self.event_counter += 1
+            self.event_counter = str(uuid.uuid4().hex)
             return f"event_{self.event_counter}"
 
     async def next_resp(self) -> str:
         """ return the next counter for response"""
         async with self.lock_response_counter:
-            self.response_counter += 1
+            self.response_counter = str(uuid.uuid4().hex)
             return f"resp_{self.response_counter}"
 
     async def next_item(self, return_current=False) -> Union[str,Tuple[str,Union[str, None]]]:
         """ return the next counter for response"""
         async with self.lock_item_counter:
-            self.item_counter += 1
+            self.item_counter = str(uuid.uuid4().hex)
             if return_current:
                 if not self.conversation_item_od:
                     return f"item_{self.item_counter}", None
@@ -96,8 +96,16 @@ class MessageQueues:
             else:
                 return f"item_{self.item_counter}"
 
+    async def current_item_id(self) -> str | None:
+        """ return the current item id"""
+        if not self.conversation_item_od:
+            return None
+        else:
+            return next(reversed(self.conversation_item_od.keys()))     # id of the latest message
+
+
     async def get_previous_item_id(self, message_id: str) -> Optional[str]:
-        """Get the ID of the message that comes before the given message_id"""
+        """Get the ID of the message that comes before the given message_id. This only apply to committed messages"""
         async with self.lock_conversation_item:
             previous_id = None
             for id in self.conversation_item_od.keys():
@@ -162,6 +170,8 @@ class MessageQueues:
 
             async with self.lock_audio_commited:
                 self.audio_commited = True
+
+
         except Exception as e:
             # Log error and optionally raise it depending on your error handling needs
             logger.error(f"Error processing audio data: {str(e)}")
@@ -283,10 +293,10 @@ class MessageQueues:
         try:
             new_event_id = await self.next_event()
             previous_item_id = await self.get_previous_item_id(item.id)
-            item_to_send = None
+            item_to_send = item
 
             # send to ws_llm to sync with this item
-            stripped_item = item.strip_audio()
+            stripped_item = item.strip_audio(mode="remove")
             await ws_llm.send_pydantic_message(stripped_item)
 
             # send client update about new item created
@@ -306,8 +316,8 @@ class MessageQueues:
                 item_server = parse_conversation_item(item.model_dump())
                 self.conversation_item_od[item.id] = item_server
 
-            # send to client
-            await ws_client.send_json(item_to_send)
+                # send to client
+                await ws_client.send_json(item_to_send)
         except Exception as e:
             logger.error(f"Error in update_conversation_item_ordered_dict: {str(e)}")
             raise

@@ -11,8 +11,8 @@ from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterT
 from gallama.data_classes.realtime_client_proto import ResponseCancel,\
     ResponseCreate, SessionConfig
 from gallama.data_classes.realtime_server_proto import UsageResponseRealTime, ServerResponse, ResponseCreated, \
-    ResponseOutput_ItemAdded, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent, ResponseDone, ResponseDelta, \
-    ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, parse_conversation_item, ConversationItemCreated
+    ResponseOutput_ItemAdded, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent, ResponseDone, ResponseDelta, ConversationItemMessageServer, \
+    ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, parse_conversation_item, ConversationItemCreated, MessageContentServer, ResponseOutput_ItemDone
 from gallama.data_classes.internal_ws import WSInterCancel
 from gallama.realtime.websocket_client import WebSocketClient
 
@@ -60,6 +60,7 @@ class Response:
 
         # some tracker
         self.content_part_done_status: bool = False
+        self.output_item_done_status: bool = False
         self.response_done_status: bool = False
 
         # Add cancellation control
@@ -127,15 +128,44 @@ class Response:
                 "response_id": self.response_id,
                 "item_id": self.item_id,
                 "part": content_part
-            }).model_dump())
+            }).model_dump(exclude_unset=True))  # if not, None will be set as audio to front end
 
             # mark status of content_part as done
             self.content_part_done_status = True
             logger.info(f"Content part done")
 
-            # trigger Response done
-            await self.response_done()
+            # trigger response output item done
+            await self.response_output_item_done()
 
+    async def response_output_item_done(self):
+        _type = "audio"if "audio" in self.session.config.modalities else "text"
+
+        item = ConversationItemMessageServer(
+            id=self.item_id,
+            object="realtime.item",
+            type="message",
+            status="completed",
+            role="assistant",
+            content=[MessageContentServer(
+                type=_type,
+                text=self.text if _type=="text" else None,
+                transcript=self.transcription if _type=="audio" else None,
+            )]
+        )
+
+        # send user response output_item done
+        await self.ws_client.send_json(ResponseOutput_ItemDone(**{
+            "event_id": await self.event_id_generator(),
+            "type": "response.output_item.done",
+            "response_id": self.response_id,
+            "output_index": 0,
+            "item": item.model_dump(exclude_unset=True)
+        }).model_dump())
+
+        self.output_item_done_status = True
+
+        # trigger Response done
+        await self.response_done()
 
 
     async def response_done(self):
@@ -143,7 +173,8 @@ class Response:
             content_part_status = "completed" if not self.cancel_event.is_set() else "incomplete"
             server_response_status = "completed" if not self.cancel_event.is_set() else "cancelled"
 
-            if not self.response_done_status and self.content_part_done_status:   # content part must be done first
+            # content part and response item must be done first
+            if not self.response_done_status and self.content_part_done_status and self.output_item_done_status:
                 _output = None
                 allowed_modalities = self.session.config.modalities
 
@@ -504,7 +535,7 @@ class Response:
                     raise
 
             if not content_done_tracker and not self.cancel_event.is_set():
-                logger.info("Audio generation task did not complete due to task cancelling")
+                logger.info("Audio generation task `did not complete due to task cancelling")
                 self.audio_done = True
                 await self.update_content_done(content_type="audio")
                 content_done_tracker = True

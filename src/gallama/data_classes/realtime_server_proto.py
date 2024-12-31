@@ -1,7 +1,7 @@
 from copy import deepcopy
 from enum import Enum
 from typing import Literal, Optional, Dict, List, Union
-
+import base64
 import numpy as np
 from pydantic import BaseModel, Field
 
@@ -19,7 +19,7 @@ class ContentTypeServer(str, Enum):
 class MessageContentServer(BaseModel):
     type: Literal["input_text", "input_audio", "text", "item_reference", "audio"]
     text: Optional[str] = None
-    audio: Optional[np.ndarray] = None         # bytes audio, this is different to client class
+    audio: Optional[Union[np.ndarray, str]] = None         # bytes audio, this is different to client class
     transcript: Optional[str] = None
     id: Optional[str] = None            # for item_reference type
 
@@ -30,14 +30,19 @@ class MessageContentServer(BaseModel):
 class ConversationItemBaseServer(BaseModel):
     id: Optional[str] = None
     object: Literal["realtime.item"] = "realtime.item"
-    status: Optional[Literal["in_progress","completed", "incomplete"]] = None
+    status: Literal["in_progress","completed", "incomplete"]
 
-    def strip_audio(self) -> "ConversationItemServer":
+    def strip_audio(self, mode: Literal["remove", "base64"] = "remove") -> "ConversationItemServer":
         """
-        Creates a deep copy of the conversation item with audio fields removed from message content.
+        Creates a deep copy of the conversation item with audio fields either removed or converted to base64.
+
+        Args:
+            mode: Literal["remove", "base64"] - Determines how to handle audio data
+                 "remove": Removes audio data completely
+                 "base64": Converts audio data to base64 string
 
         Returns:
-            A new conversation item with audio stripped from message content
+            A new conversation item with audio either stripped or converted to base64
         """
         # Create a deep copy
         stripped_item = deepcopy(self)
@@ -45,7 +50,18 @@ class ConversationItemBaseServer(BaseModel):
         # Only process message types that have content
         if isinstance(stripped_item, ConversationItemMessageServer):
             for content in stripped_item.content:
-                content.audio = None
+                if mode == "remove":
+                    content.audio = None
+                elif mode == "base64" and content.audio is not None:
+                    # If audio is numpy array, convert to bytes first
+                    if isinstance(content.audio, np.ndarray):
+                        audio_bytes = content.audio.tobytes()
+                    else:  # Assume it's already bytes
+                        audio_bytes = content.audio
+
+                    # Convert to base64
+                    content.audio = base64.b64encode(audio_bytes).decode('utf-8')
+
                 # If this is an audio type message with no transcript,
                 # provide empty string for text to ensure valid message
                 if content.type == "audio" and not content.transcript:
@@ -153,6 +169,14 @@ class ResponseOutput_ItemAdded(BaseModel):
     item: ConversationItemServer
 
 
+class ResponseOutput_ItemDone(BaseModel):
+    event_id: str
+    type: Literal["response.output_item.done"] = "response.output_item.done"
+    response_id: str
+    output_index: int
+    item: ConversationItemServer
+
+
 class ResponseContentPartAddedEvent(BaseModel):
     event_id: str
     type: Literal[
@@ -248,3 +272,13 @@ class InputAudioBufferSpeechStopped(BaseModel):
     type: Literal["input_audio_buffer.speech_stopped"] = "input_audio_buffer.speech_stopped"
     audio_end_ms: int = Field(description="Milliseconds since the session started when speech stopped. This will correspond to the end of audio sent to the model, and thus includes the min_silence_duration_ms configured in the Session.")
     item_id: str
+
+class InputAudioBufferCommitted(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["input_audio_buffer.committed"] = "input_audio_buffer.committed"
+    previous_item_id: Optional[str] = None
+    item_id: str
+
+class InputAudioBufferCleared(BaseModel):
+    event_id: Optional[str] = None
+    type: Literal["input_audio_buffer.cleared"] = "input_audio_buffer.cleared"
