@@ -174,7 +174,7 @@ class WebSocketManager:
                     await session.queues.update_conversation_item_ordered_dict(
                         ws_client=ws_client,
                         ws_llm=self.message_handler.ws_llm,
-                        item=item_to_create
+                        item=item_to_create,
                     )
                 elif isinstance(item, ConversationItemTruncate):
                     await session.queues.truncate_conversation_item(

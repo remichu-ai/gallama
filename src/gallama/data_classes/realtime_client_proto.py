@@ -59,8 +59,8 @@ class AudioBufferClear(BaseModel):
 
 class TurnDetectionConfig(BaseModel):
     type: Literal["server_vad"] = "server_vad"
-    threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
-    prefix_padding_ms: Optional[int] = Field(ge=0, default=700)
+    threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.6)
+    prefix_padding_ms: Optional[int] = Field(ge=0, default=300)
     silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True
     enable_preprocessing: Optional[bool] = False
@@ -84,6 +84,9 @@ class SessionConfig(BaseModel):
     # extra for gallama backend
     streaming_transcription: bool = True
     user_interrupt_token: Optional[str] = Field(description= "Custom word to insert everytime user interrupt the assistant",default=" <user_interrupt>")
+    input_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
+    output_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
+
 
     class Config:
         extra = "allow"  # Allow extra fields

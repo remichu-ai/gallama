@@ -67,7 +67,6 @@ class TTSConnection:
         self.state = TTSConnectionState()
         self.tasks: list[asyncio.Task] = []
         self.send_lock = asyncio.Lock()
-        self.target_sample_rate = 24000
 
         self._active_tasks: set[asyncio.Task] = set()  # Track active tasks
 
@@ -226,8 +225,8 @@ class TTSConnection:
                         # Only process when we have enough data
                         if len(accumulated_chunk) >= buffer_threshold:
                             # Resample if needed
-                            if sampling_rate != self.target_sample_rate:
-                                ratio = self.target_sample_rate / sampling_rate
+                            if sampling_rate != self.session_config.output_sample_rate:
+                                ratio = self.session_config.output_sample_rate / sampling_rate
                                 resampled_audio = resampler.process(
                                     accumulated_chunk,
                                     ratio,

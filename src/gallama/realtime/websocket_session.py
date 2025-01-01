@@ -23,7 +23,10 @@ class WebSocketSession:
         self.current_response: "Response" = None  # this is to track the current response
 
         # Initialize VAD processor only if turn_detection is configured
-        self.vad_processor = VADProcessor(config.turn_detection) if config.turn_detection else None
+        self.vad_processor = VADProcessor(
+            turn_detection_config=config.turn_detection,
+            input_sample_rate=config.input_sample_rate
+        ) if config.turn_detection else None
         self.vad_item_id: str = None
 
 

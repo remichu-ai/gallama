@@ -11,25 +11,32 @@ class PreprocessingConfig:
     highpass_cutoff: float = 100  # Cutoff frequency in Hz
     compression_threshold: float = -20  # dB
     compression_ratio: float = 4.0
-    attack_time: float = 0.005
-    release_time: float = 0.1
-    makeup_gain: float = 6.0
+    attack_time: float = 0.005  # seconds
+    release_time: float = 0.1  # seconds
+    makeup_gain: float = 6.0  # dB
 
 
 class AudioPreprocessor:
-    def __init__(self, config: PreprocessingConfig, sample_rate: int = 16000):
+    def __init__(self, config: PreprocessingConfig, sample_rate: int = 24000):
+        """
+        Initialize audio preprocessor for float array processing.
+
+        Args:
+            config: PreprocessingConfig object containing processing parameters
+            sample_rate: Input audio sample rate in Hz (default 24000)
+                Note: This should match the input audio sample rate, not the VAD rate
+        """
         self.config = config
         self.sample_rate = sample_rate
 
-        # Initialize high-pass filter
+        # Initialize high-pass filter if enabled
         if self.config.enable_highpass:
-            # Design high-pass filter
             nyquist = self.sample_rate / 2
             normalized_cutoff = self.config.highpass_cutoff / nyquist
             self.hp_b, self.hp_a = signal.butter(4, normalized_cutoff, btype='high')
             self.hp_zi = None  # Filter state for high-pass
 
-        # Initialize compressor parameters
+        # Initialize compressor parameters if enabled
         if self.config.enable_compression:
             # Convert from dB to linear
             self.threshold = 10 ** (self.config.compression_threshold / 20)
@@ -39,11 +46,19 @@ class AudioPreprocessor:
             self.attack = np.exp(-1 / (self.sample_rate * self.config.attack_time))
             self.release = np.exp(-1 / (self.sample_rate * self.config.release_time))
 
-            # State variables
-            self.env = 0.0  # Envelope follower state
+            # Envelope follower state
+            self.env = 0.0
 
     def _apply_highpass(self, audio: np.ndarray) -> np.ndarray:
-        """Apply high-pass filter to audio"""
+        """
+        Apply high-pass filter to audio.
+
+        Args:
+            audio: Input audio as float32 numpy array in range [-1.0, 1.0]
+
+        Returns:
+            Filtered audio as float32 numpy array
+        """
         if self.hp_zi is None:
             # Initialize filter state
             self.hp_zi = signal.lfilter_zi(self.hp_b, self.hp_a)
@@ -55,7 +70,15 @@ class AudioPreprocessor:
         return filtered
 
     def _apply_compression(self, audio: np.ndarray) -> np.ndarray:
-        """Apply dynamic range compression"""
+        """
+        Apply dynamic range compression.
+
+        Args:
+            audio: Input audio as float32 numpy array in range [-1.0, 1.0]
+
+        Returns:
+            Compressed audio as float32 numpy array
+        """
         output = np.zeros_like(audio)
         env = self.env
 
@@ -77,18 +100,26 @@ class AudioPreprocessor:
             # Apply gain and makeup gain
             output[i] = sample * gain * self.makeup_gain
 
-        # Update state
+        # Update envelope state
         self.env = env
         return output
 
-    def process_chunk(self, audio_chunk: bytes) -> bytes:
-        """Process an audio chunk with enabled features"""
-        try:
-            # Convert bytes to float array
-            audio_np = np.frombuffer(audio_chunk, dtype=np.int16)
-            audio_float = audio_np.astype(np.float32) / 32768.0
+    def process_float_chunk(self, audio_float: np.ndarray) -> np.ndarray:
+        """
+        Process an audio chunk in float format.
 
-            # Apply enabled processing
+        Args:
+            audio_float: Input audio as float32 numpy array in range [-1.0, 1.0]
+                        at input_sample_rate (24000 Hz by default)
+
+        Returns:
+            Processed audio as float32 numpy array in range [-1.0, 1.0]
+            at the same sample rate as input
+        """
+        if audio_float.size == 0:
+            return audio_float
+
+        try:
             processed_audio = audio_float
 
             if self.config.enable_highpass:
@@ -98,15 +129,11 @@ class AudioPreprocessor:
                 processed_audio = self._apply_compression(processed_audio)
 
             # Ensure output is within [-1, 1] range
-            processed_audio = np.clip(processed_audio, -1.0, 1.0)
-
-            # Convert back to int16 bytes
-            processed_int16 = (processed_audio * 32768.0).astype(np.int16)
-            return processed_int16.tobytes()
+            return np.clip(processed_audio, -1.0, 1.0)
 
         except Exception as e:
             print(f"Error in audio preprocessing: {str(e)}")
-            return audio_chunk
+            return audio_float
 
     def reset(self):
         """Reset all internal states"""

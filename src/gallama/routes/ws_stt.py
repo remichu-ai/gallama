@@ -26,7 +26,6 @@ class TranscriptionConnectionManager:
         model: str,
         config: SessionConfig,
         language: str = None,
-        sample_rate: int = 16000
     ) -> bool:
         try:
             await websocket.accept()
@@ -45,7 +44,7 @@ class TranscriptionConnectionManager:
                 return False
 
             asr_processor.reset_state()
-            min_chunk_samples = int(self.MIN_CHUNK_SECONDS * sample_rate)
+            min_chunk_samples = int(self.MIN_CHUNK_SECONDS * config.input_sample_rate)
 
             self.active_connections[websocket] = {
                 "asr_processor": asr_processor,
@@ -54,7 +53,7 @@ class TranscriptionConnectionManager:
                 "audio_buffer": np.array([], dtype=np.float32),
                 "min_chunk_samples": min_chunk_samples,
                 "is_first": True,
-                "sample_rate": sample_rate,
+                "sample_rate": config.input_sample_rate,
                 "accumulated_duration": 0.0,
                 "streaming_mode": config.streaming_transcription,
                 "complete_audio": bytearray() if not config.streaming_transcription else None,
@@ -123,12 +122,12 @@ class TranscriptionConnectionManager:
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
             with soundfile.SoundFile(
-                    io.BytesIO(raw_buffer),
-                    channels=1,
-                    endian="LITTLE",
-                    samplerate=sample_rate,
-                    subtype="PCM_16",
-                    format="RAW"
+                io.BytesIO(raw_buffer),
+                channels=1,
+                endian="LITTLE",
+                samplerate=sample_rate,
+                subtype="PCM_16",
+                format="RAW"
             ) as sf:
                 audio, curr_sr = librosa.load(sf, sr=asr_processor.SAMPLING_RATE, dtype=np.float32)
                 return audio
@@ -254,17 +253,16 @@ class TranscriptionConnectionManager:
 
 @router.websocket("/speech-to-text")
 async def websocket_endpoint(
-        websocket: WebSocket,
-        model: str = None,
-        language: str = None,
-        sample_rate: int = 16000,
-        config: SessionConfig = None
+    websocket: WebSocket,
+    model: str = None,
+    language: str = None,
+    config: SessionConfig = None
 ):
     if config is None:
         config = SessionConfig()
 
     try:
-        success = await manager.connect(websocket, model, config, language, sample_rate)
+        success = await manager.connect(websocket, model, config, language)
         if not success:
             return
 

@@ -42,7 +42,7 @@ class MessageQueues:
         self.audio_commited = False
         self.lock_transcript_complete = asyncio.Lock()
 
-        self.sample_rate = 16000    # assuming fixed at this rate
+        self.sample_rate = 24000    # assuming fixed at this rate
         self.verbose = False  # Control debug logging
 
         # all non audio events go here
@@ -114,10 +114,10 @@ class MessageQueues:
                 previous_id = id
             return None  # Message ID not found
 
-    async def append_unprocessed_audio(self, base64audio: str, ws_stt: WebSocketClient):
+    async def append_unprocessed_audio(self, base64audio: str, ws_stt: WebSocketClient, audio_float: Optional[np.ndarray] = None):
         """
         Appends base64 encoded audio data to the audio buffer after decoding.
-
+        float32 normalized audio data in numpy array
         Args:
             base64audio (str): Base64 encoded audio string
             ws_stt (WebSocketClient): the websocket client for ws_stt
@@ -126,14 +126,15 @@ class MessageQueues:
             None
         """
         try:
-            # Decode base64 string to bytes
-            audio_bytes = base64.b64decode(base64audio)
+            if not audio_float.any():
+                # Decode base64 string to bytes
+                audio_bytes = base64.b64decode(base64audio)
 
-            # Convert bytes to numpy array of int16 values
-            audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                # Convert bytes to numpy array of int16 values
+                audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
 
-            # Convert int16 to float32 (normalize to [-1.0, 1.0] range)
-            audio_float = audio_data.astype(np.float32) / 32768.0
+                # Convert int16 to float32 (normalize to [-1.0, 1.0] range)
+                audio_float = audio_data.astype(np.float32) / 32768.0
 
             # Append to existing buffer
             async with self.lock_audio_buffer:
@@ -293,6 +294,10 @@ class MessageQueues:
         try:
             new_event_id = await self.next_event()
             previous_item_id = await self.get_previous_item_id(item.id)
+            # if no previous item, meaning this is new item
+            if not previous_item_id:
+                previous_item_id = await self.current_item_id()
+
             item_to_send = item
 
             # send to ws_llm to sync with this item
@@ -353,205 +358,6 @@ class MessageQueues:
         except Exception as e:
             logger.error(f"Error in update_conversation_item_with_assistant_response: {str(e)}")
             raise
-
-
-    # async def truncate_conversation_item(
-    #     self,
-    #     ws_client: WebSocket,
-    #     ws_llm: WebSocketClient,
-    #     ws_stt: WebSocketClient,
-    #     event: ConversationItemTruncate
-    # ):
-    #     """
-    #     Truncate an audio item from the conversation item list.
-    #
-    #     Args:
-    #         ws_client (WebSocket): The websocket connection to the client
-    #         ws_llm (WebSocketClient): The websocket connection to the LLM service for state sync
-    #         ws_stt (WebSocketClient): The websocket connection to the STT service for transcription sync
-    #         event (ConversationItemTruncate): event from client
-    #
-    #     Raises:
-    #         Exception: If there's an error during the deletion process
-    #     """
-    #     try:
-    #         new_event_id = await self.next_event()
-    #
-    #         item_id = event.item_id
-    #         audio_end_ms = event.audio_end_ms
-    #
-    #         logger.info(f"-------------------truncate conversation item {item_id} with audio end ms {audio_end_ms}")
-    #
-    #         # send user acknowledgement message
-    #         async def send_client_acknowledgement():
-    #             return await ws_client.send_json(ConversationItemTruncated(
-    #                 event_id=new_event_id,
-    #                 type="conversation.item.truncated",
-    #                 item_id=item_id,
-    #                 audio_end_ms=audio_end_ms
-    #             ).model_dump())
-    #
-    #         debug_path = "/home/remichu/work/ML/gallama/experiment/debug_audio.wav"
-    #
-    #         async def _update_internal_state():
-    #             audio_data: np.ndarray = self.conversation_item_od[item_id].content[0].audio
-    #
-    #             # Enhanced debug logs for audio data properties
-    #             logger.info("=== AUDIO DIAGNOSTIC INFO ===")
-    #             logger.info(f"Original audio data shape: {audio_data.shape}, dtype: {audio_data.dtype}")
-    #             logger.info(f"Sample rate: {self.sample_rate}")
-    #             logger.info(f"Input duration: {len(audio_data) / self.sample_rate:.2f} seconds")
-    #             logger.info(f"Expected samples for 1 second: {self.sample_rate}")
-    #             logger.info(f"Audio min value: {np.min(audio_data)}, max value: {np.max(audio_data)}")
-    #
-    #             # Convert milliseconds to samples
-    #             end_sample = int((audio_end_ms / 1000) * self.sample_rate)
-    #             logger.info(f"audio_end_ms parameter: {audio_end_ms}")
-    #             logger.info(f"Truncating at sample {end_sample} (from {audio_end_ms}ms)")
-    #             logger.info(f"Calculated duration after truncation: {end_sample / self.sample_rate:.2f} seconds")
-    #
-    #             # Truncate the audio data
-    #             truncated_audio = audio_data[:end_sample]
-    #
-    #             # Ensure audio data is in the correct format (float32 between -1 and 1)
-    #             original_dtype = truncated_audio.dtype
-    #             if truncated_audio.dtype != np.float32:
-    #                 logger.info(f"Converting audio from {original_dtype} to float32")
-    #                 if truncated_audio.dtype == np.int16:
-    #                     truncated_audio = truncated_audio.astype(np.float32) / 32768.0
-    #                 elif truncated_audio.dtype == np.int32:
-    #                     truncated_audio = truncated_audio.astype(np.float32) / 2147483648.0
-    #                 else:
-    #                     truncated_audio = truncated_audio.astype(np.float32)
-    #                 logger.info(f"After conversion - min: {np.min(truncated_audio)}, max: {np.max(truncated_audio)}")
-    #
-    #             logger.info(f"Truncated audio shape: {truncated_audio.shape}, dtype: {truncated_audio.dtype}")
-    #             logger.info(
-    #                 f"Truncated audio min value: {np.min(truncated_audio)}, max value: {np.max(truncated_audio)}")
-    #
-    #             # Save the raw audio data directly using soundfile
-    #             debug_path = "/home/remichu/work/ML/gallama/experiment/debug_audio.wav"
-    #             try:
-    #                 # Save as 16-bit PCM WAV
-    #                 sf.write(debug_path, truncated_audio, self.sample_rate, subtype='PCM_16')
-    #                 logger.info(f"Successfully saved debug audio file to: {debug_path}")
-    #
-    #                 # Verify the saved file
-    #                 from scipy.io import wavfile
-    #                 rate, data = wavfile.read(debug_path)
-    #                 logger.info(f"16kHz file verification - Sample rate: {rate}, Duration: {len(data) / rate:.2f}s")
-    #
-    #                 # Save another copy at 44.1kHz for comparison
-    #                 debug_path_441 = "/home/remichu/work/ML/gallama/experiment/debug_audio_44100.wav"
-    #                 import samplerate
-    #
-    #                 # Calculate new length to maintain original duration
-    #                 original_duration = len(truncated_audio) / self.sample_rate
-    #                 new_length = int(original_duration * 44100)
-    #                 resampling_ratio = 44100 / self.sample_rate
-    #
-    #                 logger.info("=== RESAMPLING INFO ===")
-    #                 logger.info(f"Original duration: {original_duration:.3f}s")
-    #                 logger.info(f"Resampling ratio: {resampling_ratio}")
-    #                 logger.info(f"Expected new length: {new_length} samples")
-    #
-    #                 # Resample using the new target length
-    #                 audio_441 = samplerate.resample(truncated_audio, 44100 / self.sample_rate, 'sinc_best')
-    #
-    #                 logger.info(f"Actual resampled length: {len(audio_441)} samples")
-    #                 logger.info(f"New duration: {len(audio_441) / 44100:.3f}s")
-    #
-    #                 sf.write(debug_path_441, audio_441, 44100, subtype='PCM_16')
-    #                 logger.info(f"Saved 44.1kHz version to: {debug_path_441}")
-    #
-    #                 # Verify the resampled file
-    #                 rate, data = wavfile.read(debug_path_441)
-    #                 logger.info(f"44.1kHz file verification - Sample rate: {rate}, Duration: {len(data) / rate:.2f}s")
-    #
-    #             except Exception as e:
-    #                 logger.error(f"Error saving debug audio file: {str(e)}")
-    #
-    #             # Now prepare the buffer for API call
-    #             buffer = io.BytesIO()
-    #             try:
-    #                 sf.write(buffer, truncated_audio, self.sample_rate, format='wav', subtype='PCM_16')
-    #                 buffer.seek(0)
-    #                 logger.info(f"Successfully prepared audio buffer, size: {buffer.getbuffer().nbytes} bytes")
-    #             except Exception as e:
-    #                 logger.error(f"Error preparing audio buffer: {str(e)}")
-    #                 raise
-    #
-    #             # Rest of the code remains unchanged...
-    #             # Prepare the form data for transcription
-    #             form_data = aiohttp.FormData()
-    #             form_data.add_field('file',
-    #                                 buffer,
-    #                                 filename='audio.wav',
-    #                                 content_type='audio/wav')
-    #             form_data.add_field('model', 'whisper-1')
-    #             form_data.add_field('response_format', 'json')
-    #             form_data.add_field('temperature', str(0.0))
-    #             form_data.add_field('timestamp_granularities', 'segment')
-    #
-    #             try:
-    #                 # Make the REST API call
-    #                 async with aiohttp.ClientSession() as session:
-    #                     async with session.post(
-    #                             'http://localhost:8001/v1/audio/transcriptions',
-    #                             data=form_data
-    #                     ) as response:
-    #                         if response.status == 200:
-    #                             response_data = await response.json()
-    #                             new_transcription = response_data.get('text')
-    #                             if new_transcription is None:
-    #                                 raise Exception("Transcription response missing 'text' field")
-    #                             logger.info(f"Successfully received transcription")
-    #                         else:
-    #                             error_detail = await response.text()
-    #                             logger.error(f"Transcription failed: {error_detail}")
-    #                             raise Exception(f"Transcription failed with status {response.status}")
-    #
-    #                 logger.info(f"After truncated transcription: {new_transcription}")
-    #
-    #                 # fuzzy matching
-    #                 new_transcription_matched = self.find_truncated_match(
-    #                     partial_text=new_transcription,
-    #                     full_transcript=self.conversation_item_od[item_id].content[0].transcript,
-    #                 )
-    #
-    #                 logger.info(f"After truncated transcription: {new_transcription_matched}")
-    #
-    #                 # use fuzzy matched transcription
-    #                 new_transcription = new_transcription_matched["matched_text"]
-    #
-    #                 # Update the conversation item with truncated audio
-    #                 async with self.lock_conversation_item:
-    #                     current_item = self.conversation_item_od[item_id].content[0]
-    #                     logger.info(f"Current item text: {current_item.text}")
-    #                     logger.info(f"Current item transcript: {current_item.transcript}")
-    #
-    #                     # update the item in history with truncated version
-    #                     current_item.audio = truncated_audio
-    #                     current_item.text = new_transcription
-    #                     current_item.transcript = new_transcription
-    #
-    #                     logger.info(f"After truncated item text: {current_item.text}")
-    #                     logger.info(f"After truncated item transcript: {current_item.transcript}")
-    #
-    #                 # send to ws_llm to sync with this item
-    #                 stripped_item = self.conversation_item_od[item_id].strip_audio()
-    #                 logger.info(f"Stripped item: {stripped_item}")
-    #                 await ws_llm.send_pydantic_message(stripped_item)
-    #
-    #             except Exception as e:
-    #                 logger.error(f"Error in API call or state update: {str(e)}")
-    #                 raise
-    #
-    #         await asyncio.gather(send_client_acknowledgement(), _update_internal_state())
-    #
-    #     except Exception as e:
-    #         logger.error(f"Error in truncate_conversation_item: {str(e)}")
-    #         raise
 
 
     async def delete_conversation_item(
