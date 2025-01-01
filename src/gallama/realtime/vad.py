@@ -1,7 +1,8 @@
 from silero_vad import load_silero_vad, VADIterator
 from ..data_classes.realtime_client_proto import TurnDetectionConfig
+from ..data_classes.internal_ws import SpeechState
 import numpy as np
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Literal
 import torch
 from dataclasses import dataclass
 import samplerate
@@ -16,6 +17,7 @@ from ..dependencies_server import get_server_logger
 logger = get_server_logger()
 
 
+
 @dataclass
 class VADState:
     is_speech: bool = False
@@ -26,6 +28,7 @@ class VADState:
     speech_duration: float = 0.0
     speech_samples: Optional[np.ndarray] = None
     original_speech_samples: Optional[np.ndarray] = None  # Store original sample rate speech
+    current_state: SpeechState = "no_speech"
 
 
 @dataclass
@@ -48,8 +51,14 @@ class VADProcessor:
         self.model = load_silero_vad()
         self.model.eval()
 
+
+
         # Sample rate configuration
         self.input_sample_rate = input_sample_rate
+
+        # minimum audio chunk sample:
+        self.min_audio_chunk_sample = int(self.input_sample_rate / 10)
+
         self.vad_sample_rate = 16000
         self.resampler = samplerate.Resampler('sinc_best', channels=1)
         self.resample_ratio = self.vad_sample_rate / self.input_sample_rate
@@ -75,7 +84,7 @@ class VADProcessor:
 
         # Fixed parameters
         self.window_size_samples = 512
-        self.speech_pad_ms = 70
+        self.speech_pad_ms = 30
 
         # State management
         self.state = VADState()
@@ -109,22 +118,24 @@ class VADProcessor:
         sf.write(filename, audio_data, self.input_sample_rate)
         logger.debug(f"Saved debug audio to {filename}")
 
-    def process_audio_chunk(self, audio_float: np.ndarray) -> Tuple[bool, Optional[Dict[str, float]]]:
+    def process_audio_chunk(self, audio_float: np.ndarray) -> Tuple[SpeechState, Optional[Dict[str, float]]]:
         """
-        Process an audio chunk and determine if it contains speech
+        Process an audio chunk and determine its speech state
         Args:
             audio_float: Numpy array of float32 audio data, normalized to [-1.0, 1.0]
-        Returns: (should_buffer, speech_dict)
+        Returns: (speech_state, speech_event)
+            speech_state: Current state of speech detection
+            speech_event: Optional dict with 'start' or 'end' timestamps, where start represents
+                         the beginning of the potential_speech buffer that was confirmed as speech
         """
-        # Apply preprocessing if enabled
         if self.audio_preprocessor:
             audio_float = self.audio_preprocessor.process_float_chunk(audio_float)
 
         if audio_float.size == 0:
-            return False, None
+            return self.state.current_state, None
 
         # Store original audio for speech segments if debugging
-        if self.debug and self.state.is_speech:
+        if self.state.current_state in ["is_speaking", "potential_speech"]:
             if self.state.original_speech_samples is None:
                 self.state.original_speech_samples = audio_float
             else:
@@ -135,8 +146,8 @@ class VADProcessor:
         resampled_audio = self._resample_audio(audio_float)
         self.current_chunk = np.concatenate([self.current_chunk, resampled_audio])
 
-        should_buffer = False
         latest_event = None
+        prev_state = self.state.current_state
 
         # Process complete windows
         while self.current_chunk.size >= self.window_size_samples:
@@ -146,66 +157,68 @@ class VADProcessor:
             window_tensor = torch.from_numpy(window)
             speech_prob = self.model(window_tensor, self.vad_sample_rate).item()
 
-            # Update window time using input sample rate for accurate timing
             window_time = self.window_size_samples / self.vad_sample_rate
             self.total_audio_processed += window_time
 
             is_speech = speech_prob >= self.threshold
-
-            if is_speech or self.state.potential_speech_start > 0 or self.state.is_speech:
-                should_buffer = True
 
             # Update state and get events
             event = self._update_speech_state(is_speech)
             if event is not None:
                 latest_event = event
 
-        return should_buffer, latest_event
+        return self.state.current_state, latest_event
 
     def _update_speech_state(self, is_speech: bool) -> Optional[Dict[str, float]]:
         """Update speech state and return speech events"""
         event = None
+        prev_state = self.state.current_state
 
         if is_speech:
-            if not self.state.is_speech:
-                if self.state.potential_speech_start == 0.0:
-                    self.state.potential_speech_start = self.total_audio_processed
-                    # Initialize speech samples when speech potentially starts
-                    if self.debug:
-                        self.state.original_speech_samples = None
+            if self.state.current_state == "no_speech":
+                self.state.current_state = "potential_speech"
+                self.state.potential_speech_start = self.total_audio_processed
 
+            elif self.state.current_state == "potential_speech":
                 current_duration = (self.total_audio_processed - self.state.potential_speech_start) * 1000
-
                 if current_duration >= self.min_speech_duration_ms:
-                    self.state.is_speech = True
-                    self.state.speech_start_time = self.state.potential_speech_start
-                    event = {'start': self.state.speech_start_time}
-                    logger.debug(f"Speech started after reaching minimum duration: {current_duration:.1f}ms")
+                    self.state.current_state = "is_speaking"
+                    # Use the potential_speech_start time for the speech start event
+                    event = {'start': self.state.potential_speech_start}
+                    logger.debug(f"Speech started at {self.state.potential_speech_start:.3f}s after reaching minimum duration: {current_duration:.1f}ms")
 
-        else:
-            if not self.state.is_speech:
+            self.state.accumulated_silence = 0
+
+        else:  # not is_speech
+            if self.state.current_state == "potential_speech":
+                # If we were in potential speech but got silence, go back to no speech
+                self.state.current_state = "no_speech"
                 self.state.potential_speech_start = 0.0
-                if self.debug:
-                    self.state.original_speech_samples = None
-            else:
+                self.state.original_speech_samples = None
+
+            elif self.state.current_state == "is_speaking":
                 self.state.accumulated_silence += self.window_size_samples / self.vad_sample_rate
 
                 if self.state.accumulated_silence >= (self.silence_duration_ms / 1000):
+                    self.state.current_state = "speak_end"
                     event = {'end': self.total_audio_processed}
 
                     if self.debug and self.state.original_speech_samples is not None:
                         self._save_debug_audio(self.state.original_speech_samples)
 
-                    # Reset all state
+                    # Reset state after speech end
                     self.state.is_speech = False
-                    self.total_audio_processed = 0.0
                     self.state.accumulated_silence = 0
-                    self.state.speech_start_time = 0.0
                     self.state.potential_speech_start = 0.0
                     self.state.speech_duration = 0.0
                     self.state.original_speech_samples = None
+                    self.total_audio_processed = 0.0
+
+                    # After one frame in speak_end, go back to no_speech
+                    self.state.current_state = "no_speech"
 
         return event
+
 
     def reset(self):
         """Reset all state"""

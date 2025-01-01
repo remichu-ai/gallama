@@ -5,6 +5,9 @@ from .realtime_client_proto import SessionConfig
 # this file contain websocket message schema for message sent between internal ws and tts, llm, stt
 
 
+SpeechState = Literal["no_speech", "potential_speech", "is_speaking", "potential_speak_end", "speak_end"]
+
+
 # common event
 class WSInterConfigUpdate(BaseModel):
     type: Literal["common.config_update"]

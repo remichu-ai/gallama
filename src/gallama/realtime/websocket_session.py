@@ -1,11 +1,11 @@
 import asyncio
 from typing import List
-
 from gallama.data_classes.realtime_client_proto import SessionConfig
 from gallama.realtime.message_queue import MessageQueues
+from..data_classes.internal_ws import SpeechState
 from .vad import VADProcessor
 from fastapi import WebSocket
-
+import numpy as np
 from gallama.realtime.websocket_client import WebSocketClient
 
 
@@ -23,6 +23,9 @@ class WebSocketSession:
         self.current_response: "Response" = None  # this is to track the current response
 
         # Initialize VAD processor only if turn_detection is configured
+        self.potential_speech_buffer: np.ndarray = np.array([], dtype=np.float32)
+        self.prev_speech_state: SpeechState = "no_speech"
+
         self.vad_processor = VADProcessor(
             turn_detection_config=config.turn_detection,
             input_sample_rate=config.input_sample_rate

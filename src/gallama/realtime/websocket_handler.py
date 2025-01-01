@@ -40,9 +40,7 @@ class WebSocketMessageHandler:
 
         self.initialize_ws = False
 
-        self.audio_buffer = []  # List of (timestamp, audio_data) tuples
-        self.buffer_duration = 5.0  # Buffer duration in seconds
-        self.sample_rate = 24000  # Assuming 24kHz sample rate
+        self.audio_buffer = np.array([], dtype=np.float32)  # List of (timestamp, audio_data) tuples
         self.buffer_lock = asyncio.Lock()
 
         self.handlers = {
@@ -112,57 +110,6 @@ class WebSocketMessageHandler:
             }
         })
 
-    async def _update_audio_buffer(self, audio_float: np.ndarray, current_time: float):
-        """
-        Update the audio buffer with new audio data and remove old chunks
-
-        Args:
-            audio_float: numpy array of float32 audio data
-            current_time: current timestamp in seconds
-        """
-        # Add new audio chunk to buffer
-        async with self.buffer_lock:
-            self.audio_buffer.append((current_time, audio_float))
-
-            # Remove chunks older than buffer_duration
-            cutoff_time = current_time - self.buffer_duration
-            self.audio_buffer = [(t, a) for t, a in self.audio_buffer if t > cutoff_time]
-
-    def _get_prefix_padding(self, prefix_duration_ms: float, current_time: float) -> np.ndarray:
-        """
-        Get prefix padding audio from the buffer
-
-        Args:
-            prefix_duration_ms: desired prefix duration in milliseconds
-            current_time: current timestamp in seconds
-
-        Returns:
-            numpy array of prefix audio data or None if no suitable prefix found
-        """
-        if not self.audio_buffer:
-            return None
-
-        prefix_duration_sec = prefix_duration_ms / 1000
-        start_time = current_time - prefix_duration_sec
-
-        # Collect relevant audio chunks
-        prefix_chunks = []
-        for timestamp, audio_data in self.audio_buffer:
-            if timestamp >= start_time and timestamp < current_time:
-                prefix_chunks.append(audio_data)
-
-        if not prefix_chunks:
-            return None
-
-        # Concatenate chunks and trim to desired duration
-        prefix_audio = np.concatenate(prefix_chunks)
-        desired_samples = int(prefix_duration_sec * self.sample_rate)
-
-        if len(prefix_audio) > desired_samples:
-            prefix_audio = prefix_audio[-desired_samples:]
-
-        return prefix_audio
-
     async def _input_audio_buffer_append(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         try:
             # Decode and convert audio once
@@ -170,26 +117,48 @@ class WebSocketMessageHandler:
             audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
             audio_float = audio_data.astype(np.float32) / 32768.0
 
-            # Get current time
-            current_time = time.time()
-
-            # Update the audio buffer
-            self._update_audio_buffer(audio_float, current_time)
-
             if session.config.turn_detection and session.vad_processor:
-                should_buffer, speech_event = session.vad_processor.process_audio_chunk(audio_float)
 
-                if speech_event is not None:
-                    if not session.vad_item_id:
-                        session.vad_item_id = await session.queues.next_item()
+                speech_state, speech_event = session.vad_processor.process_audio_chunk(audio_float)
+                prev_state = session.prev_speech_state
 
-                    if 'start' in speech_event:
-                        logger.info(f"VAD speech started: {speech_event}")
+                # Handle state transitions and buffer management
+                if speech_state == "potential_speech":
+                    # Accumulate audio in potential speech buffer
+                    session.potential_speech_buffer = np.append(session.potential_speech_buffer, audio_float)
 
-                        # First clear the STT buffer before sending any new audio
+                elif speech_state == "is_speaking":
+                    if prev_state == "potential_speech":
+                        # First clear the STT buffer
                         await self.ws_stt.send_pydantic_message(WSInterSTT(
                             type="stt.buffer_clear"
                         ))
+
+                        # Send accumulated potential speech buffer
+                        if session.potential_speech_buffer.size > 0:
+                            await session.queues.append_unprocessed_audio(
+                                base64.b64encode(session.potential_speech_buffer.tobytes()).decode(),
+                                ws_stt=self.ws_stt,
+                                audio_float=session.potential_speech_buffer
+                            )
+                            session.potential_speech_buffer = np.array([], dtype=np.float32)
+
+                    # Send current audio chunk
+                    await session.queues.append_unprocessed_audio(
+                        message["audio"],
+                        ws_stt=self.ws_stt,
+                        audio_float=audio_float
+                    )
+
+                elif speech_state == "no_speech" and prev_state == "potential_speech":
+                    # Clear potential speech buffer as it wasn't real speech
+                    session.potential_speech_buffer = np.array([], dtype=np.float32)
+
+                # Handle speech events
+                if speech_event is not None:
+                    if 'start' in speech_event:
+                        if not session.vad_item_id:
+                            session.vad_item_id = await session.queues.next_item()
 
                         speech_started_event = InputAudioBufferSpeechStarted(
                             event_id=await session.queues.next_event(),
@@ -199,29 +168,7 @@ class WebSocketMessageHandler:
                         logger.info(f"VAD speech start: {speech_started_event.model_dump()}")
                         await websocket.send_json(speech_started_event.model_dump())
 
-                        # Get prefix padding using internal buffer
-                        prefix_padding_ms = session.config.turn_detection.prefix_padding_ms
-                        prefix_audio = self._get_prefix_padding(prefix_padding_ms, current_time)
-
-                        # If we have prefix audio, send it to STT
-                        if prefix_audio is not None:
-                            # Convert back to int16 and then to base64
-                            prefix_int16 = (prefix_audio * 32768).astype(np.int16)
-                            prefix_bytes = prefix_int16.tobytes()
-                            prefix_base64 = base64.b64encode(prefix_bytes).decode()
-
-                            # Send prefix audio to STT
-                            await session.queues.append_unprocessed_audio(
-                                prefix_base64,
-                                ws_stt=self.ws_stt,
-                                audio_float=prefix_audio
-                            )
-
-
-
                     elif 'end' in speech_event:
-                        # Rest of the speech end handling remains the same
-                        logger.info(f"VAD speech ended: {speech_event}")
                         speech_stopped_event = InputAudioBufferSpeechStopped(
                             event_id=await session.queues.next_event(),
                             audio_end_ms=int(speech_event['end'] * 1000),
@@ -234,50 +181,10 @@ class WebSocketMessageHandler:
                         if session.config.turn_detection.create_response:
                             await self._input_audio_buffer_commit(websocket, session, message,
                                                                   item_id=session.vad_item_id)
-
-                            # Process transcription and response
-                            transcription_done = await session.queues.wait_for_transcription_done()
-
-                            if transcription_done and session.queues.transcript_buffer:
-                                user_audio_item = ConversationItemMessageServer(
-                                    id=session.vad_item_id,
-                                    type="message",
-                                    role="user",
-                                    status="completed",
-                                    content=[
-                                        MessageContentServer(
-                                            type=ContentTypeServer.INPUT_AUDIO,
-                                            audio=session.queues.audio_buffer,
-                                            transcript=session.queues.transcript_buffer
-                                        )
-                                    ]
-                                )
-
-                                await session.queues.update_conversation_item_ordered_dict(
-                                    ws_client=websocket,
-                                    ws_llm=self.ws_llm,
-                                    item=user_audio_item
-                                )
-
-                                await websocket.send_json(ConversationItemInputAudioTranscriptionComplete(
-                                    event_id=await session.queues.next_event(),
-                                    type="conversation.item.input_audio_transcription.completed",
-                                    item_id=session.vad_item_id,
-                                    content_index=0,
-                                    transcript=session.queues.transcript_buffer
-                                ).model_dump())
-
                             response_event = ResponseCreate(id=await session.queues.next_resp())
                             await session.queues.unprocessed.put(response_event)
 
                         session.vad_item_id = None
-
-                if should_buffer:
-                    await session.queues.append_unprocessed_audio(
-                        message["audio"],
-                        ws_stt=self.ws_stt,
-                        audio_float=audio_float
-                    )
 
             else:
                 # Process without VAD

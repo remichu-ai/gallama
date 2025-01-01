@@ -12,10 +12,14 @@ from gallama.data_classes.realtime_client_proto import (
     ResponseCreate,
     ConversationItemInputAudioTranscriptionComplete,
     ConversationItemCreate,
-    ConversationItemTruncate
+    ConversationItemTruncate,
 )
-from gallama.data_classes.realtime_server_proto import MessageContentServer, ConversationItemMessageServer, \
-    ConversationItemServer
+from gallama.data_classes.realtime_server_proto import (
+    MessageContentServer,
+    ConversationItemMessageServer,
+    ConversationItemServer,
+    ContentTypeServer
+)
 from gallama.data_classes.internal_ws import WSInterSTTResponse, WSInterSTT
 from gallama.realtime.response import Response
 from gallama.realtime.session_manager import SessionManager
@@ -187,6 +191,43 @@ class WebSocketManager:
                     # if there is audio commited, create an item for it
 
                     modalities = "audio" if await session.queues.audio_exist() and "audio" in session.config.modalities else "text"
+
+                    # Process transcription and response
+                    if modalities == "audio":
+                        transcription_done = await session.queues.wait_for_transcription_done()
+
+                        if transcription_done and session.queues.transcript_buffer:
+                            user_audio_item = ConversationItemMessageServer(
+                                id=session.queues.vad_item_id,  # commit_unprocessed_audio save the id
+                                type="message",
+                                role="user",
+                                status="completed",
+                                content=[
+                                    MessageContentServer(
+                                        type=ContentTypeServer.INPUT_AUDIO,
+                                        audio=session.queues.audio_buffer,
+                                        transcript=session.queues.transcript_buffer
+                                    )
+                                ]
+                            )
+
+                            await session.queues.update_conversation_item_ordered_dict(
+                                ws_client=ws_client,
+                                ws_llm=self.message_handler.ws_llm,
+                                item=user_audio_item
+                            )
+
+                            await ws_client.send_json(ConversationItemInputAudioTranscriptionComplete(
+                                event_id=await session.queues.next_event(),
+                                type="conversation.item.input_audio_transcription.completed",
+                                item_id=session.queues.vad_item_id,
+                                content_index=0,
+                                transcript=session.queues.transcript_buffer
+                            ).model_dump())
+
+                            # clear vad_item_id
+                            session.queues.vad_item_id = None
+
 
                     # get response counter
                     response_id = await session.queues.next_resp()
