@@ -23,10 +23,19 @@ class WSInterSTT(BaseModel):
     sound: Optional[str] = None
 
 class WSInterSTTResponse(BaseModel):
-    type: Literal["stt.add_transcription", "stt.transcription_complete", "stt.buffer_cleared", "stt.transcription_complete", "stt.one_time_transcribe"]
+    type: Literal[
+        "stt.add_transcription",
+        "stt.transcription_complete",
+        "stt.buffer_cleared",
+        "stt.one_time_transcribe",
+        "stt.vad_speech_start",
+        "stt.vad_speech_end",
+    ]
     transcription: Optional[str] = None
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+    vad_timestamp_ms: Optional[float] = None
+    confidence: Optional[float] = None  # VAD confidence score
 
 
 # TTS

@@ -64,11 +64,6 @@ class TurnDetectionConfig(BaseModel):
     silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True
 
-    # gallama specific
-    vad_sample_rate: Literal[16000] = 16000
-    enable_preprocessing: Optional[bool] = False
-
-
 
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])

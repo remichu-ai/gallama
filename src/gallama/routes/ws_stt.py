@@ -182,21 +182,48 @@ class TranscriptionConnectionManager:
         sample_rate = connection["sample_rate"]
         asr_processor = connection["asr_processor"]
 
-        raw_buffer.extend(audio_chunk)
-        processed_audio = self.process_raw_buffer(raw_buffer, asr_processor, sample_rate)
-        if processed_audio is None:
-            return False
+        # Only process audio if there's actual data
+        if audio_chunk:
+            raw_buffer.extend(audio_chunk)
+            processed_audio = self.process_raw_buffer(raw_buffer, asr_processor, sample_rate)
+            if processed_audio is None:
+                return False
 
-        audio_buffer = np.concatenate([audio_buffer, processed_audio])
-        connection["audio_buffer"] = audio_buffer
-        connection["accumulated_duration"] = len(audio_buffer) / asr_processor.SAMPLING_RATE
+            audio_buffer = np.concatenate([audio_buffer, processed_audio])
+            connection["audio_buffer"] = audio_buffer
+            connection["accumulated_duration"] = len(audio_buffer) / asr_processor.SAMPLING_RATE
 
-        if len(audio_buffer) >= min_chunk_samples or is_final:
+        # Process if we have enough samples or it's the final chunk AND we have data
+        if (len(audio_buffer) >= min_chunk_samples) or (is_final and len(audio_buffer) > 0):
             asr_processor.add_audio_chunk(audio_buffer)
-            start_time, end_time, transcription = asr_processor.process_audio(is_final=is_final)
+            start_time, end_time, transcription, vad_events = asr_processor.process_audio(is_final=is_final)
 
+            # Handle VAD events - separate start and end event timing
+            for event in vad_events:
+                # Allow some processing time between start and end events
+                if event['type'] == 'start':
+                    response = WSInterSTTResponse(
+                        type="stt.vad_speech_start",
+                        vad_timestamp_ms=event['timestamp_ms'],
+                        confidence=event['confidence']
+                    )
+                    await websocket.send_json(response.dict())
+                    logger.debug(f"Sent VAD speech start event at {event['timestamp_ms']}ms")
+                    # Add a small delay before processing end events
+                    await asyncio.sleep(0.1)
+                elif event['type'] == 'end':
+                    response = WSInterSTTResponse(
+                        type="stt.vad_speech_end",
+                        vad_timestamp_ms=event['timestamp_ms'],
+                        confidence=event['confidence']
+                    )
+                    await websocket.send_json(response.dict())
+                    logger.debug(f"Sent VAD speech end event at {event['timestamp_ms']}ms")
+
+            # Send transcription if available
             if transcription:
-                logger.info(f"Got transcription for chunk: {transcription[:50]}... (start: {start_time}, end: {end_time})")
+                logger.info(
+                    f"Got transcription for chunk: {transcription[:50]}... (start: {start_time}, end: {end_time})")
                 response = WSInterSTTResponse(
                     type="stt.add_transcription",
                     transcription=transcription,
@@ -206,10 +233,16 @@ class TranscriptionConnectionManager:
                 await websocket.send_json(response.dict())
                 logger.debug("Sent transcription response")
 
-            connection["raw_buffer"] = bytearray()
-            connection["audio_buffer"] = np.array([], dtype=np.float32)
-            connection["accumulated_duration"] = 0.0
-            connection["is_first"] = False
+            if not is_final:  # Only clear buffers if not final to keep context
+                connection["raw_buffer"] = bytearray()
+                connection["audio_buffer"] = np.array([], dtype=np.float32)
+                connection["accumulated_duration"] = 0.0
+                connection["is_first"] = False
+            else:  # On final, do complete cleanup
+                connection["raw_buffer"] = bytearray()
+                connection["audio_buffer"] = np.array([], dtype=np.float32)
+                connection["accumulated_duration"] = 0.0
+                connection["is_first"] = True
 
         return True
 
