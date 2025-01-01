@@ -30,7 +30,7 @@ class VADProcessor:
         self.speech_start_ms = None
         self.last_speech_ms = None
         self.continuous_silence_ms = 0
-        self.min_silence_ms = 500  # Minimum 500ms silence to end speech
+        self.min_silence_ms = self.config.silence_duration_ms  # Use config value for silence duration
         self.window_size_samples = 512
         self.window_stride_samples = 512  # Can be adjusted if needed
 
@@ -79,7 +79,7 @@ class VADProcessor:
                 self.last_speech_ms = window['time_ms']
                 if not self.is_speech:
                     self.is_speech = True
-                    self.speech_start_ms = window['time_ms']
+                    self.speech_start_ms = max(0, window['time_ms'] - self.config.prefix_padding_ms)  # Apply prefix padding
                     self.continuous_silence_ms = 0
 
         avg_prob = sum(prob_list) / len(prob_list) if prob_list else 0.0
@@ -88,7 +88,7 @@ class VADProcessor:
 
         if self.is_speech and not self.speech_start_sent:
             self.speech_start_sent = True
-            logger.info(f"Speech start detected at {self.speech_start_ms}ms")
+            logger.info(f"Speech start detected at {self.speech_start_ms}ms (with prefix padding)")
             return {
                 'speech_detected': True,
                 'speech_ended': False,
@@ -102,7 +102,7 @@ class VADProcessor:
 
             if self.continuous_silence_ms >= self.min_silence_ms and not self.speech_end_sent:
                 self.speech_end_sent = True
-                logger.info(f"Speech end detected at {self.last_speech_ms}ms")
+                logger.info(f"Speech end detected at {self.last_speech_ms}ms after {self.continuous_silence_ms}ms of silence")
                 return {
                     'speech_detected': True,
                     'speech_ended': True,
@@ -121,6 +121,21 @@ class VADProcessor:
             'end_time': None,
             'confidence': avg_prob
         }
+
+    def reset(self):
+        """Reset VAD state."""
+        if self.vad_iterator:
+            self.vad_iterator.reset_states()
+
+        # Reset timing state
+        self.speech_start_ms = None
+        self.last_speech_ms = None
+        self.continuous_silence_ms = 0
+
+        # Reset detection state
+        self.is_speech = False
+        self.speech_start_sent = False
+        self.speech_end_sent = False
 
     def _update_speech_state(self, speech_detected: bool, speech_prob: float,
                              first_speech_time_ms: Optional[float],
@@ -173,18 +188,3 @@ class VADProcessor:
             'end_time': None,
             'confidence': speech_prob if self.is_speech else 0.0
         }
-
-    def reset(self):
-        """Reset VAD state."""
-        if self.vad_iterator:
-            self.vad_iterator.reset_states()
-
-        # Reset timing state
-        self.speech_start_ms = None
-        self.last_speech_ms = None
-        self.continuous_silence_ms = 0
-
-        # Reset detection state
-        self.is_speech = False
-        self.speech_start_sent = False
-        self.speech_end_sent = False
