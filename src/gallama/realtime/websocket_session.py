@@ -30,7 +30,7 @@ class WebSocketSession:
             turn_detection_config=config.turn_detection,
             input_sample_rate=config.input_sample_rate
         ) if config.turn_detection else None
-        self.vad_item_id: str = None
+        # self.vad_item_id: str = None
 
 
     def mark_voice_used(self):

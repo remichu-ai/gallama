@@ -97,7 +97,13 @@ class WebSocketMessageHandler:
                 session.vad_processor = None
                 session.vad_item_id = None
 
+        # send respective ws update
+        await self.ws_llm.send_pydantic_message(WSInterConfigUpdate(config=session.config))
+        await self.ws_tts.send_pydantic_message(WSInterConfigUpdate(config=session.config))
+        await self.ws_stt.send_pydantic_message(WSInterConfigUpdate(config=session.config))
+
         logger.info(f"Session updated: {session.config.model_dump()}")
+
 
         await websocket.send_json({
             "event_id": await session.queues.next_event(),
@@ -117,82 +123,88 @@ class WebSocketMessageHandler:
             audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
             audio_float = audio_data.astype(np.float32) / 32768.0
 
-            if session.config.turn_detection and session.vad_processor:
+            await session.queues.append_unprocessed_audio(
+                message["audio"],
+                ws_stt=self.ws_stt,
+                audio_float=audio_float
+            )
 
-                speech_state, speech_event = session.vad_processor.process_audio_chunk(audio_float)
-                prev_state = session.prev_speech_state
-
-                # Handle state transitions and buffer management
-                if speech_state == "potential_speech":
-                    # Accumulate audio in potential speech buffer
-                    session.potential_speech_buffer = np.append(session.potential_speech_buffer, audio_float)
-
-                elif speech_state == "is_speaking":
-                    if prev_state == "potential_speech":
-                        # First clear the STT buffer
-                        await self.ws_stt.send_pydantic_message(WSInterSTT(
-                            type="stt.buffer_clear"
-                        ))
-
-                        # Send accumulated potential speech buffer
-                        if session.potential_speech_buffer.size > 0:
-                            await session.queues.append_unprocessed_audio(
-                                base64.b64encode(session.potential_speech_buffer.tobytes()).decode(),
-                                ws_stt=self.ws_stt,
-                                audio_float=session.potential_speech_buffer
-                            )
-                            session.potential_speech_buffer = np.array([], dtype=np.float32)
-
-                    # Send current audio chunk
-                    await session.queues.append_unprocessed_audio(
-                        message["audio"],
-                        ws_stt=self.ws_stt,
-                        audio_float=audio_float
-                    )
-
-                elif speech_state == "no_speech" and prev_state == "potential_speech":
-                    # Clear potential speech buffer as it wasn't real speech
-                    session.potential_speech_buffer = np.array([], dtype=np.float32)
-
-                # Handle speech events
-                if speech_event is not None:
-                    if 'start' in speech_event:
-                        if not session.vad_item_id:
-                            session.vad_item_id = await session.queues.next_item()
-
-                        speech_started_event = InputAudioBufferSpeechStarted(
-                            event_id=await session.queues.next_event(),
-                            audio_start_ms=int(speech_event['start'] * 1000),
-                            item_id=session.vad_item_id
-                        )
-                        logger.info(f"VAD speech start: {speech_started_event.model_dump()}")
-                        await websocket.send_json(speech_started_event.model_dump())
-
-                    elif 'end' in speech_event:
-                        speech_stopped_event = InputAudioBufferSpeechStopped(
-                            event_id=await session.queues.next_event(),
-                            audio_end_ms=int(speech_event['end'] * 1000),
-                            item_id=session.vad_item_id,
-                            type="input_audio_buffer.speech_stopped"
-                        )
-                        logger.info(f"speech_stopped_event: {speech_stopped_event.model_dump()}")
-                        await websocket.send_json(speech_stopped_event.model_dump())
-
-                        if session.config.turn_detection.create_response:
-                            await self._input_audio_buffer_commit(websocket, session, message,
-                                                                  item_id=session.vad_item_id)
-                            response_event = ResponseCreate(id=await session.queues.next_resp())
-                            await session.queues.unprocessed.put(response_event)
-
-                        session.vad_item_id = None
-
-            else:
-                # Process without VAD
-                await session.queues.append_unprocessed_audio(
-                    message["audio"],
-                    ws_stt=self.ws_stt,
-                    audio_float=audio_float
-                )
+            # if session.config.turn_detection and session.vad_processor:
+            #
+            #     speech_state, speech_event = session.vad_processor.process_audio_chunk(audio_float)
+            #     prev_state = session.prev_speech_state
+            #
+            #     # Handle state transitions and buffer management
+            #     if speech_state == "potential_speech":
+            #         # Accumulate audio in potential speech buffer
+            #         session.potential_speech_buffer = np.append(session.potential_speech_buffer, audio_float)
+            #
+            #     elif speech_state == "is_speaking":
+            #         if prev_state == "potential_speech":
+            #             # First clear the STT buffer
+            #             await self.ws_stt.send_pydantic_message(WSInterSTT(
+            #                 type="stt.buffer_clear"
+            #             ))
+            #
+            #             # Send accumulated potential speech buffer
+            #             if session.potential_speech_buffer.size > 0:
+            #                 await session.queues.append_unprocessed_audio(
+            #                     base64.b64encode(session.potential_speech_buffer.tobytes()).decode(),
+            #                     ws_stt=self.ws_stt,
+            #                     audio_float=session.potential_speech_buffer
+            #                 )
+            #                 session.potential_speech_buffer = np.array([], dtype=np.float32)
+            #
+            #         # Send current audio chunk
+            #         await session.queues.append_unprocessed_audio(
+            #             message["audio"],
+            #             ws_stt=self.ws_stt,
+            #             audio_float=audio_float
+            #         )
+            #
+            #     elif speech_state == "no_speech" and prev_state == "potential_speech":
+            #         # Clear potential speech buffer as it wasn't real speech
+            #         session.potential_speech_buffer = np.array([], dtype=np.float32)
+            #
+            #     # Handle speech events
+            #     if speech_event is not None:
+            #         if 'start' in speech_event:
+            #             if not session.vad_item_id:
+            #                 session.vad_item_id = await session.queues.next_item()
+            #
+            #             speech_started_event = InputAudioBufferSpeechStarted(
+            #                 event_id=await session.queues.next_event(),
+            #                 audio_start_ms=int(speech_event['start'] * 1000),
+            #                 item_id=session.vad_item_id
+            #             )
+            #             logger.info(f"VAD speech start: {speech_started_event.model_dump()}")
+            #             await websocket.send_json(speech_started_event.model_dump())
+            #
+            #         elif 'end' in speech_event:
+            #             speech_stopped_event = InputAudioBufferSpeechStopped(
+            #                 event_id=await session.queues.next_event(),
+            #                 audio_end_ms=int(speech_event['end'] * 1000),
+            #                 item_id=session.vad_item_id,
+            #                 type="input_audio_buffer.speech_stopped"
+            #             )
+            #             logger.info(f"speech_stopped_event: {speech_stopped_event.model_dump()}")
+            #             await websocket.send_json(speech_stopped_event.model_dump())
+            #
+            #             if session.config.turn_detection.create_response:
+            #                 await self._input_audio_buffer_commit(websocket, session, message,
+            #                                                       item_id=session.vad_item_id)
+            #                 response_event = ResponseCreate(id=await session.queues.next_resp())
+            #                 await session.queues.unprocessed.put(response_event)
+            #
+            #             session.vad_item_id = None
+            #
+            # else:
+            #     # Process without VAD
+            #     await session.queues.append_unprocessed_audio(
+            #         message["audio"],
+            #         ws_stt=self.ws_stt,
+            #         audio_float=audio_float
+            #     )
 
         except Exception as e:
             logger.error(f"Error processing audio: {str(e)}")

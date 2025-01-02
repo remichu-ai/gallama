@@ -69,14 +69,6 @@ class VADProcessor:
         if self.debug and not os.path.exists(debug_folder_path):
             os.makedirs(debug_folder_path)
 
-        # Initialize audio preprocessor if enabled
-        if turn_detection_config.enable_preprocessing:
-            if preprocessing_config is None:
-                preprocessing_config = PreprocessingConfig()
-            self.audio_preprocessor = AudioPreprocessor(preprocessing_config)
-        else:
-            self.audio_preprocessor = None
-
         self.threshold = turn_detection_config.threshold
         self.silence_duration_ms = turn_detection_config.silence_duration_ms
         self.min_speech_duration_ms = 250

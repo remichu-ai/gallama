@@ -170,7 +170,7 @@ class ASRProcessor:
                 self.vad_end_sent = False
                 vad_events.append({
                     'type': 'start',
-                    'timestamp_ms': vad_result.get('start_time', 0.0),
+                    'timestamp_ms': int(vad_result.get('start_time', 0.0)),
                     'confidence': vad_result.get('confidence', 0.0)
                 })
                 logger.info(f"Speech start event queued at {vad_result.get('start_time', 0.0)}ms")
@@ -185,7 +185,7 @@ class ASRProcessor:
 
                 vad_events.append({
                     'type': 'end',
-                    'timestamp_ms': end_timestamp,
+                    'timestamp_ms': int(end_timestamp),
                     'confidence': vad_result.get('confidence', 0.0)
                 })
                 logger.info(f"Speech end event queued at {end_timestamp}ms")

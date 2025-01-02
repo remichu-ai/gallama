@@ -18,7 +18,10 @@ from gallama.data_classes.realtime_server_proto import (
     MessageContentServer,
     ConversationItemMessageServer,
     ConversationItemServer,
-    ContentTypeServer
+    ContentTypeServer,
+    InputAudioBufferSpeechStarted,
+    InputAudioBufferSpeechStopped,
+    InputAudioBufferCommitted
 )
 from gallama.data_classes.internal_ws import WSInterSTTResponse, WSInterSTT
 from gallama.realtime.response import Response
@@ -144,6 +147,46 @@ class WebSocketManager:
                         logger.info(f"Adding transcription: {stt_response.transcription}")
                         await session.queues.append_transcription(stt_response.transcription)
 
+                    elif stt_response.type == "stt.vad_speech_start":
+                        # get new item id
+                        session.queues.vad_item_id = await session.queues.next_item()
+
+                        # send client
+                        await websocket.send_json(InputAudioBufferSpeechStarted(
+                            event_id=await session.queues.next_event(),
+                            audio_start_ms=stt_response.vad_timestamp_ms,
+                            item_id=session.queues.vad_item_id
+                        ).model_dump())
+
+                        # update tracking
+                        session.queues.speech_start = stt_response.vad_timestamp_ms
+                        session.queues.speech_end = None
+
+                    elif stt_response.type == "stt.vad_speech_end":
+
+                        await websocket.send_json(InputAudioBufferSpeechStopped(
+                            event_id=await session.queues.next_event(),
+                            audio_end_ms=stt_response.vad_timestamp_ms,
+                            item_id=session.queues.vad_item_id
+                        ).model_dump())
+
+                        # update tracking
+                        session.queues.speech_end = stt_response.vad_timestamp_ms
+
+                        # handling internal audio commit
+                        await session.queues.commit_unprocessed_audio(ws_stt=ws_stt, item_id=session.queues.vad_item_id)
+
+                        # send user committed msg
+                        await websocket.send_json(InputAudioBufferCommitted(**{
+                            "event_id": await session.queues.next_event(),
+                            "type": "input_audio_buffer.committed",
+                            "previous_item_id": await session.queues.current_item_id(),
+                            "item_id": session.queues.vad_item_id
+                        }).model_dump())
+
+                        # trigger response
+                        response_event = ResponseCreate(id=await session.queues.next_resp())
+                        await session.queues.unprocessed.put(response_event)
                     elif stt_response.type == "stt.transcription_complete":
                         logger.info(f"Transcription complete")
                         await session.queues.mark_transcription_done()
