@@ -42,31 +42,31 @@ class WebSocketSession:
         # Additional cleanup as needed
 
 
-    async def session_update(
-        self,
-        ws_client: WebSocket,
-        message: dict,
-        ws_stt: WebSocketClient,
-        ws_llm: WebSocketClient,
-        ws_tts: WebSocketClient,
-    ):
-        # for fields that not updated, will retain existing setting
-        self.config = self.config.merge(message.get("session",{}))
-
-        # send client acknowledgement
-        await ws_client.send_json({
-            "event_id": await self.queues.next_event(),
-            "type": "session.updated",
-            "session": {
-                "id": self.id,
-                "object": "realtime.session",
-                "model": "default model",
-                **self.config.model_dump()
-            }
-        })
-
-
-        # send all internal ws update config
-        await ws_stt.send_message(self.config.stt)
-        await ws_llm.send_message(self.config.llm)
-        await ws_tts.send_message(self.config.tts)
+    # async def session_update(
+    #     self,
+    #     ws_client: WebSocket,
+    #     message: dict,
+    #     ws_stt: WebSocketClient,
+    #     ws_llm: WebSocketClient,
+    #     ws_tts: WebSocketClient,
+    # ):
+    #     # for fields that not updated, will retain existing setting
+    #     self.config = self.config.merge(message.get("session",{}))
+    #
+    #     # send client acknowledgement
+    #     await ws_client.send_json({
+    #         "event_id": await self.queues.next_event(),
+    #         "type": "session.updated",
+    #         "session": {
+    #             "id": self.id,
+    #             "object": "realtime.session",
+    #             "model": "default model",
+    #             **self.config.model_dump()
+    #         }
+    #     })
+    #
+    #
+    #     # send all internal ws update config
+    #     await ws_stt.send_message(self.config.stt)
+    #     await ws_llm.send_message(self.config.llm)
+    #     await ws_tts.send_message(self.config.tts)

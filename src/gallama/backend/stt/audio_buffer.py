@@ -78,6 +78,7 @@ class AudioBufferWithTiming:
             # For non-final processing, update the last processed position
             # but keep some overlap for context
             overlap_samples = int(0.5 * self.sample_rate)  # 0.5 seconds overlap
+            overlap_samples = int(0 * self.sample_rate)  # 0.5 seconds overlap
             self.last_processed_sample = max(0, len(self.buffer) - overlap_samples)
 
         self.is_processing = False

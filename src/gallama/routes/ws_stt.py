@@ -7,7 +7,7 @@ from typing import Dict, Optional, Literal
 from pydantic import BaseModel
 from ..dependencies import get_model_manager
 from ..data_classes.realtime_client_proto import SessionConfig
-from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse
+from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterConfigUpdate
 from gallama.logger.logger import logger
 import base64
 import asyncio
@@ -301,7 +301,12 @@ async def websocket_endpoint(
 
         while True:
             data = await websocket.receive_json()
-            message = WSInterSTT.parse_obj(data)
+            # logger.info(f"STT Received message: {data}")
+            if "stt." in data["type"]:
+                message = WSInterSTT.model_validate(data)
+            elif "common." in data["type"]:
+                message = WSInterConfigUpdate.model_validate(data)
+
 
             if message.type == "stt.add_sound_chunk" and message.sound:
                 audio_bytes = base64.b64decode(message.sound)
@@ -356,8 +361,13 @@ async def websocket_endpoint(
                 success = await manager.process_one_time_transcription(websocket, message.sound)
                 if not success:
                     logger.error("Failed to process one-time transcription")
-
-
+            elif message.type == "common.config_update":
+                connection = manager.active_connections.get(websocket)
+                logger.info(f"Received config update in STT: {message.config}")
+                if connection:
+                    # Reset the ASR processor state
+                    connection["asr_processor"].update_vad_config(message.config.turn_detection)
+                    connection["asr_processor"].reset_state()
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")

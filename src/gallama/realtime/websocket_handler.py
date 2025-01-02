@@ -122,7 +122,6 @@ class WebSocketMessageHandler:
             audio_bytes = base64.b64decode(message["audio"])
             audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
             audio_float = audio_data.astype(np.float32) / 32768.0
-
             await session.queues.append_unprocessed_audio(
                 message["audio"],
                 ws_stt=self.ws_stt,
