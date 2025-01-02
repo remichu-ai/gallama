@@ -67,6 +67,8 @@ class MessageQueues:
         self.lock_audio_commited = asyncio.Lock()     # ensure that audio is sync with ws_stt
 
         self.vad_item_id = None
+        self.speech_start = None
+        self.speech_end = None
         # self.latest_item: Optional[ConversationItem] = None
 
         # self.uncommitted_audio_data: Optional[bytes] = None

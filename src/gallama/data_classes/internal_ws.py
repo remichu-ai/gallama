@@ -10,7 +10,7 @@ SpeechState = Literal["no_speech", "potential_speech", "is_speaking", "potential
 
 # common event
 class WSInterConfigUpdate(BaseModel):
-    type: Literal["common.config_update"]
+    type: Literal["common.config_update"] = "common.config_update"
     config: SessionConfig
 
 class WSInterCancel(BaseModel):
@@ -34,7 +34,7 @@ class WSInterSTTResponse(BaseModel):
     transcription: Optional[str] = None
     start_time: Optional[float] = None
     end_time: Optional[float] = None
-    vad_timestamp_ms: Optional[float] = None
+    vad_timestamp_ms: Optional[int] = None
     confidence: Optional[float] = None  # VAD confidence score
 
 
