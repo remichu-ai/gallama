@@ -68,6 +68,7 @@ class AudioBufferWithTiming:
     def mark_processing_complete(self, is_final: bool = False) -> None:
         """
         Mark the completion of audio processing.
+        Simply moves the last_processed_sample pointer forward to current buffer position.
 
         Args:
             is_final (bool): Whether this was the final processing of the audio stream
@@ -75,11 +76,9 @@ class AudioBufferWithTiming:
         if is_final:
             self.last_processed_sample = len(self.buffer)
         else:
-            # For non-final processing, update the last processed position
-            # but keep some overlap for context
-            overlap_samples = int(0.5 * self.sample_rate)  # 0.5 seconds overlap
-            overlap_samples = int(0 * self.sample_rate)  # 0.5 seconds overlap
-            self.last_processed_sample = max(0, len(self.buffer) - overlap_samples)
+            # Move the pointer to end of current buffer
+            # This ensures we process new chunks from where we left off
+            self.last_processed_sample = len(self.buffer)
 
         self.is_processing = False
 
@@ -88,6 +87,10 @@ class AudioBufferWithTiming:
         Get the portion of audio that hasn't been processed yet.
         Returns the audio from last_processed_sample to the end of the buffer.
         """
+        # Ensure we don't return empty array and maintain continuity
+        if self.last_processed_sample >= len(self.buffer):
+            return np.array([], dtype=np.float32)
+
         return self.buffer[self.last_processed_sample:]
 
     def reset(self) -> None:
