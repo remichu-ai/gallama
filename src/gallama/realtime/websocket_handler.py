@@ -85,18 +85,6 @@ class WebSocketMessageHandler:
 
         session.config = SessionConfig(**{**session.config.model_dump(), **message["session"]})
 
-        # Reset VAD state when configuration changes
-        if 'turn_detection' in message["session"]:
-            if session.config.turn_detection:
-                session.vad_processor = VADProcessor(
-                    turn_detection_config=session.config.turn_detection,
-                    input_sample_rate=session.config.input_sample_rate
-                )
-                session.vad_item_id = None
-            else:
-                session.vad_processor = None
-                session.vad_item_id = None
-
         # send respective ws update
         await self.ws_llm.send_pydantic_message(WSInterConfigUpdate(config=session.config))
         await self.ws_tts.send_pydantic_message(WSInterConfigUpdate(config=session.config))

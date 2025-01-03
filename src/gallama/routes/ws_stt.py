@@ -150,9 +150,15 @@ class TranscriptionConnectionManager:
         try:
             if streaming_mode:
                 # Streaming mode - process chunks as they come
-                success = await self._process_streaming_chunk(connection, websocket, audio_chunk, is_final)
-                if is_final:
+                success, is_final_from_vad = await self._process_streaming_chunk(connection, websocket, audio_chunk, is_final)
+                # logger.info(f"is_final_from_vad: {is_final_from_vad}")
+                if is_final or is_final_from_vad:
                     connection["processing_complete"] = True
+
+                    # send completion event to client
+                    complete_response = WSInterSTTResponse(type="stt.transcription_complete")
+                    await websocket.send_json(complete_response.model_dump())
+                    logger.info("Send completion event for VAD based transcription")
                 return success
             else:
                 # One-shot mode - accumulate all audio
@@ -176,11 +182,15 @@ class TranscriptionConnectionManager:
     async def _process_streaming_chunk(self, connection, websocket, audio_chunk, is_final):
         """Handle streaming mode audio processing"""
         logger.info(f"Processing {'final' if is_final else 'intermediate'} streaming chunk")
+        is_final_from_vad = False
         raw_buffer = connection["raw_buffer"]
         audio_buffer = connection["audio_buffer"]
         min_chunk_samples = connection["min_chunk_samples"]
         sample_rate = connection["sample_rate"]
         asr_processor = connection["asr_processor"]
+
+        # Calculate audio_time_offset
+        audio_time_offset = connection.get("accumulated_duration", 0.0)
 
         # Only process audio if there's actual data
         if audio_chunk:
@@ -196,7 +206,10 @@ class TranscriptionConnectionManager:
         # Process if we have enough samples or it's the final chunk AND we have data
         if (len(audio_buffer) >= min_chunk_samples) or (is_final and len(audio_buffer) > 0):
             asr_processor.add_audio_chunk(audio_buffer)
-            start_time, end_time, transcription, vad_events = asr_processor.process_audio(is_final=is_final)
+            start_time, end_time, transcription, vad_events = asr_processor.process_audio(
+                is_final=is_final,
+                audio_time_offset=audio_time_offset
+            )
 
             # Handle VAD events - separate start and end event timing
             for event in vad_events:
@@ -211,7 +224,9 @@ class TranscriptionConnectionManager:
                     logger.debug(f"Sent VAD speech start event at {event['timestamp_ms']}ms")
                     # Add a small delay before processing end events
                     await asyncio.sleep(0.1)
-                elif event['type'] == 'end':
+
+            for event in vad_events:
+                if event['type'] == 'end':
                     response = WSInterSTTResponse(
                         type="stt.vad_speech_end",
                         vad_timestamp_ms=event['timestamp_ms'],
@@ -219,6 +234,9 @@ class TranscriptionConnectionManager:
                     )
                     await websocket.send_json(response.dict())
                     logger.debug(f"Sent VAD speech end event at {event['timestamp_ms']}ms")
+
+                    # mark is_final to true
+                    is_final_from_vad = True
 
             # Send transcription if available
             if transcription:
@@ -244,7 +262,9 @@ class TranscriptionConnectionManager:
                 connection["accumulated_duration"] = 0.0
                 connection["is_first"] = True
 
-        return True
+
+
+        return True, is_final_from_vad
 
     async def _process_complete_audio(self, connection, websocket):
         """Handle one-shot audio processing"""
@@ -324,9 +344,6 @@ async def websocket_endpoint(
                         # Wait until processing is complete before sending transcription_complete
                         while not await manager.is_processing_complete(websocket):
                             await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
-
-                        complete_response = WSInterSTTResponse(type="stt.transcription_complete")
-                        await websocket.send_json(complete_response.dict())
 
                 except Exception as e:
                     logger.error(f"Error during sound_done processing: {str(e)}")

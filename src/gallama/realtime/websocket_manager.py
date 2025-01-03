@@ -148,6 +148,7 @@ class WebSocketManager:
                         await session.queues.append_transcription(stt_response.transcription)
 
                     elif stt_response.type == "stt.vad_speech_start":
+                        logger.info(f"websocket_manager: VAD speech start: {stt_response}")
                         # get new item id
                         session.queues.vad_item_id = await session.queues.next_item()
 
@@ -163,7 +164,7 @@ class WebSocketManager:
                         session.queues.speech_end = None
 
                     elif stt_response.type == "stt.vad_speech_end":
-
+                        logger.info(f"websocket_manager: VAD speech end: {stt_response}")
                         await websocket.send_json(InputAudioBufferSpeechStopped(
                             event_id=await session.queues.next_event(),
                             audio_end_ms=stt_response.vad_timestamp_ms,
@@ -174,7 +175,7 @@ class WebSocketManager:
                         session.queues.speech_end = stt_response.vad_timestamp_ms
 
                         # handling internal audio commit
-                        await session.queues.commit_unprocessed_audio(ws_stt=ws_stt, item_id=session.queues.vad_item_id)
+                        await session.queues.commit_unprocessed_audio(ws_stt=ws_stt, item_id=session.queues.vad_item_id, skip_sound_done=True)
 
                         # send user committed msg
                         await websocket.send_json(InputAudioBufferCommitted(**{
@@ -268,10 +269,6 @@ class WebSocketManager:
                                 transcript=session.queues.transcript_buffer
                             ).model_dump())
 
-                            # clear vad_item_id
-                            session.queues.vad_item_id = None
-
-
                     # get response counter
                     response_id = await session.queues.next_resp()
 
@@ -313,6 +310,9 @@ class WebSocketManager:
                     async with session.current_response_lock:
                         logger.info(f"-------------------Reset current response")
                         session.current_response = None
+
+                    # clear vad_item_id
+                    session.queues.vad_item_id = None
 
 
             except Exception as e:

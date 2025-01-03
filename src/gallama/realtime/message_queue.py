@@ -155,7 +155,7 @@ class MessageQueues:
             raise
 
 
-    async def commit_unprocessed_audio(self, ws_stt: WebSocketClient, item_id: str = None):
+    async def commit_unprocessed_audio(self, ws_stt: WebSocketClient, item_id: str = None, skip_sound_done:bool = False):
         """
         Signal to ws_stt that the audio buffer has been committed.
 
@@ -165,16 +165,15 @@ class MessageQueues:
             None
         """
         try:
-            # send the ws_stt the commit signal
-            async with self.lock_audio_buffer:
-                await ws_stt.send_pydantic_message(WSInterSTT(type="stt.sound_done"))
-
-            self.vad_item_id = item_id
+            if not skip_sound_done:
+                # send the ws_stt the commit signal
+                async with self.lock_audio_buffer:
+                    await ws_stt.send_pydantic_message(WSInterSTT(type="stt.sound_done"))
 
             async with self.lock_audio_commited:
                 self.audio_commited = True
 
-
+            self.vad_item_id = item_id
         except Exception as e:
             # Log error and optionally raise it depending on your error handling needs
             logger.error(f"Error processing audio data: {str(e)}")
@@ -316,8 +315,8 @@ class MessageQueues:
                         "event_id": new_event_id,
                         "type": "conversation.item.created",
                         "previous_item_id": previous_item_id,
-                        "item": stripped_item.model_dump()
-                    }).model_dump()
+                        "item": stripped_item.model_dump(exclude_none=True)
+                    }).model_dump(exclude_none=True)
 
                 # update to history with server type item
                 item_server = parse_conversation_item(item.model_dump())
