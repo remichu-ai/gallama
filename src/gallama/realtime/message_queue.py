@@ -202,8 +202,9 @@ class MessageQueues:
         async with self.lock_transcript_buffer:
             self.transcript_buffer += transcription_chunk
 
+
     async def mark_transcription_done(self):
-        logger.info(f"transcription done")
+        logger.info(f"in MessageQueue: transcription done")
         async with self.lock_transcript_complete:
             self.transcription_complete = True
 
@@ -262,9 +263,10 @@ class MessageQueues:
                 return True
 
             await asyncio.wait_for(_wait(), timeout=10.0)
+            logger.info(f"transcription done")
             return True, self.vad_item_id
         except asyncio.TimeoutError:
-            return False
+            return False, None
         except Exception as e:
             raise Exception(f"Error in wait_for_transcription_done: {str(e)}")
 

@@ -185,6 +185,9 @@ class ASRProcessor:
 
             if vad_result_end and (
                     vad_result_end['speech_ended'] or (is_final and self.vad_speech_active)) and not self.vad_end_sent:
+                # set is_final to simulate final audio processing
+                is_final = True
+
                 self.vad_speech_active = False
                 self.vad_end_sent = True
                 self.vad_start_sent = False

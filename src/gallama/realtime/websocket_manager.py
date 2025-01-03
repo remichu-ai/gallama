@@ -163,6 +163,10 @@ class WebSocketManager:
                         session.queues.speech_start = stt_response.vad_timestamp_ms
                         session.queues.speech_end = None
 
+                        # ensure transcription is reset set to
+                        logger.info(f"Reset transcription")
+                        await session.queues.clear_transcription()
+
                     elif stt_response.type == "stt.vad_speech_end":
                         logger.info(f"websocket_manager: VAD speech end: {stt_response}")
                         await websocket.send_json(InputAudioBufferSpeechStopped(
@@ -189,7 +193,7 @@ class WebSocketManager:
                         response_event = ResponseCreate(id=await session.queues.next_resp())
                         await session.queues.unprocessed.put(response_event)
                     elif stt_response.type == "stt.transcription_complete":
-                        logger.info(f"Transcription complete")
+                        logger.info(f"Received Transcription complete from TTS")
                         await session.queues.mark_transcription_done()
                         # break     # not break as this is meant to run forever
                     elif stt_response.type == "stt.buffer_cleared":
@@ -235,12 +239,18 @@ class WebSocketManager:
                     # if there is audio commited, create an item for it
 
                     modalities = "audio" if await session.queues.audio_exist() and "audio" in session.config.modalities else "text"
-
+                    logger.info(f"modalities: {modalities}")
+                    logger.info(f"session.config.modalities: {session.config.modalities}")
                     # Process transcription and response
                     if modalities == "audio":
-                        transcription_done = await session.queues.wait_for_transcription_done()
+                        # wait until transcription is done
+                        transcription_done, vad_item_id = await session.queues.wait_for_transcription_done()
+                        logger.info(f"transcription_done: {transcription_done}")
+                        logger.info(f"vad_item_id: {vad_item_id}")
+                        logger.info(f"session.queues.transcript_buffer: {session.queues.transcript_buffer}")
 
                         if transcription_done and session.queues.transcript_buffer:
+
                             user_audio_item = ConversationItemMessageServer(
                                 id=session.queues.vad_item_id,  # commit_unprocessed_audio save the id
                                 type="message",

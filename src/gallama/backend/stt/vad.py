@@ -59,22 +59,17 @@ class VADProcessor:
         return self.audio_buffer.start_offset / self.SAMPLING_RATE
 
     def get_windows_from_buffer(self, audio_buffer: AudioBufferWithTiming, current_offset: int):
-        """Extract 512-sample windows from audio buffer with proper timing."""
         audio_chunk = audio_buffer.get_unprocessed_audio()
         if len(audio_chunk) == 0:
             return []
 
         windows = []
-        chunk_start_time_ms = audio_buffer.get_time_ms(current_offset)
-
-        # Process only full 512-sample windows
+        # Remove local time calculation, rely on AudioBufferWithTiming
         for i in range(0, len(audio_chunk) - self.window_size_samples + 1, self.window_stride_samples):
             window = audio_chunk[i:i + self.window_size_samples]
-            if len(window) == self.window_size_samples:  # Ensure full 512-sample windows
-                window_time_ms = chunk_start_time_ms + (i / self.sampling_rate * 1000)
+            if len(window) == self.window_size_samples:
                 windows.append({
                     'data': torch.from_numpy(window).float(),
-                    'time_ms': window_time_ms,
                     'index': i // self.window_stride_samples
                 })
 
@@ -90,64 +85,55 @@ class VADProcessor:
         speech_end_object = None
 
         for window in windows:
+            # Get absolute time accounting for buffer offset
+            absolute_time_ms = audio_buffer.get_time_ms(current_offset + window['index'] * self.window_stride_samples)
+
             prob = self.model(window['data'], self.sampling_rate).item()
-            logger.info(
-                f"Window {window['index']} at {window['time_ms']:.3f}ms: prob={prob:.3f}, threshold={self.config.threshold}, continuous_silence_ms={self.continuous_silence_ms:.3f}"
-            )
 
             if prob >= self.config.threshold:
-                self.last_speech_ms = window['time_ms']
+                self.last_speech_ms = absolute_time_ms
                 if not self.is_speaking:
                     if not self.potential_speech_start_flag:
                         self.potential_speech_start_flag = True
-                        self.speech_start_ms = window['time_ms']  # Track potential start time
+                        self.speech_start_ms = absolute_time_ms  # Use absolute time
 
-                    # Accumulate speaking duration
                     self.continuous_speaking_ms += (self.window_size_samples / self.sampling_rate * 1000)
 
-                    # Confirm speech start if min_speak_ms is achieved
                     if self.continuous_speaking_ms >= self.min_speak_ms:
                         self.is_speaking = True
                         self.speech_start_sent = True
                         self.prob_speech_start = prob
-                        # Use absolute timing from the audio buffer
                         speech_start_object = {
                             'speech_detected': True,
                             'speech_ended': False,
-                            'start_time': self.speech_start_ms,
+                            'start_time': self.speech_start_ms,  # Already absolute time
                             'end_time': None,
                             'confidence': prob
                         }
                 else:
-                    # Reset potential speech end flag if speech continues
                     if self.potential_speech_end_flag:
-                        logger.info(f"Reset potential_speech_end_flag because speech continues.")
                         self.potential_speech_end_flag = False
                         self.continuous_silence_ms = 0
 
             else:
-                # Accumulate silence duration
                 if self.is_speaking:
                     self.continuous_silence_ms += (self.window_size_samples / self.sampling_rate * 1000)
 
-                # Check for potential speech end
                 if not self.potential_speech_end_flag and self.is_speaking:
                     self.potential_speech_end_flag = True
 
-                # Confirm speech end if silence duration exceeds min_silence_ms
                 if self.continuous_silence_ms > self.min_silence_ms:
                     self.prob_speech_end = prob
-                    # Use absolute timing from the audio buffer
                     speech_end_object = {
                         'speech_detected': True,
                         'speech_ended': True,
-                        'start_time': self.speech_start_ms,
-                        'end_time': self.last_speech_ms,
+                        'start_time': self.speech_start_ms,  # Already absolute time
+                        'end_time': self.last_speech_ms,  # Already absolute time
                         'duration_ms': self.last_speech_ms - self.speech_start_ms,
                         'confidence': 1 - prob
                     }
                     self.reset()
-                    break  # Once speech end is confirmed, disregard the rest of the audio
+                    break
 
         return speech_start_object, speech_end_object
 
