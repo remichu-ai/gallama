@@ -91,7 +91,6 @@ class ASRProcessor:
         else:
             self.vad_enable = False
 
-
     def reset_state(self, initial_offset=0):
         """Resets the internal state of the processor."""
         self.audio_buffer.reset()
@@ -104,7 +103,6 @@ class ASRProcessor:
         self.vad_end_sent = False
         if self.vad:
             self.vad.reset()
-
 
     def add_audio_chunk(self, audio_chunk):
         """
@@ -301,7 +299,6 @@ class ASRProcessor:
                 audio, init_prompt, temperature, language, include_segments
             )
 
-
     def construct_prompt(self):
         """
         Constructs a prompt from previously confirmed transcriptions for context during ASR.
@@ -313,7 +310,7 @@ class ASRProcessor:
         """
         # Find the first committed transcription outside the current buffer
         start_index = max(0, len(self.committed_transcriptions) - 1)
-        while start_index > 0 and self.committed_transcriptions[start_index - 1][1] > self.audio_time_offset:
+        while start_index > 0 and self.committed_transcriptions[start_index - 1][1] > self.audio_buffer.get_time_ms(self.audio_buffer.last_processed_sample):
             start_index -= 1
 
         past_context = self.committed_transcriptions[:start_index]
@@ -328,7 +325,6 @@ class ASRProcessor:
 
         remaining_transcriptions = self.committed_transcriptions[start_index:]
         return self.asr.sep.join(reversed(prompt)), self.asr.sep.join(text for _, _, text in remaining_transcriptions)
-
 
     def trim_to_last_completed_sentence(self):
         """
@@ -357,10 +353,9 @@ class ASRProcessor:
 
         segment_end_times = self.asr.segments_end_ts(transcription_results)
         if len(segment_end_times) > 1:
-            trim_timestamp = segment_end_times[-2] + self.audio_time_offset
+            trim_timestamp = segment_end_times[-2] + (self.audio_buffer.start_offset / self.SAMPLING_RATE)
             if trim_timestamp <= self.committed_transcriptions[-1][1]:
                 self.trim_buffer_at(trim_timestamp)
-
 
     def segment_transcriptions_into_sentences(self, words):
         """

@@ -50,13 +50,6 @@ class VADProcessor:
         self.potential_speech_start_flag = None
         self.potential_speech_end_flag = None
 
-    @property
-    def audio_time_offset(self) -> float:
-        """
-        Get the current audio time offset in seconds.
-        This represents the start time of the current audio buffer.
-        """
-        return self.audio_buffer.start_offset / self.SAMPLING_RATE
 
     def get_windows_from_buffer(self, audio_buffer: AudioBufferWithTiming, current_offset: int):
         audio_chunk = audio_buffer.get_unprocessed_audio()
@@ -75,8 +68,8 @@ class VADProcessor:
 
         return windows
 
-    def process_chunk(self, audio_buffer: AudioBufferWithTiming, current_offset: int, is_final: bool = False) -> Tuple[
-        Dict, Dict]:
+    def process_chunk(self, audio_buffer: AudioBufferWithTiming, current_offset: int, is_final: bool = False)\
+            -> Tuple[Dict, Dict]:
         windows = self.get_windows_from_buffer(audio_buffer, current_offset)
         if not windows:
             return None, None
@@ -90,8 +83,11 @@ class VADProcessor:
 
             prob = self.model(window['data'], self.sampling_rate).item()
 
+            logger.info(f"STT chunk window index {window['index']}, prob: {prob}")
+
             if prob >= self.config.threshold:
                 self.last_speech_ms = absolute_time_ms
+
                 if not self.is_speaking:
                     if not self.potential_speech_start_flag:
                         self.potential_speech_start_flag = True
@@ -119,25 +115,25 @@ class VADProcessor:
                 if self.is_speaking:
                     self.continuous_silence_ms += (self.window_size_samples / self.sampling_rate * 1000)
 
-                if not self.potential_speech_end_flag and self.is_speaking:
-                    self.potential_speech_end_flag = True
+                    if not self.potential_speech_end_flag:
+                        self.potential_speech_end_flag = True
 
-                if self.continuous_silence_ms > self.min_silence_ms:
-                    self.prob_speech_end = prob
-                    speech_end_object = {
-                        'speech_detected': True,
-                        'speech_ended': True,
-                        'start_time': self.speech_start_ms,  # Already absolute time
-                        'end_time': self.last_speech_ms,  # Already absolute time
-                        'duration_ms': self.last_speech_ms - self.speech_start_ms,
-                        'confidence': 1 - prob
-                    }
-                    self.reset()
-                    break
+                    if self.continuous_silence_ms > self.min_silence_ms:
+                        self.prob_speech_end = prob
+                        speech_end_object = {
+                            'speech_detected': True,
+                            'speech_ended': True,
+                            'start_time': self.speech_start_ms,  # Already absolute time
+                            'end_time': self.last_speech_ms,  # Already absolute time
+                            'duration_ms': self.last_speech_ms - self.speech_start_ms,
+                            'confidence': 1 - prob
+                        }
+                        self.reset()
+
 
         return speech_start_object, speech_end_object
 
-    def reset(self):
+    def  reset(self):
         """Reset VAD state."""
         if self.vad_iterator:
             self.vad_iterator.reset_states()
@@ -149,9 +145,6 @@ class VADProcessor:
         self.continuous_speaking_ms = 0
 
         # Reset detection state
-        self.is_speaking = False
-        self.speech_start_sent = False
-        self.speech_end_sent = False
         self.is_speaking = False
         self.speech_start_sent = False
         self.speech_end_sent = False

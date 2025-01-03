@@ -501,8 +501,9 @@ class Response:
                                 logger.info("TTS response complete")
                                 # mark audio generation as done
                                 self.audio_done = True
-                                await self.update_content_done(content_type="audio")
                                 content_done_tracker = True
+                                await self.update_content_done(content_type="audio")
+
                                 break   # exit the function
                         except json.JSONDecodeError:
                             logger.warning(f"Received unexpected string message: {message[:100]}...")

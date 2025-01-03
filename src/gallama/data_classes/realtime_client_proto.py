@@ -59,7 +59,7 @@ class AudioBufferClear(BaseModel):
 
 class TurnDetectionConfig(BaseModel):
     type: Literal["server_vad"] = "server_vad"
-    threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.6)
+    threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
     prefix_padding_ms: Optional[int] = Field(ge=0, default=300)
     silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True

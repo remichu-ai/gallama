@@ -152,6 +152,8 @@ class WebSocketManager:
                         # get new item id
                         session.queues.vad_item_id = await session.queues.next_item()
 
+                        # put cancel event into queue
+
                         # send client
                         await websocket.send_json(InputAudioBufferSpeechStarted(
                             event_id=await session.queues.next_event(),
