@@ -46,8 +46,9 @@ class PreprocessingConfig:
 
 class VADProcessor:
     def __init__(self, turn_detection_config: TurnDetectionConfig, preprocessing_config: PreprocessingConfig = None,
-                 input_sample_rate: int = 24000, debug: bool = True,
-                 debug_folder_path: str = "/home/remichu/work/ML/gallama/experiment/log"):
+                 input_sample_rate: int = 24000, debug: bool = False,
+                 # debug_folder_path: str = "/home/remichu/work/ML/gallama/experiment/log"):
+                 debug_folder_path: str = ""):
         self.model = load_silero_vad()
         self.model.eval()
 
