@@ -11,6 +11,7 @@ from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterCo
 from gallama.logger.logger import logger
 import base64
 import asyncio
+import samplerate
 
 router = APIRouter(prefix="", tags=["audio"])
 
@@ -118,6 +119,36 @@ class TranscriptionConnectionManager:
             logger.error(f"Error in one-time transcription: {str(e)}")
             return False
 
+    # def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
+    #     try:
+    #         with soundfile.SoundFile(
+    #                 io.BytesIO(raw_buffer),
+    #                 channels=1,
+    #                 endian="LITTLE",
+    #                 samplerate=sample_rate,
+    #                 subtype="PCM_16",
+    #                 format="RAW"
+    #         ) as sf:
+    #             # Read the audio data from the SoundFile object
+    #             audio = sf.read()
+    #
+    #             # Calculate the resampling ratio
+    #             ratio = asr_processor.SAMPLING_RATE / sample_rate
+    #
+    #             # Resample the audio using samplerate
+    #             resampled_audio = samplerate.resample(
+    #                 audio,
+    #                 ratio,
+    #                 converter_type='sinc_best'  # High-quality conversion
+    #             )
+    #
+    #             # Ensure the output is float32
+    #             return resampled_audio.astype(np.float32)
+    #     except Exception as e:
+    #         logger.error(f"Error processing raw audio: {str(e)}")
+    #         return None
+
+
 
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
@@ -126,6 +157,7 @@ class TranscriptionConnectionManager:
                 channels=1,
                 endian="LITTLE",
                 samplerate=sample_rate,
+                # samplerate=asr_processor.SAMPLING_RATE,
                 subtype="PCM_16",
                 format="RAW"
             ) as sf:
@@ -188,57 +220,70 @@ class TranscriptionConnectionManager:
         sample_rate = connection["sample_rate"]
         asr_processor = connection["asr_processor"]
 
-        # Audio buffer manages timing internally
+        # Calculate minimum samples needed for good resampling
+        # Using a minimum of 1024 samples for resampling window
+        RESAMPLING_WINDOW = max(1024, int(0.05 * sample_rate))  # At least 50ms of audio
+
+        # Add new audio chunk to raw buffer
         if audio_chunk:
             raw_buffer.extend(audio_chunk)
+
+        # Only process if we have enough samples or if this is the final chunk
+        if len(raw_buffer) >= (RESAMPLING_WINDOW * 2) or (is_final and len(raw_buffer) > 0):
+            # Process the audio with proper buffering
             processed_audio = self.process_raw_buffer(raw_buffer, asr_processor, sample_rate)
             if processed_audio is None:
-                return False
+                return False, False
 
+            # Add processed audio to the buffer
             audio_buffer = np.concatenate([audio_buffer, processed_audio])
             connection["audio_buffer"] = audio_buffer
 
-        if (len(audio_buffer) >= min_chunk_samples) or (is_final and len(audio_buffer) > 0):
-            asr_processor.add_audio_chunk(audio_buffer)
-            start_time, end_time, transcription, vad_events = asr_processor.process_audio(is_final=is_final)
+            # Clear the raw buffer since we've processed it
+            connection["raw_buffer"] = bytearray()
 
-            # Handle VAD events with buffer-based timing
-            for event in vad_events:
-                if event['type'] == 'start':
+            # Process accumulated audio if we have enough samples or if this is final
+            if (len(audio_buffer) >= min_chunk_samples) or (is_final and len(audio_buffer) > 0):
+                asr_processor.add_audio_chunk(audio_buffer)
+                start_time, end_time, transcription, vad_events = asr_processor.process_audio(is_final=is_final)
+
+                # Handle VAD events
+                for event in vad_events:
+                    if event['type'] == 'start':
+                        response = WSInterSTTResponse(
+                            type="stt.vad_speech_start",
+                            vad_timestamp_ms=event['timestamp_ms'],
+                            confidence=event['confidence']
+                        )
+                        await websocket.send_json(response.dict())
+                        await asyncio.sleep(0.1)
+
+                    if event['type'] == 'end':
+                        response = WSInterSTTResponse(
+                            type="stt.vad_speech_end",
+                            vad_timestamp_ms=event['timestamp_ms'],
+                            confidence=event['confidence']
+                        )
+                        await websocket.send_json(response.dict())
+                        is_final_from_vad = True
+
+                # Send transcription if available
+                if transcription:
                     response = WSInterSTTResponse(
-                        type="stt.vad_speech_start",
-                        vad_timestamp_ms=event['timestamp_ms'],
-                        confidence=event['confidence']
+                        type="stt.add_transcription",
+                        transcription=transcription,
+                        start_time=start_time,
+                        end_time=end_time
                     )
                     await websocket.send_json(response.dict())
-                    await asyncio.sleep(0.1)
 
-                if event['type'] == 'end':
-                    response = WSInterSTTResponse(
-                        type="stt.vad_speech_end",
-                        vad_timestamp_ms=event['timestamp_ms'],
-                        confidence=event['confidence']
-                    )
-                    await websocket.send_json(response.dict())
-                    is_final_from_vad = True
-
-            if transcription:
-                response = WSInterSTTResponse(
-                    type="stt.add_transcription",
-                    transcription=transcription,
-                    start_time=start_time,
-                    end_time=end_time
-                )
-                await websocket.send_json(response.dict())
-
-            if not is_final:
-                connection["raw_buffer"] = bytearray()
-                connection["audio_buffer"] = np.array([], dtype=np.float32)
-                connection["is_first"] = False
-            else:
-                connection["raw_buffer"] = bytearray()
-                connection["audio_buffer"] = np.array([], dtype=np.float32)
-                connection["is_first"] = True
+                # Reset buffers based on whether this is final
+                if not is_final:
+                    connection["audio_buffer"] = np.array([], dtype=np.float32)
+                    connection["is_first"] = False
+                else:
+                    connection["audio_buffer"] = np.array([], dtype=np.float32)
+                    connection["is_first"] = True
 
         return True, is_final_from_vad
 

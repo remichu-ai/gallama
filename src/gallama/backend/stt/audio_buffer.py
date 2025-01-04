@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 from typing import Optional, Tuple
-
+from gallama.logger import logger
 
 @dataclass
 class VADEvent:
@@ -18,7 +18,8 @@ class AudioBufferWithTiming:
         self.sample_rate = sample_rate
         self.total_samples = 0
         self.start_offset = 0  # Track offset after trimming
-        self.last_processed_sample = 0  # Track the last processed sample position
+        self.last_processed_sample = 0  # Track the last processed sample position for ASR
+        self.last_processed_sample_vad = 0  # Track the last processed sample position for VAD
         self.is_processing = False  # Flag to track if processing is ongoing
 
     def __len__(self) -> int:
@@ -44,8 +45,9 @@ class AudioBufferWithTiming:
         if sample_index > 0:
             self.buffer = self.buffer[sample_index:]
             self.start_offset += sample_index
-            # Update last_processed_sample relative to the new buffer position
+            # Update both processing trackers relative to the new buffer position
             self.last_processed_sample = max(0, self.last_processed_sample - sample_index)
+            self.last_processed_sample_vad = max(0, self.last_processed_sample_vad - sample_index)
 
     def get_samples_for_duration(self, duration_ms: float) -> Optional[np.ndarray]:
         """Get samples corresponding to specified duration from the start."""
@@ -68,30 +70,49 @@ class AudioBufferWithTiming:
     def mark_processing_complete(self, is_final: bool = False) -> None:
         """
         Mark the completion of audio processing.
-        Simply moves the last_processed_sample pointer forward to current buffer position.
+        Updates the last_processed_sample pointer to current buffer position.
 
         Args:
             is_final (bool): Whether this was the final processing of the audio stream
         """
         if is_final:
             self.last_processed_sample = len(self.buffer)
+            self.last_processed_sample_vad = len(self.buffer)
         else:
             # Move the pointer to end of current buffer
-            # This ensures we process new chunks from where we left off
             self.last_processed_sample = len(self.buffer)
 
         self.is_processing = False
 
     def get_unprocessed_audio(self) -> np.ndarray:
         """
-        Get the portion of audio that hasn't been processed yet.
+        Get the portion of audio that hasn't been processed yet by ASR.
         Returns the audio from last_processed_sample to the end of the buffer.
         """
-        # Ensure we don't return empty array and maintain continuity
         if self.last_processed_sample >= len(self.buffer):
             return np.array([], dtype=np.float32)
 
         return self.buffer[self.last_processed_sample:]
+
+    def get_unprocessed_audio_vad(self) -> np.ndarray:
+        logger.info(
+            f"VAD processing state - last_processed: {self.last_processed_sample_vad}, buffer_len: {len(self.buffer)}, start_offset: {self.start_offset}")
+        if self.last_processed_sample_vad >= len(self.buffer):
+            return np.array([], dtype=np.float32)
+        return self.buffer[self.last_processed_sample_vad:]
+
+    def mark_vad_processing_complete(self, is_final: bool = False) -> None:
+        """
+        Mark the completion of VAD processing.
+        Updates the last_processed_sample_vad pointer to current buffer position.
+
+        Args:
+            is_final (bool): Whether this was the final processing of the audio stream
+        """
+        if is_final:
+            self.last_processed_sample_vad = len(self.buffer)
+        else:
+            self.last_processed_sample_vad = len(self.buffer)
 
     def reset(self) -> None:
         """Reset the buffer state."""
@@ -99,4 +120,5 @@ class AudioBufferWithTiming:
         self.total_samples = 0
         self.start_offset = 0
         self.last_processed_sample = 0
+        self.last_processed_sample_vad = 0
         self.is_processing = False

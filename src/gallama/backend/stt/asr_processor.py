@@ -48,19 +48,16 @@ class ASRProcessor:
         self.debug_audio_dir = debug_audio_dir
         self.min_context_needed = min_context_needed
 
-        # Create debug directory if it doesn't exist
         if debug_audio_dir and not os.path.exists(debug_audio_dir):
             os.makedirs(debug_audio_dir)
 
-        # Trimming configuration
         self.trimming_mode, self.trimming_duration = buffer_trimming
 
-        # Initialize state with AudioBufferWithTiming
         self.audio_buffer = AudioBufferWithTiming(sample_rate=self.SAMPLING_RATE)
         self.transcript_buffer = HypothesisBuffer()
         self.transcript_buffer.last_committed_time = 0
         self.committed_transcriptions = []
-        self.buffer_count = 0  # Counter for debug files
+        self.buffer_count = 0
 
         self.vad_config = vad_config if vad_config else TurnDetectionConfig()
         self.vad_enable: bool = self.vad_config.create_response
@@ -69,9 +66,9 @@ class ASRProcessor:
         if self.vad_enable:
             self.initialize_vad(self.vad_config)
 
-        self.vad_speech_active = False  # Track if we're currently in a speech segment
-        self.vad_start_sent = False  # Track if we've sent the start event for current segment
-        self.vad_end_sent = False  # Track if we've sent the end event for current segment
+        self.vad_speech_active = False
+        self.vad_start_sent = False
+        self.vad_end_sent = False
 
     def initialize_vad(self, vad_config: TurnDetectionConfig):
         logger.info("Initializing VAD processor")
@@ -139,7 +136,6 @@ class ASRProcessor:
         Processes the current audio buffer, transcribes it, and handles buffer trimming.
         Now includes VAD processing with proper event state tracking and absolute timing.
         """
-        # Check if audio buffer is empty
         if len(self.audio_buffer) == 0:
             logger.debug("Audio buffer is empty, returning early")
             return None, None, "", []
@@ -147,27 +143,25 @@ class ASRProcessor:
         # Mark the start of processing
         self.audio_buffer.mark_processing_start()
 
-        # Get unprocessed audio
-        audio_to_process = self.audio_buffer.get_unprocessed_audio()
-        if len(audio_to_process) == 0:
-            logger.debug("No new audio to process")
-            return None, None, "", []
-
-        # Define current_offset for VAD processing
-        current_offset = self.audio_buffer.last_processed_sample
-
-        # Process through VAD if enabled
         vad_events = []
         speech_start_ms = None
         speech_end_ms = None
 
+        # Process VAD if enabled
         if self.vad_enable and self.vad:
-            # Process the audio chunk with VAD
-            vad_result_start, vad_result_end = self.vad.process_chunk(self.audio_buffer, current_offset)
+            # Get current offset for VAD processing
+            current_offset = self.audio_buffer.last_processed_sample_vad
+
+            # Process through VAD
+            vad_result_start, vad_result_end = self.vad.process_chunk(
+                self.audio_buffer,
+                current_offset
+            )
+
             logger.info(f"VAD result_start: {vad_result_start}")
             logger.info(f"VAD result_end: {vad_result_end}")
 
-            # Handle VAD events (speech start/end)
+            # Handle VAD events
             if vad_result_start and vad_result_start[
                 'speech_detected'] and not self.vad_speech_active and not self.vad_start_sent:
                 self.vad_speech_active = True
@@ -183,13 +177,12 @@ class ASRProcessor:
 
             if vad_result_end and (
                     vad_result_end['speech_ended'] or (is_final and self.vad_speech_active)) and not self.vad_end_sent:
-                # set is_final to simulate final audio processing
                 is_final = True
-
                 self.vad_speech_active = False
                 self.vad_end_sent = True
                 self.vad_start_sent = False
-                speech_end_ms = vad_result_end.get("end_time") if self.vad else self.audio_buffer.get_time_ms(current_offset)
+                speech_end_ms = vad_result_end.get("end_time") if self.vad else self.audio_buffer.get_time_ms(
+                    current_offset)
                 vad_events.append({
                     'type': 'end',
                     'timestamp_ms': int(speech_end_ms),
@@ -197,54 +190,49 @@ class ASRProcessor:
                 })
                 logger.info(f"Speech end event queued at {speech_end_ms}ms")
 
-            # If VAD is enabled, only process the audio between speech_start and speech_end
-            if self.vad_speech_active and speech_start_ms is not None:
-                start_sample = int((speech_start_ms / 1000) * self.SAMPLING_RATE)
+        # Get unprocessed audio for ASR
+        audio_to_process = self.audio_buffer.get_unprocessed_audio()
+        if len(audio_to_process) == 0:
+            logger.debug("No new audio to process")
+            return None, None, "", vad_events
 
-                if speech_end_ms is not None:
-                    # Process audio from speech_start to the minimum of speech_end or the end of the buffer
-                    end_sample = min(
-                        int((speech_end_ms / 1000) * self.SAMPLING_RATE),
-                        len(audio_to_process)
-                    )
-                else:
-                    # Process audio from speech_start to the end of the buffer
-                    end_sample = len(audio_to_process)
+        # If VAD is enabled, only process audio between speech_start and speech_end
+        if self.vad_enable and speech_start_ms is not None:
+            start_sample = int((speech_start_ms / 1000) * self.SAMPLING_RATE)
 
-                # Extract the relevant audio segment
-                audio_to_process = audio_to_process[start_sample:end_sample]
+            if speech_end_ms is not None:
+                end_sample = min(
+                    int((speech_end_ms / 1000) * self.SAMPLING_RATE),
+                    len(audio_to_process)
+                )
+            else:
+                end_sample = len(audio_to_process)
 
-        # Check for minimum context if not final (for ASR only)
+            audio_to_process = audio_to_process[start_sample:end_sample]
+
+        # Check for minimum context if not final
         current_duration_ms = (len(audio_to_process) / self.SAMPLING_RATE) * 1000
         current_duration = current_duration_ms / 1000  # Convert to seconds
         if current_duration < self.min_context_needed and not is_final:
             self.audio_buffer.is_processing = False
             return None, None, "", vad_events
 
-        # Perform ASR transcription (if enough context is available)
+        # Rest of the ASR processing logic remains the same...
         try:
-            # Generate the prompt and context
             prompt, context = self.construct_prompt()
-
-            # Perform transcription on the unprocessed portion
             asr_results = self.asr.transcribe_to_segment(audio_to_process, init_prompt=prompt)
-
-            # Process timestamped words
             timestamped_words = self.asr.segment_to_timestamped_words(asr_results)
             buffer_start_time = ((self.audio_buffer.start_offset + self.audio_buffer.last_processed_sample)
                                  / self.SAMPLING_RATE)
             self.transcript_buffer.insert(timestamped_words, buffer_start_time)
 
-            # Get transcriptions based on whether this is final processing or not
             if is_final:
                 confirmed_transcriptions = self.transcript_buffer.set_final()
             else:
                 confirmed_transcriptions = self.transcript_buffer.flush()
 
-            # Add to committed transcriptions list
             self.committed_transcriptions.extend(confirmed_transcriptions)
 
-            # Handle trimming based on confirmed transcriptions
             if not is_final:
                 if self.trimming_mode == "sentence" and confirmed_transcriptions:
                     if current_duration > self.trimming_duration:
@@ -253,10 +241,8 @@ class ASRProcessor:
                     if current_duration > self.trimming_duration:
                         self.trim_to_last_completed_segment(asr_results)
 
-            # Mark processing complete and update the last processed position
             self.audio_buffer.mark_processing_complete(is_final)
 
-            # Format and return the output along with VAD events
             start_time, end_time, transcription = self.format_output(confirmed_transcriptions)
             return start_time, end_time, transcription, vad_events
 
