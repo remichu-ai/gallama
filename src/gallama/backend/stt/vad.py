@@ -79,7 +79,7 @@ class VADProcessor:
             absolute_time_ms = audio_buffer.get_time_ms(
                 audio_buffer.last_processed_sample_vad + window['index']  # Use raw sample index
             )
-            logger.info(
+            logger.debug(
                 f"Window timing - index: {window['index']}, absolute_time: {absolute_time_ms}ms, last_processed: {audio_buffer.last_processed_sample_vad}")
 
             prob = self.model(window['data'], self.sampling_rate).item()
