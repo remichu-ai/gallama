@@ -64,6 +64,12 @@ class TurnDetectionConfig(BaseModel):
     silence_duration_ms: Optional[int] = Field(ge=0, default=500)
     create_response: bool = True
 
+    # gallama specific setting
+    factor_prefix_padding_in_truncate: bool = Field(default=True,
+                                                    description="Prefix padding will ensure speech start event only emitted "
+                                                                "after certain ms of continuous speak, after which user will send conversation.item.truncate event"
+                                                                "This setting is to automatically offset truncate timing by this amount of ms")
+
 
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])

@@ -198,6 +198,8 @@ class WebSocketManager:
                         logger.info(f"Received Transcription complete from TTS")
                         await session.queues.mark_transcription_done()
                         # break     # not break as this is meant to run forever
+                    elif stt_response.type == "stt.config_updated":
+                        logger.info(f"TTS acknowledge config updated")
                     elif stt_response.type == "stt.buffer_cleared":
                         # clear transcription
                         await session.queues.clear_transcription()
@@ -231,11 +233,18 @@ class WebSocketManager:
                         item=item_to_create,
                     )
                 elif isinstance(item, ConversationItemTruncate):
+                    logger.info(f"truncating conversation item")
+                    # check if need to factor in prefix padding ms
+                    offset_timing = 0
+                    if session.config.turn_detection and session.config.turn_detection.prefix_padding_ms:
+                        offset_timing = session.config.turn_detection.prefix_padding_ms
+
                     await session.queues.truncate_conversation_item(
                         ws_client=ws_client,
                         ws_llm=self.message_handler.ws_llm,
                         event=item,
                         user_interrupt_token=session.config.user_interrupt_token,
+                        offset_timing=offset_timing,
                     )
                 elif isinstance(item, ResponseCreate):
                     # if there is audio commited, create an item for it
@@ -299,6 +308,8 @@ class WebSocketManager:
                     async with session.current_response_lock:
                         logger.info(f"-------------------Set Current response")
                         session.current_response = response
+
+                    await response.response_initialize()
 
                     # at this point stt already completed, and text send to the llm
                     await response.response_initialize()

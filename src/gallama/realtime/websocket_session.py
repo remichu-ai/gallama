@@ -32,7 +32,6 @@ class WebSocketSession:
         ) if config.turn_detection else None
         # self.vad_item_id: str = None
 
-
     def mark_voice_used(self):
         self.voice_used = True
 

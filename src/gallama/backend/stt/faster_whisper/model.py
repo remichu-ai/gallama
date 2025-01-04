@@ -43,7 +43,7 @@ class ASRFasterWhisper(ASRBase):
             # download_root=cache_dir
         )
 
-        model = BatchedInferencePipeline(model)
+        # model = BatchedInferencePipeline(model)
 
         return model
 
@@ -68,16 +68,19 @@ class ASRFasterWhisper(ASRBase):
         """
 
         # using default parameters mostly
+        language = language if language else self.original_language
         segments, info = self.model.transcribe(
             audio,
-            language=language if language else self.original_language,
+            language=language,
+            multilingual=False if language else True,
+            task="transcribe",
             initial_prompt=init_prompt,
             beam_size=5,                        # tested: beam_size=5 is faster and better
             word_timestamps=True,               # timestamp is used for sequence matching when streaming
             condition_on_previous_text=True,
             temperature=temperature,
-            batch_size = 16,
-            repetition_penalty=1.1,
+            # batch_size = 16,
+            repetition_penalty=1.0,
             **self.transcribe_kargs
         )
 
@@ -89,7 +92,7 @@ class ASRFasterWhisper(ASRBase):
         self,
         audio: Union[str, BinaryIO, np.ndarray],
         init_prompt: str = "",
-        temperature: float = 0.2,
+        temperature: float = 0.0,
         language: str = None,
         include_segments: bool = False,
     ) -> TranscriptionResponse:

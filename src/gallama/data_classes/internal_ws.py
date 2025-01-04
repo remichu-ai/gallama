@@ -30,6 +30,7 @@ class WSInterSTTResponse(BaseModel):
         "stt.one_time_transcribe",
         "stt.vad_speech_start",
         "stt.vad_speech_end",
+        "stt.config_updated"
     ]
     transcription: Optional[str] = None
     start_time: Optional[float] = None

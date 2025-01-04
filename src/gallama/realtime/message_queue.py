@@ -489,7 +489,7 @@ class MessageQueues:
         except Exception as e:
             logger.error(f"Error saving debug audio files: {str(e)}")
 
-    async def _prepare_audio_buffer(self, audio_data: np.ndarray, audio_end_ms: int) -> tuple[np.ndarray, io.BytesIO]:
+    async def _prepare_truncated_audio_buffer(self, audio_data: np.ndarray, audio_end_ms: int) -> tuple[np.ndarray, io.BytesIO]:
         """Prepare truncated audio data and buffer for transcription."""
         # Convert milliseconds to samples
         end_sample = int((audio_end_ms / 1000) * self.sample_rate)
@@ -542,11 +542,12 @@ class MessageQueues:
                     raise Exception(f"Transcription failed with status {response.status}: {error_detail}")
 
     async def truncate_conversation_item(
-            self,
-            ws_client: WebSocket,
-            ws_llm: WebSocketClient,
-            event: ConversationItemTruncate,
-            user_interrupt_token: str = ""
+        self,
+        ws_client: WebSocket,
+        ws_llm: WebSocketClient,
+        event: ConversationItemTruncate,
+        user_interrupt_token: str = "",
+        offset_timing: int = 0
     ):
         """Truncate an audio item from the conversation item list."""
         try:
@@ -571,7 +572,15 @@ class MessageQueues:
                     audio_data = self.conversation_item_od[item_id].content[0].audio
 
                     # Prepare truncated audio and buffer
-                    truncated_audio, audio_buffer = await self._prepare_audio_buffer(audio_data, audio_end_ms)
+                    audio_end_ms_offset = max(audio_end_ms - offset_timing, 0)
+
+                    if audio_end_ms_offset == 0:
+                        logger.info("No need to truncate audio")
+                        return
+                    else:
+                        logger.info(f"Truncate audio from {audio_end_ms} to {audio_end_ms_offset}")
+
+                    truncated_audio, audio_buffer = await self._prepare_truncated_audio_buffer(audio_data, audio_end_ms_offset)
 
                     # Get new transcription
                     new_transcription = await self._get_transcription(audio_buffer)
