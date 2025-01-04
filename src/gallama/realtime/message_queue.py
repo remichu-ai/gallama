@@ -572,7 +572,8 @@ class MessageQueues:
                     audio_data = self.conversation_item_od[item_id].content[0].audio
 
                     # Prepare truncated audio and buffer
-                    audio_end_ms_offset = max(audio_end_ms - offset_timing, 0)
+                    # offset another 25ms for latency
+                    audio_end_ms_offset = max(audio_end_ms - offset_timing - 25, 0)
 
                     if audio_end_ms_offset == 0:
                         logger.info("No need to truncate audio")

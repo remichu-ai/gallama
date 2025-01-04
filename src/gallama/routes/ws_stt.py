@@ -2,9 +2,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import numpy as np
 import soundfile
 import io
-import librosa
-from typing import Dict, Optional, Literal
-from pydantic import BaseModel
+from typing import Dict, Optional
 from ..dependencies import get_model_manager
 from ..data_classes.realtime_client_proto import SessionConfig
 from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterConfigUpdate
@@ -12,6 +10,7 @@ from gallama.logger.logger import logger
 import base64
 import asyncio
 import samplerate
+import librosa
 
 router = APIRouter(prefix="", tags=["audio"])
 
@@ -20,13 +19,11 @@ class ConnectionData:
     def __init__(
         self,
         asr_processor,
-        language: Optional[str],
         input_sample_rate: int,
         min_chunk_samples: int,
         streaming_mode: bool,
     ):
         self.asr_processor = asr_processor
-        self.language = language
         self.raw_buffer = bytearray()
         self.audio_buffer = np.array([], dtype=np.float32)
         self.min_chunk_samples = min_chunk_samples
@@ -59,7 +56,6 @@ class TranscriptionConnectionManager:
         websocket: WebSocket,
         model: str,
         config: SessionConfig,
-        language: str = None,
     ) -> bool:
         try:
             # Accept the WebSocket connection
@@ -84,7 +80,6 @@ class TranscriptionConnectionManager:
             # Create a new ConnectionData instance
             connection_data = ConnectionData(
                 asr_processor=asr_processor,
-                language=language,
                 input_sample_rate=config.input_sample_rate,
                 min_chunk_samples=min_chunk_samples,
                 streaming_mode=config.streaming_transcription,
@@ -144,7 +139,7 @@ class TranscriptionConnectionManager:
             # Perform transcription
             transcription = await connection.asr_processor.transcribe_async(
                 processed_audio,
-                language=connection.language,
+                # language=connection.language,
                 include_segments=True
             )
 
@@ -165,18 +160,44 @@ class TranscriptionConnectionManager:
             logger.error(f"Error in one-time transcription: {str(e)}")
             return False
 
+    # def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
+    #     try:
+    #         with soundfile.SoundFile(
+    #             io.BytesIO(raw_buffer),
+    #             channels=1,
+    #             endian="LITTLE",
+    #             samplerate=sample_rate,
+    #             subtype="PCM_16",
+    #             format="RAW"
+    #         ) as sf:
+    #             audio, curr_sr = librosa.load(sf, sr=asr_processor.SAMPLING_RATE, dtype=np.float32)
+    #             return audio
+    #     except Exception as e:
+    #         logger.error(f"Error processing raw audio: {str(e)}")
+    #         return None
+
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
+            # Read the raw audio buffer using soundfile
             with soundfile.SoundFile(
-                io.BytesIO(raw_buffer),
-                channels=1,
-                endian="LITTLE",
-                samplerate=sample_rate,
-                subtype="PCM_16",
-                format="RAW"
-            ) as sf:
-                audio, curr_sr = librosa.load(sf, sr=asr_processor.SAMPLING_RATE, dtype=np.float32)
-                return audio
+                    io.BytesIO(raw_buffer),
+                    channels=1,
+                    samplerate=sample_rate,
+                    subtype="PCM_16",
+                    format="RAW",
+                    endian="LITTLE"
+            ) as sf_file:
+                audio = sf_file.read(dtype=np.float32)  # Read audio as float32
+
+            # Calculate the resampling ratio
+            target_sample_rate = asr_processor.SAMPLING_RATE
+            ratio = target_sample_rate / sample_rate
+
+            # Resample the audio using samplerate
+            resampled_audio = samplerate.resample(audio, ratio, converter_type='sinc_best')
+
+            return resampled_audio
+
         except Exception as e:
             logger.error(f"Error processing raw audio: {str(e)}")
             return None
@@ -223,7 +244,7 @@ class TranscriptionConnectionManager:
         # Calculate minimum samples needed for good resampling
         # Using a minimum of 1024 samples for resampling window
         # RESAMPLING_WINDOW = min(512, int(0.05 * connection.sample_rate))  # At least 50ms of audio
-        RESAMPLING_WINDOW = int((connection.asr_processor.SAMPLING_RATE / connection.input_sample_rate) * 2048)
+        RESAMPLING_WINDOW = int((connection.asr_processor.SAMPLING_RATE / connection.input_sample_rate) * 1024)
 
         # Add new audio chunk to raw buffer
         if audio_chunk:
@@ -296,7 +317,7 @@ class TranscriptionConnectionManager:
         try:
             transcription = await connection.asr_processor.transcribe_async(
                 processed_audio,
-                language=connection.language,
+                # language=connection.language,
                 include_segments=True
             )
 
@@ -325,14 +346,13 @@ class TranscriptionConnectionManager:
 async def websocket_endpoint(
     websocket: WebSocket,
     model: str = None,
-    language: str = None,
     config: SessionConfig = None
 ):
     if config is None:
         config = SessionConfig()
 
     try:
-        success = await manager.connect(websocket, model, config, language)
+        success = await manager.connect(websocket, model, config)
         if not success:
             return
 

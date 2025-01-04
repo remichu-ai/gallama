@@ -28,7 +28,7 @@ class ASRProcessor:
         asr: ASRBase,
         tokenizer=None,
         buffer_trimming=("segment", 15),
-        min_context_needed=5.0,  # require 5 second for a content to be process -> higher number better accuracy
+        min_context_needed=7.0,  # require 5 second for a content to be process -> higher number better accuracy
         debug_audio_dir=None,  # New parameter for debug audio directory
         vad_config: Optional[TurnDetectionConfig] = None,
     ):
@@ -171,7 +171,11 @@ class ASRProcessor:
 
         try:
             prompt, context = self.construct_prompt()
-            asr_results = self.asr.transcribe_to_segment(audio_to_process, init_prompt=prompt)
+            asr_results = self.asr.transcribe_to_segment(
+                audio_to_process,
+                init_prompt=prompt,
+                language=self.vad_config.language if self.vad_enable else None,
+            )
             timestamped_words = self.asr.segment_to_timestamped_words(asr_results)
             buffer_start_time = ((buffer.start_offset + buffer.last_processed_sample) / self.SAMPLING_RATE)
             self.transcript_buffer.insert(timestamped_words, buffer_start_time)

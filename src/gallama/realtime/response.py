@@ -317,9 +317,10 @@ class Response:
                     logger.warning("Received empty audio chunk, skipping")
                     return
 
-                # Perform sample rate conversion from 24000 Hz to 16000 Hz
-                ratio = 16000 / 24000  # Target rate / Source rate
-                chunk_array = samplerate.resample(chunk_array, ratio, 'sinc_best')
+                # no longer resample here, cause audio in main ws is kept to source
+                # Perform sample rate conversion from 24000 Hz to Internal working rate Hz
+                # ratio = 16000 / 24000  # Target rate / Source rate
+                # chunk_array = samplerate.resample(chunk_array, ratio, 'sinc_best')
 
                 # Concatenate arrays
                 if self.audio.size == 0:

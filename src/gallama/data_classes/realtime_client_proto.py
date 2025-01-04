@@ -65,6 +65,7 @@ class TurnDetectionConfig(BaseModel):
     create_response: bool = True
 
     # gallama specific setting
+    language: Optional[str] = "en"
     factor_prefix_padding_in_truncate: bool = Field(default=True,
                                                     description="Prefix padding will ensure speech start event only emitted "
                                                                 "after certain ms of continuous speak, after which user will send conversation.item.truncate event"

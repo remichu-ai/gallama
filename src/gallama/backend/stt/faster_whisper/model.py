@@ -99,6 +99,8 @@ class ASRFasterWhisper(ASRBase):
         """
         similar to transcribe_to_segment, however, will concat all the words into the full text
         """
+        if language:
+            logger.info(f"language is set to {language}")
 
         # using default parameters mostly
         segments = self.transcribe_to_segment(audio, init_prompt=init_prompt, temperature=temperature, language=language)
