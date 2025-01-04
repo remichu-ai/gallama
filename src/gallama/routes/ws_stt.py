@@ -76,7 +76,6 @@ class TranscriptionConnectionManager:
         except Exception as e:
             logger.error(f"Error in disconnect: {str(e)}")
 
-
     async def process_one_time_transcription(self, websocket: WebSocket, audio_base64: str) -> bool:
         """Handle one-time transcription request"""
         connection = self.active_connections.get(websocket)
@@ -90,7 +89,7 @@ class TranscriptionConnectionManager:
             # Decode base64 audio
             audio_bytes = base64.b64decode(audio_base64)
 
-            # Process the audio
+            # Process the audio directly without adding to the audio buffer
             processed_audio = self.process_raw_buffer(audio_bytes, asr_processor, sample_rate)
             if processed_audio is None:
                 return False
@@ -118,37 +117,6 @@ class TranscriptionConnectionManager:
         except Exception as e:
             logger.error(f"Error in one-time transcription: {str(e)}")
             return False
-
-    # def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
-    #     try:
-    #         with soundfile.SoundFile(
-    #                 io.BytesIO(raw_buffer),
-    #                 channels=1,
-    #                 endian="LITTLE",
-    #                 samplerate=sample_rate,
-    #                 subtype="PCM_16",
-    #                 format="RAW"
-    #         ) as sf:
-    #             # Read the audio data from the SoundFile object
-    #             audio = sf.read()
-    #
-    #             # Calculate the resampling ratio
-    #             ratio = asr_processor.SAMPLING_RATE / sample_rate
-    #
-    #             # Resample the audio using samplerate
-    #             resampled_audio = samplerate.resample(
-    #                 audio,
-    #                 ratio,
-    #                 converter_type='sinc_best'  # High-quality conversion
-    #             )
-    #
-    #             # Ensure the output is float32
-    #             return resampled_audio.astype(np.float32)
-    #     except Exception as e:
-    #         logger.error(f"Error processing raw audio: {str(e)}")
-    #         return None
-
-
 
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
