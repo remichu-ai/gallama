@@ -38,6 +38,13 @@ class WebSocketManager:
         self.session_manager = session_manager
         self.message_handler = message_handler
 
+    async def stop_background_tasks(self, session: WebSocketSession):
+        """Cancel all background tasks associated with the session."""
+        if hasattr(session, 'tasks'):
+            for task in session.tasks:
+                task.cancel()
+            session.tasks = []  # Clear the list of tasks
+
     async def initialize_session(self, websocket: WebSocket, model: str, api_key: str = None) -> WebSocketSession:
         protocols = websocket.headers.get("sec-websocket-protocol", "").split(", ")
         if "openai-beta.realtime-v1" in protocols:
@@ -82,12 +89,6 @@ class WebSocketManager:
             asyncio.create_task(self.process_unprocess_audio_buffer(session, websocket)),
             # asyncio.create_task(self.process_audio_to_client(session, websocket))
         ]
-
-    async def transcribe_audio(self, audio_data: str) -> str:
-        """convert audio to text using STT service"""
-        """audio_data is a base64 encoded string, convert it to bytes"""
-        pass
-        #   TODO
 
 
     async def send_message_to_client(self, websocket: WebSocket, message: str):

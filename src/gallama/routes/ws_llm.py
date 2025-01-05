@@ -71,6 +71,9 @@ class WebSocketSession:
         # job cancelling
         self.stop_event = asyncio.Event()
 
+    def reset(self):
+        self.conversation_history = OrderedDict()
+
     def update_session_config(self, new_session_config: SessionConfig):
         """Update session config"""
         self.session_config = SessionConfig(**{
@@ -263,7 +266,9 @@ class WebSocketSession:
         elif message.get("type") == "common.cancel":
             # abort generation
             self.stop_event.set()
-
+        elif message.get("type") == "common.cleanup":
+            # abort generation
+            self.reset()
 
 class LLMWebSocketServer:
     def __init__(self):

@@ -6,6 +6,7 @@ from fastapi import Request                 # for type hint
 from importlib.metadata import version      # for checking of exllama version
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
+import traceback
 
 from gallama.logger.logger import logger
 from gallama.data_classes import (
@@ -16,6 +17,7 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
+    GenQueueDynamic
 )
 from gallama.utils.utils import get_image
 
@@ -256,7 +258,8 @@ class ModelExllama(ModelInterface):
             while True:
                 if await request.is_disconnected():
                     logger.info("User disconnected")
-                    await job.cancel()
+                    if job:
+                        await job.cancel()
 
                     # add GenEnd to signal the end of generation
                     chunk = GenEnd()
@@ -277,11 +280,11 @@ class ModelExllama(ModelInterface):
                     pass
 
         except asyncio.CancelledError:
-            logger.info("Disconnection check was cancelled")
+            logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            logger.error(f"An error occurred in check_disconnection: {str(e)}")
+            logger.error(f"An error occurred in check_disconnection: {str(e)}", exc_info=True)
         finally:
-            logger.info("Exiting check_disconnection")
+            logger.debug("Exiting check_disconnection")
 
 
     class ExllamaV2Pipeline:
@@ -467,9 +470,9 @@ class ModelExllama(ModelInterface):
     async def generate(
         self,
         prompt: str,
-        gen_queue: Union[GenQueue, QueueContext, List[QueueContext]],
-        request: Optional[Request] = None,      # for disconnection check
-        gen_type: Union[str, GenStart] = "text",  # the generated result will be store to this queue
+        gen_queue: Union[GenQueue, GenQueueDynamic, List[GenQueueDynamic]],
+        request: Optional[Request] = None,  # for disconnection check
+        gen_type: Union[str, GenStart] = "text",  # the generated result will be stored in this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
         formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
@@ -483,164 +486,148 @@ class ModelExllama(ModelInterface):
         **kwargs,
     ) -> (str, GenerationStats):
         try:
-
-            # ensure that generator is initialized
+            # Ensure that the generator is initialized
             if self.pipeline is None:
                 self.pipeline = await self._get_pipeline_async()
 
-            # convert gen_queue to List[QueueContext] format to standardize downstream handling
-            gen_queue_list = None
-            if isinstance(gen_queue, QueueContext):
+            # Convert gen_queue to List[GenQueueDynamic] format to standardize downstream handling
+            gen_queue_list = []
+            if isinstance(gen_queue, GenQueueDynamic):
                 gen_queue_list = [gen_queue]
             elif isinstance(gen_queue, GenQueue):
-                gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+                # Wrap the GenQueue in a GenQueueDynamic
+                gen_queue_list = [GenQueueDynamic(existing_queue=gen_queue, include_GenStats=True, include_GenEnd=True)]
             elif isinstance(gen_queue, list):
-                gen_queue_list = gen_queue
+                # Ensure all items in the list are GenQueueDynamic objects
+                for queue in gen_queue:
+                    if isinstance(queue, GenQueueDynamic):
+                        gen_queue_list.append(queue)
+                    elif isinstance(queue, GenQueue):
+                        # Wrap the GenQueue in a GenQueueDynamic
+                        gen_queue_list.append(
+                            GenQueueDynamic(existing_queue=queue, include_GenStats=True, include_GenEnd=True))
+                    else:
+                        raise TypeError("gen_queue list must contain only GenQueue or GenQueueDynamic objects")
             else:
-                raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+                raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
             if not quiet:
                 logger.info("----------------------Prompt---------------\n" + prompt)
                 logger.debug("----------------------temperature---------\n" + str(temperature))
 
-            # for async generator, create it as part of the generate job
-
-            # get generation setting
+            # Get generation settings
             settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
-            # vision support - get image embedding and construct the prompt with placeholder token for images
+            # Vision support - get image embedding and construct the prompt with placeholder tokens for images
             prompt, image_embeddings = self._process_vision_inputs(prompt, messages)
 
-            # convert prompt to token id
+            # Convert prompt to token IDs
             if image_embeddings:
                 input_ids = self.tokenizer.encode(
                     prompt,
                     encode_special_tokens=True,
-                    embeddings = image_embeddings,
+                    embeddings=image_embeddings,
                 )
             else:
-                input_ids = self.tokenizer.encode(
-                    prompt,
-                )
+                input_ids = self.tokenizer.encode(prompt)
 
             self.validate_token_length(len(input_ids[0]))
 
             # Create filters for format enforcement
             filters = self._create_generation_filters(formatter, prefix_strings)
 
-            # find stop conditions
+            # Find stop conditions
             if stop_words:
                 if isinstance(stop_words, str):
                     stop_words = [stop_words]
 
                 if not self.eos_token_str:
                     raise Exception("EOS token not set in model_config")
-                stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
+                stop_conditions = self.eos_token_str + stop_words  # Concatenate the two lists
                 logger.debug("stop_words: " + str(stop_conditions))
             else:
                 stop_conditions = self.eos_token_str
 
             job_id = uuid.uuid4().hex
 
-            # logger.info("pending_jobs and active_jobs lists in the ExLlamaV2DynamicGenerator")
-            # logger.info(f"job_id: {self.pipeline.generator.jobs}")
+            # Calculate max tokens to use
             max_tokens_to_use = min(
                 self.max_seq_len - len(input_ids[0]),
                 max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
 
-            # for backward support for older version without vision
+            # Prepare arguments for the job
             argument_list = {
-                "generator" : self.pipeline.generator,
-                "input_ids" : input_ids,
-                "max_new_tokens" : max_tokens_to_use,
-                "gen_settings" : settings,
-                "stop_conditions" : stop_conditions,  # self.eos_token_id if self.eos_token_id else None,
-                "banned_strings" : banned_strings,
-                "decode_special_tokens" : True,
-                "filters" : filters,
-                "token_healing" : True,
-                "identifier" : job_id,
+                "generator": self.pipeline.generator,
+                "input_ids": input_ids,
+                "max_new_tokens": max_tokens_to_use,
+                "gen_settings": settings,
+                "stop_conditions": stop_conditions,
+                "banned_strings": banned_strings,
+                "decode_special_tokens": True,
+                "filters": filters,
+                "token_healing": True,
+                "identifier": job_id,
             }
 
-            # add image embedding
+            # Add image embeddings if available
             if image_embeddings:
                 argument_list["embeddings"] = image_embeddings
 
-            job = ExLlamaV2DynamicJobAsync(
-                **argument_list
-            )
+            # Create the job
+            job = ExLlamaV2DynamicJobAsync(**argument_list)
 
             generate_text = ""
             gen_stats = None
             eos = False
 
-            # kick-start the generation and let down stream know gen type
+            # Kick-start the generation and let downstream know the generation type
             if isinstance(gen_type, str):
                 gen_type_str = gen_type
                 gen_type = GenStart(gen_type=gen_type)
             else:
-                gen_type_str = gen_type.gen_type  # get out the generation type in str format
+                gen_type_str = gen_type.gen_type  # Get the generation type in string format
 
             for g_queue in gen_queue_list:
-                g_queue.get_queue().put_nowait(gen_type)
+                g_queue.put_nowait(gen_type)
 
             # Create a task to check for disconnection
             disconnect_check_task = None
             if request:
                 disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list))
 
-            try :
-                # start the generation
+            try:
+                # Start the generation
                 async for result in job:
                     if eos or stop_event.is_set():
                         await job.cancel()
                         break
 
-                    # print(result.get("text", ""))
-                    # If we enqueue multiple jobs, an iteration might produce results for any (or all) of them. We could direct
-                    # outputs to multiple clients here, using whatever dispatch mechanism, but in this example there will only be
-                    # outputs pertaining to the single job started above, and it will all go straight to the console.
-                    # assert result["job"] == job
-
-                    # Prefilling/ingesting the prompt may happen over multiple iterations, during which the result will have
-                    # a "stage" value of "prefill". We can ignore those results and only use the "streaming" results that will
-                    # contain the actual output.
-                    # if result["stage"] == "streaming":
-
-                    # Depending on settings, the result dict can contain top-K probabilities, logits and more, but we'll just
-                    # grab the output text stream.
-                    # logger.info(f'{datetime.now()} {result.get("text", "")}')
                     chunk_text = result.get("text", "")
-                    chunk = GenText(content=chunk_text, text_type=gen_type_str)
-                    for g_queue in gen_queue_list:
-                        if chunk_text not in self.eos_token_str_set:        # formatron return eos token
-                            # generate_text += result.get("text", "")
-                            g_queue.get_queue().put_nowait(chunk)
+                    if chunk_text:
+                        # logger.info(f"chunk_text: {chunk_text}")
+                        chunk = GenText(content=chunk_text, text_type=gen_type_str)
+                        for g_queue in gen_queue_list:
+                            if chunk_text not in self.eos_token_str_set:  # Formatron returns EOS token
+                                g_queue.put_nowait(chunk)
 
-                    # logger.info(result.get("text", ""))
-                    # logger.info(self.tokenizer.encode(result.get("text", "")))
-                    # The "streaming" stage also emits the EOS signal when it occurs. If present, it will accompany a
-                    # summary of the job. Print the last packet here to illustrate.
+                    # Handle EOS signal
                     if result["eos"]:
                         eos = True
-
-                        # if the stop word occurred is from the stop_words and not llm result token -> include in result
+                        # logger.info(f"eos result {result}")
+                        # If the stop word occurred is from the stop_words and not LLM result token -> include in result
                         if stop_words and result.get("held") and result.get("held").get("text"):
                             ending_string = result["held"]["text"].rstrip()
 
                             if ending_string:
-                                # find the stop word that was used to end string
+                                # Find the stop word that was used to end the string
                                 stop_word_used = self.get_stop_word(ending_string, stop_words)
 
                                 if stop_word_used:
-                                    # if generation ended with one of the stopword
+                                    # If generation ended with one of the stop words
                                     # -> return that stop word as the last token
                                     chunk = GenText(content=stop_word_used, text_type=gen_type_str)
                                     for g_queue in gen_queue_list:
-                                        g_queue.get_queue().put_nowait(chunk)
-                                else:
-                                    # ending token is llm eos token
-                                    pass
+                                        g_queue.put_nowait(chunk)
 
                         gen_stats = GenerationStats(
                             input_tokens_count=result["prompt_tokens"],
@@ -651,12 +638,13 @@ class ModelExllama(ModelInterface):
 
                         for g_queue in gen_queue_list:
                             if g_queue.include_GenStats:
-                                g_queue.get_queue().put_nowait(gen_stats)
+                                g_queue.put_nowait(gen_stats)
 
-                        # this to signal the end of generation
+                        # Signal the end of generation
                         for g_queue in gen_queue_list:
                             if g_queue.include_GenEnd:
-                                g_queue.get_queue().put_nowait(GenEnd())
+                                g_queue.put_nowait(GenEnd())
+
             except Exception as e:
                 logger.error(e)
             finally:
@@ -668,3 +656,4 @@ class ModelExllama(ModelInterface):
                         pass
         except Exception as e:
             logger.error(e)
+            raise

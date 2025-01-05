@@ -22,10 +22,11 @@ from ..data_classes.generation_data_class import (
     GenText,
     GenEnd,
     GenStart,
+    GenQueueDynamic
 )
 
 from .stream_parser import StreamParser
-from typing import AsyncIterator
+from typing import AsyncIterator, List
 from gallama.utils.utils import get_response_uid, get_response_tool_uid
 from gallama.logger.logger import logger
 from pydantic.json import pydantic_encoder
@@ -35,40 +36,38 @@ import asyncio
 
 
 async def get_response_from_queue(
-    gen_queue: GenQueue,
+    gen_queue: GenQueue | GenQueueDynamic | List[GenQueue|GenQueueDynamic],
     request: Request = None,
 ):
     """ function to get the text generated in queue to be used for other part of the library"""
     response = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
+
+    # if it is a list, assume it is the first element
+    gen_queue_to_use = gen_queue
+    if isinstance(gen_queue, list):
+        gen_queue_to_use = gen_queue[0]
 
     eos = False
-    genStats = None
+    gen_stats = None
     while not eos:
         try:
-            # if request is not None:
-            #     if await request.is_disconnected():
-            #         logger.info("Request disconnected, stopping queue processing")
-            #         break
-
-            result = gen_queue.get_nowait()
+            result = gen_queue_to_use.get_nowait()
 
             if isinstance(result, GenText):
                 response += result.content
             elif isinstance(result, GenerationStats):
-                genStats = result
+                gen_stats = result
             elif isinstance(result, GenStart):
                 pass
             elif isinstance(result, GenEnd):
                 eos = True
-                gen_queue.task_done()
+                gen_queue_to_use.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response.strip())
 
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
+            await asyncio.sleep(0.01)    # short sleep before trying again
 
-    return response, genStats
+    return response, gen_stats
 
 
 async def chat_completion_response_stream(
@@ -108,7 +107,7 @@ async def chat_completion_response_stream(
                     gen_stats = item
 
         except asyncio.QueueEmpty:
-            pass
+            await asyncio.sleep(0.01)  # Sleep for 100ms (adjust as needed)
 
 
         if accumulated_text or accumulated_thinking:
@@ -312,7 +311,7 @@ async def chat_completion_response(
                 logger.info("----------------------LLM Response---------------\n" + response_all.strip())
 
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
+            await asyncio.sleep(0.01)    # short sleep before trying again
 
 
     unique_id = get_response_uid()
@@ -718,7 +717,7 @@ async def chat_completion_response_artifact(
                 gen_queue.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response_all.strip())
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
     unique_id = get_response_uid()
     response = response.strip()

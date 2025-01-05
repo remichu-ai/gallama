@@ -185,8 +185,8 @@ class ResponseContentPartAddedEvent(BaseModel):
     ]
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
     part: ContentPart
 
 
@@ -195,8 +195,8 @@ class ResponseContentPartDoneEvent(BaseModel):
     type: Literal["response.content_part.done"] = "response.content_part.done"
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
     part: ContentPart
 
 
@@ -212,8 +212,8 @@ class ResponseDelta(BaseModel):
     type: Literal["response.text.delta", "response.audio_transcript.delta", "response.audio.delta"]
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
     delta: str
 
 
@@ -222,8 +222,8 @@ class ResponseTextDone(BaseModel):
     type: Literal["response.text.done"] = "response.text.done"
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
     text: str
 
 
@@ -232,8 +232,8 @@ class ResponseAudioDone(BaseModel):
     type: Literal["response.audio.done"] = "response.audio.done"
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
 
 
 class ResponseTranscriptDone(BaseModel):
@@ -241,8 +241,8 @@ class ResponseTranscriptDone(BaseModel):
     type: Literal["response.audio_transcript.done"] = "response.audio_transcript.done"
     response_id: str
     item_id: str
-    output_index: int = 0
-    content_index: int = 0
+    output_index: int
+    content_index: int
     transcript: str
 
 
@@ -256,7 +256,7 @@ class ConversationItemTruncated(BaseModel):
     event_id: Optional[str] = None
     type: Literal["conversation.item.truncated"] = "conversation.item.truncated"
     item_id: str
-    content_index: int = 0
+    content_index: int
     audio_end_ms: int
 
 

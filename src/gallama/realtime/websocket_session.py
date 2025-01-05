@@ -17,28 +17,21 @@ class WebSocketSession:
         self.config = config if config else SessionConfig()
         self.voice_used = False
         self.queues = MessageQueues()
-        self.tasks: List[asyncio.Task] = []
 
         self.current_response_lock = asyncio.Lock()
         self.current_response: "Response" = None  # this is to track the current response
 
-        # Initialize VAD processor only if turn_detection is configured
-        self.potential_speech_buffer: np.ndarray = np.array([], dtype=np.float32)
-        self.prev_speech_state: SpeechState = "no_speech"
-
-        self.vad_processor = VADProcessor(
-            turn_detection_config=config.turn_detection,
-            input_sample_rate=config.input_sample_rate
-        ) if config.turn_detection else None
-        # self.vad_item_id: str = None
+        # this list keep track of the 2 main concurrent task to receive send response to user
+        self.tasks: List[asyncio.Task] = []
 
     def mark_voice_used(self):
         self.voice_used = True
 
     async def cleanup(self):
-        for task in self.tasks:
-            task.cancel()
-        # Additional cleanup as needed
+        # reset internal queue
+        self.queues.reset()
+        self.current_response = None
+
 
 
     # async def session_update(

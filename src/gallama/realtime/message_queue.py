@@ -564,6 +564,7 @@ class MessageQueues:
                         event_id=new_event_id,
                         type="conversation.item.truncated",
                         item_id=item_id,
+                        content_index=0,
                         audio_end_ms=audio_end_ms
                     ).model_dump())
 
@@ -612,3 +613,40 @@ class MessageQueues:
         except Exception as e:
             logger.error(f"Error in truncate_conversation_item: {str(e)}")
             raise
+
+    def reset(self):
+        self.audio_buffer = np.array([], dtype=np.float32)
+
+        # transcription of audio until before commit will be in self.transcription_buffer
+        self.transcript_buffer = ""
+        self.transcription_complete = False
+        self.audio_commited = False
+        self.lock_transcript_complete = asyncio.Lock()
+
+        self.sample_rate = 24000  # assuming fixed at this rate
+        self.verbose = False  # Control debug logging
+
+        # all non audio events go here
+        self.unprocessed = asyncio.Queue()
+
+        # ordered dict of conversation item
+        self.conversation_item_od: OrderedDict[str, T] = OrderedDict()
+
+        self.response_queue = asyncio.Queue()
+        self.audio_to_client = asyncio.Queue()
+        self.response_counter = ""
+        self.event_counter = ""
+        self.item_counter = ""
+
+        self.lock_conversation_item = asyncio.Lock()
+        self.lock_response_counter = asyncio.Lock()
+        self.lock_event_counter = asyncio.Lock()
+        self.lock_item_counter = asyncio.Lock()
+
+        self.lock_audio_buffer = asyncio.Lock()  # ensure that audio is sync with ws_stt
+        self.lock_transcript_buffer = asyncio.Lock()  # ensure that audio is sync with ws_stt
+        self.lock_audio_commited = asyncio.Lock()  # ensure that audio is sync with ws_stt
+
+        self.vad_item_id = None
+        self.speech_start = None
+        self.speech_end = None

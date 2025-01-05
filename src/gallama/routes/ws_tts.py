@@ -4,7 +4,7 @@ import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
-from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate, WSInterCancel
+from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate, WSInterCancel, WSInterCleanup
 import samplerate
 import numpy as np
 import json
@@ -298,9 +298,9 @@ class TTSConnection:
                 break
 
 
-    async def handle_message(self, message: WSInterTTS | WSInterConfigUpdate | WSInterCancel):
+    async def handle_message(self, message: WSInterTTS | WSInterConfigUpdate | WSInterCancel | WSInterCleanup):
         """Handle incoming WebSocket messages"""
-        if message.type == "common.cancel":
+        if message.type == "common.cancel" or message.type == "common.cleanup" or message.type == "common.cleanup":
             await self.cancel_processing()
         elif message.type == "tts.add_text" and message.text:
             if self.state.mode == "idle":
@@ -404,6 +404,8 @@ async def validate_message(raw_data: str) -> WSInterTTS:
                 return WSInterConfigUpdate(**json_data)
             elif "cancel" in event_type:
                 return WSInterCancel(**json_data)
+            elif "common.cleanup" in event_type:
+                return WSInterCleanup(**json_data)
             else:
                 raise Exception(f"Event of unrecognized type {event_type}")
         else:

@@ -14,8 +14,10 @@ class WSInterConfigUpdate(BaseModel):
     config: SessionConfig
 
 class WSInterCancel(BaseModel):
-    type: Literal["common.cancel"]
+    type: Literal["common.cancel"] = "common.cancel"
 
+class WSInterCleanup(BaseModel):
+    type: Literal["common.cleanup"] = "common.cleanup"
 
 # STT
 class WSInterSTT(BaseModel):

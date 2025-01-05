@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from gallama.data_classes import (
     ModelSpec,
     GenQueue,
+    GenQueueDynamic
 )
 import signal
 import argparse

@@ -5,7 +5,7 @@ import io
 from typing import Dict, Optional
 from ..dependencies import get_model_manager
 from ..data_classes.realtime_client_proto import SessionConfig
-from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterConfigUpdate
+from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterConfigUpdate, WSInterCleanup
 from gallama.logger.logger import logger
 import base64
 import asyncio
@@ -37,6 +37,7 @@ class ConnectionData:
 
     def reset_buffers(self):
         """Reset all buffers and state variables."""
+        self.asr_processor.reset_state()
         self.raw_buffer = bytearray()
         self.audio_buffer = np.array([], dtype=np.float32)
         self.accumulated_duration = 0.0
@@ -360,8 +361,10 @@ async def websocket_endpoint(
             data = await websocket.receive_json()
             if "stt." in data["type"]:
                 message = WSInterSTT.model_validate(data)
-            elif "common." in data["type"]:
+            elif "common.config_update" in data["type"]:
                 message = WSInterConfigUpdate.model_validate(data)
+            elif "common.cleanup" in data["type"]:
+                message = WSInterCleanup.model_validate(data)
 
             if message.type == "stt.add_sound_chunk" and message.sound:
                 audio_bytes = base64.b64decode(message.sound)
@@ -384,7 +387,7 @@ async def websocket_endpoint(
                     logger.error(f"Error during sound_done processing: {str(e)}")
                     raise  # Re-raise the exception to trigger proper cleanup
 
-            elif message.type == "stt.buffer_clear" or message.type == "common.cancel":
+            elif message.type == "stt.buffer_clear" or message.type == "common.cancel" or message.type == "common.cleanup":
                 logger.info("STT: received clear_buffer message.")
 
                 connection = manager.active_connections.get(websocket)

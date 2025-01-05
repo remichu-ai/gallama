@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Union, Optional
+from typing import Dict, List, Union, Optional, Literal, Callable, Tuple
 import asyncio
 import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
+import textwrap
 
 # logger
 from gallama.logger import logger
@@ -29,13 +30,22 @@ from gallama.data_classes import (
     GenQueue,
     GenStart,
     GenerationStats,
-    QueueContext
+    QueueContext,
+    GenQueueDynamic
 )
 from ....config.config_manager import ConfigManager
 # handle prompting
 from gallama.backend.llm.prompt_engine import PromptEngine
+from dataclasses import dataclass
+
 
 config_manager = ConfigManager()
+
+@dataclass
+class ToolCallV2:
+    gen_dynamic_queue: List[GenQueueDynamic]
+    stop_event: asyncio.Event
+    generate_kwargs: dict
 
 class ModelInterface(ABC):
     @abstractmethod
@@ -166,7 +176,7 @@ class ModelInterface(ABC):
         This function will route the request to chat with tool or without tool accordingly
         """
         if query.tools or query.tool_choice != "none":
-            chat_method = self.chat_with_tool
+            chat_method = self.chat_with_tool_v2    # TODO
         else:
             chat_method = self.chat_no_tool
         try:
@@ -585,3 +595,351 @@ arg_dict = """
                 gen_queue.put_nowait(GenText(content='{"functions_calling":[]}'))
                 gen_queue.put_nowait(GenerationStats())
                 gen_queue.put_nowait(GenEnd())
+
+
+    async def _tool_calling_task(
+        self,
+        prompt_eng: PromptEngine,
+        query:ChatMLQuery,
+        request: Request,
+        tool_handler: Tools,
+    ) -> ToolCallV2:
+
+        # queue for generating output
+        gen_queue_dynamic = [GenQueueDynamic()]
+
+        # create the pydantic schema to enforce generation
+        tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
+
+        class ToolCalling_LMFE(ClassSchema):
+            """ The format to call one or multiple tools """
+            functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
+
+        # create the pydantic schema to enforce generation for formatron which use ClassSchema
+        tool_combined_pydantic_formatron = create_function_models_formatron(
+            tool_handler.tool_dict_formatron)
+
+        class ToolCalling_formatron(ClassSchema):
+            """ The format to call one or multiple tools """
+            functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
+
+        formatter_json = self.formatter.json(
+            pydantic_model_lmfe=ToolCalling_LMFE,
+            pydantic_model_formatron=ToolCalling_formatron,
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        )
+
+        # create prompt
+        tool_as_code_prompt = """
+        ```python
+        def run_function(arg_dict):
+            function_calls = arg_dict["functions_calling"]
+
+            if function_calls == []:
+                print("No function/tool calling needed")
+                return
+
+            for call in function_calls:
+                function_name = call["name"]
+                arguments = call["arguments"]
+                globals()[function_name](**arguments)
+        """
+
+        tool_answer_as_code = """
+    
+        # Perform function calling if need to by continuing this code. Return {"functions_calling": []} if function calling is not needed.
+        arg_dict = """
+
+        prompt = prompt_eng.get_prompt(
+            query,
+            pydantic_tool_dict=tool_handler.tool_dict,
+            answer_format_schema=True,
+            backend=self.backend,
+            leading_prompt=textwrap.dedent(tool_as_code_prompt + tool_answer_as_code).strip(),
+        )
+
+        stop_event = asyncio.Event()
+
+        generate_kwargs = {
+            "prompt": prompt,
+            "messages": query.messages,
+            "gen_queue": gen_queue_dynamic,
+            "gen_type": GenStart(gen_type="tool"),
+            "temperature": query.temperature,
+            "top_p": query.top_p,
+            "prefix_strings": ['{\n "functions_calling": ['],
+            "formatter": formatter_json,
+            "max_tokens": query.max_tokens,
+            "request": request,
+            "stop_event": stop_event,
+        }
+
+        return ToolCallV2(
+            gen_dynamic_queue=gen_queue_dynamic,
+            stop_event=stop_event,
+            generate_kwargs=generate_kwargs
+        )
+
+    async def _tool_decision_task(
+        self,
+        prompt_eng: PromptEngine,
+        query: ChatMLQuery,
+        request: Request,
+        tool_handler: Tools,
+    ) -> Tuple[ToolCallV2, Callable[[str], bool]]:
+        # queue for generating output
+        gen_queue_dynamic = [GenQueueDynamic()]
+
+        # create prompt
+        # reuse tool call to share the kv cache as possible
+        tool_as_code_prompt = """
+        ```python
+        def run_function(arg_dict):
+            function_calls = arg_dict["functions_calling"]
+
+            if function_calls == []:
+                print("No function/tool calling needed")
+                return
+
+            for call in function_calls:
+                function_name = call["name"]
+                arguments = call["arguments"]
+                globals()[function_name](**arguments)
+        """
+
+        _tool_thinking_fn_header = ""
+        _tool_answer_prefix = "to="
+        if query.tool_call_thinking:
+            _tool_thinking_fn_header = 'internal_thinking: str="",'
+            _tool_answer_prefix = "thinking="
+
+        tool_decision_as_code_prompt = """
+            allow_functions = [""" + tool_handler.tool_name_list + """]
+    
+            def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"], arg_dict: Optional[List[]]=[]):
+               if to=="user":
+                   # NO function calling needed
+                   break  # exit for a normal answer
+               elif to=="function" and arg_dict!=[]:
+                   run_function(arg_dict)
+                else:
+                  raise Exception("Either response to user without function calling or function calling is required.")
+            ```
+            Example:
+            # No function calling needed:
+            response(to="user") # to let system know that no function calling is needed
+            my answer is...
+    
+            # Function calling needed:
+            response(to="function", arg_dict={
+              "functions_calling": [
+                {
+                  "name": "function_name",
+                  "arguments": {"argument_name": "value"}
+                }
+            ]}) # answer to user is prohibited if using function calling
+    
+            Remember:
+            Use Function calling if:
+            It is needed to answer user question.
+            Be conservative and only use function calling if it is necessary and suitable.
+    
+            Reply to user if:
+            It is uncertain if user wants function calling.
+            Function calling is not related to user's question.
+            Clarification is needed. 
+            ---
+            
+        """
+
+        tool_decision_answer_as_code_prompt = """
+        
+            response(""" + _tool_answer_prefix
+
+        def tool_decision_check_fn(tool_decision_answer: str) -> bool:
+            """ return True if tool usage is true"""
+            if tool_decision_answer.lower().endswith('"function"') or tool_decision_answer.lower().endswith("'function'"):
+                logger.info(f"Tool decision: {tool_decision_answer}")
+                return True
+            else:
+                return False
+
+        def tool_decision_check_with_thinking_fn(tool_decision_answer: str) -> bool:
+            """ return True if tool usage is true"""
+            if tool_decision_answer.lower().endswith('"function"') or tool_decision_answer.lower().endswith("'function'"):
+                logger.info(f"Tool decision: internal_thinking: {tool_decision_answer}")
+                return True
+            else:
+                return False
+
+        prompt = prompt_eng.get_prompt(
+            query,
+            pydantic_tool_dict=tool_handler.tool_dict,
+            answer_format_schema=True,
+            backend=self.backend,
+            leading_prompt=textwrap.dedent(
+                tool_as_code_prompt + tool_decision_as_code_prompt + tool_decision_answer_as_code_prompt
+            ).strip(),
+        )
+
+        formatter_regex = self.formatter.regex(
+            regex_pattern=r'"user"|"function"',
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        )
+
+        stop_event = asyncio.Event()
+
+        generate_kwargs = {
+            "prompt": prompt,
+            "messages": query.messages,
+            "gen_queue": gen_queue_dynamic,
+            "gen_type": GenStart(gen_type="tool"),
+            "temperature": query.temperature,
+            "top_p": query.top_p,
+            "prefix_strings": '"',
+            "formatter": formatter_regex if not query.tool_call_thinking else None,
+            "max_tokens": query.tool_call_thinking_token,
+            "request": request,
+            "stop_event": stop_event,
+            "stop_words": ['"user"', '"function"', "'user'", "'function'"],
+        }
+
+        tool_decision_check_fn_to_use = tool_decision_check_fn if query.tool_call_thinking else tool_decision_check_with_thinking_fn
+
+        return ToolCallV2(
+            gen_dynamic_queue=gen_queue_dynamic,
+            stop_event=stop_event,
+            generate_kwargs=generate_kwargs
+        ), tool_decision_check_fn_to_use
+
+
+    async def _no_tool_task(
+        self,
+        prompt_eng: PromptEngine,
+        query:ChatMLQuery,
+        request: Request
+    ) -> ToolCallV2:
+
+        gen_queue_dynamic = [GenQueueDynamic()]
+
+        prompt = prompt_eng.get_prompt(
+            query,
+            backend=self.backend,
+        )
+
+        stop_event = asyncio.Event()
+
+        generate_kwargs = {
+            "prompt": prompt,
+            "messages": query.messages,
+            "gen_queue": gen_queue_dynamic,
+            "gen_type": GenStart(gen_type="text"),
+            "temperature": query.temperature,
+            "top_p": query.top_p,
+            "prefix_strings": query.prefix_strings,
+            "max_tokens": query.max_tokens,
+            "request": request,
+            "stop_event": stop_event,
+        }
+
+        return ToolCallV2(
+            gen_dynamic_queue=gen_queue_dynamic,
+            stop_event=stop_event,
+            generate_kwargs=generate_kwargs
+        )
+
+
+
+    async def chat_with_tool_v2(
+        self,
+        query: ChatMLQuery,
+        prompt_eng: PromptEngine,
+        gen_queue: GenQueueDynamic,
+        request: Request,
+        stop_event: asyncio.Event = None
+    ):
+        """
+        handle tool calling llm generation
+        main purpose is to handle auto model of generation by generate both tool and non tool usage at the same time
+        dynamically swap to the best answer by LLM
+        This will reduce the wait time from generating sequentially
+        """
+        # TODO implement non async version
+
+        # tool class have the method to handle converting processing or tool requirement, schema and response
+        tool_handler = Tools(
+            prompt_eng=prompt_eng,
+            tools=query.tools,
+            tool_choice=query.tool_choice,
+        )
+
+        tool_call = await self._tool_calling_task(
+            prompt_eng=prompt_eng,
+            query=query,
+            request=request,
+            tool_handler=tool_handler
+        )
+
+        tool_decision, tool_decision_check_fn = await self._tool_decision_task(
+            prompt_eng=prompt_eng,
+            query=query,
+            request=request,
+            tool_handler=tool_handler
+        )
+
+
+        no_tool = await self._no_tool_task(
+            prompt_eng=prompt_eng,
+            query=query,
+            request=request
+        )
+
+        tasks = []  # to track the task running
+
+        tool_decision_task = None
+        tool_task = None
+        no_tool_task = None
+
+
+        # ensure result is out for decision
+        tool_decision_outcome: Literal["user", "function"] = "function"
+
+        # tool task will always be run. It is assumed that if this function is called, tool generation is required
+        tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
+        tasks.append(tool_task)
+
+        # if mode is auto, run the tool usage decision generation
+        if query.tool_choice == "auto":
+            tool_decision_task = asyncio.create_task(self.generate(**tool_decision.generate_kwargs))
+            tasks.append(tool_decision_task)
+
+            no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
+            tasks.append(no_tool_task)
+
+            tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+
+
+        if tool_decision_check_fn(tool_decision_outcome):
+            logger.info("Tool auto decision: function")
+            if no_tool:
+                no_tool.stop_event.set()
+
+            # swap queue for output to function calling
+            gen_queue.swap(tool_call.gen_dynamic_queue[0])
+        else:
+            logger.info("Tool auto decision: user")
+            if tool_call:
+                tool_call.stop_event.set()
+
+            # swap queue non function calling
+            gen_queue.swap(no_tool.gen_dynamic_queue[0])
+
+
+        # Wait for the remaining tasks to complete (if needed)
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            logger.error(f"Error in one of the tasks: {e}")
+

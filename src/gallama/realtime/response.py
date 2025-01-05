@@ -127,6 +127,8 @@ class Response:
                 "type": "response.content_part.done",
                 "response_id": self.response_id,
                 "item_id": self.item_id,
+                "output_index": 0,
+                "content_index": 0,
                 "part": content_part
             }).model_dump(exclude_unset=True))  # if not, None will be set as audio to front end
 
@@ -358,6 +360,8 @@ class Response:
             "type": _type,
             "response_id": self.response_id,
             "item_id": self.item_id,
+            "output_index": 0,
+            "content_index": 0,
             "delta": chunk  # for audio, send to client base64 string
         }).model_dump())
 
@@ -378,6 +382,8 @@ class Response:
                 "type": "response.text.done",
                 "response_id": self.response_id,
                 "item_id": self.item_id,
+                "output_index": 0,
+                "content_index": 0,
                 "text": self.text
             }).model_dump())
             self.text_done = True
@@ -387,6 +393,8 @@ class Response:
                 "event_id": await self.event_id_generator(),
                 "type": "response.audio.done",
                 "response_id": self.response_id,
+                "output_index": 0,
+                "content_index": 0,
                 "item_id": self.item_id,
             }).model_dump())
             self.audio_done = True
@@ -397,6 +405,8 @@ class Response:
                 "type": "response.audio_transcript.done",
                 "response_id": self.response_id,
                 "item_id": self.item_id,
+                "output_index": 0,
+                "content_index": 0,
                 "transcript": self.transcription
             }).model_dump())
             self.transcription_done = True
@@ -618,6 +628,8 @@ class Response:
                     "type": "response.content_part.added",
                     "response_id": self.response_id,
                     "item_id": self.item_id,
+                    "output_index": 0,
+                    "content_index": 0,
                     "part": {
                         "type": "audio",
                         "audio": "",
@@ -630,6 +642,8 @@ class Response:
                     "type": "response.content_part.added",
                     "response_id": self.response_id,
                     "item_id": self.item_id,
+                    "output_index": 0,
+                    "content_index": 0,
                     "part": {
                        "type": "text",
                         "text": ""

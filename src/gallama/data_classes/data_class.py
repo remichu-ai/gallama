@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint
 from typing import Optional, Literal, List, Dict, Union, Any, Type
 import asyncio
 import os
@@ -189,12 +189,14 @@ class ChatMLQuery(BaseModel):
     max_tokens: Optional[int] = None
 
     # not part of openai api
-    leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the generated response")
+    leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the  generated response")
     prefix_strings: Optional[Union[str, List[str]]] = Field(default=None, description="String or list of strings to start the generation with. Can not be used together with regex_prefix_pattern")
     regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
     thinking_template: Optional[str] = None
+    tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
+    tool_call_thinking_token: conint = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,

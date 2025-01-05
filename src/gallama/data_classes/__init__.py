@@ -31,7 +31,8 @@ from .internal_ws import (
     TTSEvent,
     WSInterConfigUpdate,
     WSInterSTTResponse,
-    WSInterCancel
+    WSInterCancel,
+    WSInterCleanup
 )
 
 from .generation_data_class import (
@@ -41,5 +42,6 @@ from .generation_data_class import (
     GenQueue,
     GenText,
     QueueContext,
+    GenQueueDynamic
 )
 

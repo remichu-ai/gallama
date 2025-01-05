@@ -15,6 +15,7 @@ from gallama.data_classes import (
     ToolForce,
     GenerateQuery,
     GenQueue,
+    GenQueueDynamic
 )
 import asyncio
 
@@ -67,7 +68,7 @@ def validate_api_request(query: ChatMLQuery):
 async def chat_completion(request: Request, query: ChatMLQuery):
 
     model_manager = get_model_manager()
-    gen_queue = GenQueue()      # this queue will hold the result for this generation
+    gen_queue = GenQueueDynamic()      # this queue will hold the result for this generation
 
     # validate and fix query
     query = validate_api_request(query)
@@ -119,10 +120,8 @@ async def chat_completion(request: Request, query: ChatMLQuery):
 @router.post("/completions")
 async def generate(request: Request, query: GenerateQuery):
     model_manager = get_model_manager()
-    gen_queue = GenQueue()      # this queue will hold the result for this generation
+    gen_queue = GenQueueDynamic()      # this queue will hold the result for this generation
     llm = model_manager.llm_dict[query.model]
-
-    gen_queue = GenQueue()  # this queue will hold the result for this generation
 
     # start the generation task
     asyncio.create_task(llm.chat_raw(

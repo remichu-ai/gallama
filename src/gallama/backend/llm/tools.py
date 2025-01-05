@@ -17,7 +17,7 @@ class Tools:
 
     @property
     def tool_name_list(self):
-        return ", ".join(self.tool_dict.keys())
+        return ", ".join(f'"{name}"' for name in self.tool_dict.keys())
 
     @staticmethod
     def type_from_json_schema(schema: dict):
