@@ -269,7 +269,7 @@ class WebSocketManager:
                                 status="completed",
                                 content=[
                                     MessageContentServer(
-                                        type=ContentTypeServer.INPUT_AUDIO,
+                                        type="input_audio",
                                         audio=session.queues.audio_buffer,
                                         transcript=session.queues.transcript_buffer
                                     )
