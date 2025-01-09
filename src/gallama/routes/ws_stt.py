@@ -10,7 +10,6 @@ from gallama.logger.logger import logger
 import base64
 import asyncio
 import samplerate
-import librosa
 
 router = APIRouter(prefix="", tags=["audio"])
 
@@ -268,7 +267,7 @@ class TranscriptionConnectionManager:
             if (len(connection.audio_buffer) >= connection.min_chunk_samples) or (is_final and len(connection.audio_buffer) > 0):
                 connection.asr_processor.add_audio_chunk(connection.audio_buffer)
                 start_time, end_time, transcription, vad_events = connection.asr_processor.process_audio(is_final=is_final)
-
+                logger.info(f"Transcription: {transcription}")
                 # Handle VAD events
                 for event in vad_events:
                     if event['type'] == 'start':

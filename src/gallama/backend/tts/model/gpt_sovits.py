@@ -165,7 +165,7 @@ class TTS_GPT_SoVITS(TTSBase):
 
         params = {
             "text": text,
-            "text_lang": "en",
+            "text_lang": language,
             "ref_audio_path": voice_to_use.ref_audio_path,
             "aux_ref_audio_paths": [],
             "prompt_text": voice_to_use.ref_audio_transcription,

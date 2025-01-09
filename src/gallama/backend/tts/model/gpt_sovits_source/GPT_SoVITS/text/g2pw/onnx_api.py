@@ -51,12 +51,16 @@ def predict(session, onnx_input: Dict[str, Any],
     return all_preds, all_confidences
 
 
-def download_and_decompress(model_dir: str='G2PWModel/'):
+def download_and_decompress(model_dir: str = 'G2PWModel/'):
+    # Expand ~/ to the full path
+    model_dir = os.path.expanduser(model_dir)
+
     if not os.path.exists(model_dir):
         parent_directory = os.path.dirname(model_dir)
-        zip_dir = os.path.join(parent_directory,"G2PWModel_1.1.zip")
-        extract_dir = os.path.join(parent_directory,"G2PWModel_1.1")
-        extract_dir_new = os.path.join(parent_directory,"G2PWModel")
+        zip_dir = os.path.join(parent_directory, "G2PWModel_1.1.zip")
+        extract_dir = os.path.join(parent_directory, "G2PWModel_1.1")
+        extract_dir_new = os.path.join(parent_directory, "G2PWModel")
+
         print("Downloading g2pw model...")
         modelscope_url = "https://paddlespeech.bj.bcebos.com/Parakeet/released_models/g2p/G2PWModel_1.1.zip"
         with requests.get(modelscope_url, stream=True) as r:
@@ -69,7 +73,7 @@ def download_and_decompress(model_dir: str='G2PWModel/'):
         print("Extracting g2pw model...")
         with zipfile.ZipFile(zip_dir, "r") as zip_ref:
             zip_ref.extractall(parent_directory)
-        
+
         os.rename(extract_dir, extract_dir_new)
 
     return model_dir

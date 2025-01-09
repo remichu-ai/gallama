@@ -524,7 +524,7 @@ class Response:
             response_dict.update(overwrite_response_dict)
             response_dict.pop("content_index")
 
-        logger.info(f"response_dict: {response_dict}")
+        # logger.info(f"response_dict: {response_dict}")
 
         await self.ws_client.send_json(ResponseDelta(**response_dict).model_dump(exclude_unset=True))
 

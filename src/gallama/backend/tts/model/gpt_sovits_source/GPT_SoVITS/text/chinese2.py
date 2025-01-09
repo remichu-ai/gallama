@@ -27,7 +27,12 @@ if is_g2pw:
     print("当前使用g2pw进行拼音推理")
     from text.g2pw import G2PWPinyin, correct_pronunciation
     parent_directory = os.path.dirname(current_file_path)
-    g2pw = G2PWPinyin(model_dir="GPT_SoVITS/text/G2PWModel",model_source=os.environ.get("bert_path","GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"),v_to_u=False, neutral_tone_with_five=True)
+    # g2pw = G2PWPinyin(model_dir="GPT_SoVITS/text/G2PWModel",model_source=os.environ.get("bert_path","GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large"),v_to_u=False, neutral_tone_with_five=True)
+
+    model_dir_path = os.path.expanduser("~/gallama/models/gpt_sovits/text/G2PWModel")
+    model_source_path = os.path.expanduser("~/gallama/models/gpt_sovits/pretrained_models/chinese-roberta-wwm-ext-large")
+
+    g2pw = G2PWPinyin(model_dir=model_dir_path,model_source=os.environ.get("bert_path",model_source_path),v_to_u=False, neutral_tone_with_five=True)
 
 rep_map = {
     "：": ",",

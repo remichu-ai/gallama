@@ -54,6 +54,12 @@ LangSegment
 numpy==1.26.4
 ffmpeg-python
 nltk
+opencc
+pyopenjtalk>=0.3.4
+jamo
+ko_pron
+g2pk
+g2pk2
 # nltk.download('averaged_perceptron_tagger_eng')
 # sudo apt install ffmpeg
 # cuBLAS

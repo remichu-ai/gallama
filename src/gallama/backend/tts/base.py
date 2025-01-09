@@ -64,13 +64,13 @@ class TTSBase:
         )
 
     async def text_stream_to_speech_to_queue(
-            self,
-            text_queue: asyncio.Queue,
-            queue: asyncio.Queue,
-            language: str = "auto",
-            speed_factor: float = 1.0,
-            stream: bool = True,
-            **kwargs: Any
+        self,
+        text_queue: asyncio.Queue,
+        queue: asyncio.Queue,
+        language: str = "auto",
+        speed_factor: float = 1.0,
+        stream: bool = True,
+        **kwargs: Any
     ) -> None:
         pipeline = TextToTextSegment(
             quick_start=True,
