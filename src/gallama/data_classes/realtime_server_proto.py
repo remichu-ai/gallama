@@ -80,7 +80,7 @@ class ConversationItemFunctionCallServer(ConversationItemBaseServer):
     type: Literal["function_call"] = "function_call"
     call_id: str
     name: str
-    arguments: str
+    arguments: Optional[str] = None
 
 
 class ConversationItemFunctionCallOutputServer(ConversationItemBaseServer):
@@ -209,11 +209,16 @@ class ResponseDone(BaseModel):
 
 class ResponseDelta(BaseModel):
     event_id: str
-    type: Literal["response.text.delta", "response.audio_transcript.delta", "response.audio.delta"]
+    type: Literal[
+        "response.text.delta",
+        "response.audio_transcript.delta",
+        "response.audio.delta",
+        "response.function_call_arguments.delta"
+    ]
     response_id: str
     item_id: str
     output_index: int
-    content_index: int
+    content_index: Optional[int] = 0
     delta: str
 
 
@@ -225,6 +230,16 @@ class ResponseTextDone(BaseModel):
     output_index: int
     content_index: int
     text: str
+
+class ResponseFunctionCallArgumentsDone(BaseModel):
+    event_id: str
+    type: Literal["response.function_call_arguments.done"] = "response.function_call_arguments.done"
+    response_id: str
+    item_id: str
+    output_index: int
+    call_id: str
+    name: str
+    arguments: str
 
 
 class ResponseAudioDone(BaseModel):

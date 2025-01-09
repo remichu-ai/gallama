@@ -1,10 +1,16 @@
 from pydantic import BaseModel, Field, ValidationError, create_model
 from typing import Literal, Type, Union, Optional, List, Any, Dict
 from formatron.schemas.pydantic import ClassSchema, Schema
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from ...data_classes import ToolSpec
+import json
+from datamodel_code_generator import generate, InputFileType, DataModelType
+from ...logger.logger import logger
 
 
 class Tools:
-    def __init__(self, prompt_eng, tools, tool_choice):
+    def __init__(self, prompt_eng, tools: [List[ToolSpec]], tool_choice):
         self.prompt_eng = prompt_eng
         self.tools = tools
         self.tools_list = self.create_pydantic_model_from_tools(self.tools, mode="pydantic_v2")
@@ -15,9 +21,21 @@ class Tools:
         self.json_parser = None
         self.tool_choice = tool_choice
 
+        # initialize tool as code
+        self.tool_def_as_code: str = self.create_tool_def_as_code()
+        logger.info(f"tool_def_as_code: {self.tool_def_as_code}")
+
+    def create_tool_def_as_code(self):
+        _temp_tool_list = [
+            self.generate_pydantic_model_from_json_schema(tool.model_json_schema())
+            for tool in self.tools_list
+        ]
+        return self.append_code_without_duplicate_imports(_temp_tool_list)
+
     @property
     def tool_name_list(self):
         return ", ".join(f'"{name}"' for name in self.tool_dict.keys())
+
 
     @staticmethod
     def type_from_json_schema(schema: dict):
@@ -239,6 +257,103 @@ class Tools:
         """
         raw_schema = model.schema()
         return Tools.replace_refs_with_definitions_v1(raw_schema)
+
+    @staticmethod
+    def generate_pydantic_model_from_json_schema(json_schema: dict) -> str:
+        """
+        Generates Pydantic model code from a JSON schema using datamodel-code-generator.
+
+        Args:
+            json_schema (dict): The JSON schema to generate the Pydantic model from.
+
+        Returns:
+            str: The generated Pydantic model code as a string, with comments removed,
+                 duplicate imports removed, and normalized newlines.
+        """
+        with TemporaryDirectory() as temporary_directory_name:
+            temporary_directory = Path(temporary_directory_name)
+
+            # Write the JSON schema to a temporary file
+            schema_file = temporary_directory / 'schema.json'
+            with open(schema_file, 'w') as f:
+                json.dump(json_schema, f)
+
+            # Define the output file for the generated model
+            output = temporary_directory / 'model.py'
+
+            # Generate the Pydantic model code
+            generate(
+                input_=schema_file,  # Pass the file path instead of the raw dictionary
+                input_file_type=InputFileType.JsonSchema,
+                output=output,
+                output_model_type=DataModelType.PydanticV2BaseModel,
+            )
+
+            # Read the generated code from the output file
+            with open(output, 'r') as file:
+                generated_code = file.read()
+
+        # Remove the comment lines at the top
+        generated_code = '\n'.join(
+            line for line in generated_code.splitlines()
+            if not line.strip().startswith('#')
+        )
+
+        # Normalize newlines to ensure a maximum of one empty line
+        generated_code = '\n'.join(
+            line for line in generated_code.splitlines()
+            if line.strip()  # Remove empty lines
+        )
+        generated_code = generated_code.replace('\n\n', '\n')  # Ensure max one empty line
+
+        return generated_code
+
+    @staticmethod
+    def append_code_without_duplicate_imports(code_list: list[str]) -> str:
+        """
+        Appends multiple code strings into one, removing duplicate imports and normalizing newlines.
+
+        Args:
+            code_list (list[str]): A list of code strings to combine.
+
+        Returns:
+            str: The combined code with duplicate imports removed and normalized newlines.
+        """
+        if not code_list:
+            return ""
+
+        # Initialize the combined code with the first code string
+        combined_code = code_list[0]
+
+        # Iterate over the remaining code strings
+        for new_code in code_list[1:]:
+            # Split the code into lines
+            existing_lines = combined_code.splitlines()
+            new_lines = new_code.splitlines()
+
+            # Extract imports from existing code
+            existing_imports = set(
+                line for line in existing_lines
+                if line.strip().startswith(('from ', 'import '))
+            )
+
+            # Filter out duplicate imports from new code
+            new_lines_filtered = [
+                line for line in new_lines
+                if not (line.strip().startswith(('from ', 'import ')) and line in existing_imports)
+            ]
+
+            # Append the filtered new code to the combined code
+            combined_code += '\n' + '\n'.join(new_lines_filtered)
+
+        # Normalize newlines to ensure a maximum of one empty line
+        combined_code = '\n'.join(
+            line for line in combined_code.splitlines()
+            if line.strip()  # Remove empty lines
+        )
+        combined_code = combined_code.replace('\n\n', '\n')  # Ensure max one empty line
+
+        return combined_code
 
 
 

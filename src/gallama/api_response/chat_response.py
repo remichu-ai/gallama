@@ -83,10 +83,13 @@ async def chat_completion_response_stream(
     gen_type = "text"  # Default generation type
     gen_stats = None
 
+    # no streaming of tool use at the moment
+    accumulated_tool_text = ""
+
     while not eos:
         accumulated_text = ""
         accumulated_thinking = ""
-        accumulated_tool_text = ""
+
 
         try:
             while True:
@@ -153,12 +156,28 @@ async def chat_completion_response_stream(
                     )
                     yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
 
-        if accumulated_tool_text:
+        # currently not support partial streaming of tool use
+        if eos and accumulated_tool_text:
             # We'll try to parse it as JSON but if it fails, we'll just stream it as is
             try:
                 # If this is the start of a tool call (containing the function name)
-                if '"name":' in accumulated_tool_text:
-                    tool_data = json.loads(accumulated_tool_text)
+                response_dict = json.loads(accumulated_tool_text)
+
+                # successfully parse JSON, convert the tool used into response format
+                tools_list = []  # the list of tool to call
+                for index, tool in enumerate(response_dict['functions_calling']):
+                    tool_id = get_response_tool_uid()
+                    tools_list.append(
+                        ToolCallResponse(
+                            id=tool_id,
+                            index=index,
+                            function=OneTool(
+                                name=tool['name'],
+                                arguments=json.dumps(tool['arguments']),
+                            )
+                        )
+                    )
+
                     chunk_data = ChatCompletionResponse(
                         unique_id=unique_id,
                         model=model_name,
@@ -170,11 +189,11 @@ async def chat_completion_response_stream(
                                 delta=ChoiceDelta(
                                     tool_calls=[
                                         ChoiceDeltaToolCall(
-                                            index=tool_data.get("index", 0),
+                                            index=index,
                                             id=get_response_tool_uid(),
                                             function=ChoiceDeltaToolCallFunction(
-                                                name=tool_data.get("name"),
-                                                arguments=""
+                                                name=tool.get("name"),
+                                                arguments=json.dumps(tool.get("arguments",""))
                                             ),
                                             type="function"
                                         )
@@ -183,28 +202,9 @@ async def chat_completion_response_stream(
                             )
                         ]
                     )
-                else:
-                    # This is just an argument chunk
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChoiceDelta(
-                                    tool_calls=[
-                                        ChoiceDeltaToolCall(
-                                            function=ChoiceDeltaToolCallFunction(
-                                                arguments=accumulated_tool_text
-                                            )
-                                        )
-                                    ]
-                                )
-                            )
-                        ]
-                    )
+
+                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+
             except json.JSONDecodeError:
                 # If parsing fails, just stream the raw text
                 chunk_data = ChatCompletionResponse(
@@ -227,7 +227,7 @@ async def chat_completion_response_stream(
                         )
                     ]
                 )
-            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
 
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
@@ -259,7 +259,7 @@ async def chat_completion_response_stream(
                     StreamChoice(
                         index=0,
                         delta=ChoiceDelta(),
-                        finish_reason="tool_calls"
+                        finish_reason="tool_calls" if accumulated_tool_text else "stop"
                     )
                 ]
             )

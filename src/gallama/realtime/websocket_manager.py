@@ -13,6 +13,8 @@ from gallama.data_classes.realtime_client_proto import (
     ConversationItemInputAudioTranscriptionComplete,
     ConversationItemCreate,
     ConversationItemTruncate,
+    ConversationItemFunctionCall,
+    ConversationItemFunctionCallOutput,
 )
 from gallama.data_classes.realtime_server_proto import (
     MessageContentServer,
@@ -21,7 +23,9 @@ from gallama.data_classes.realtime_server_proto import (
     ContentTypeServer,
     InputAudioBufferSpeechStarted,
     InputAudioBufferSpeechStopped,
-    InputAudioBufferCommitted
+    InputAudioBufferCommitted,
+    ConversationItemFunctionCallServer,
+    ConversationItemFunctionCallOutputServer
 )
 from gallama.data_classes.internal_ws import WSInterSTTResponse, WSInterSTT
 from gallama.realtime.response import Response
@@ -123,6 +127,27 @@ class WebSocketManager:
                     content=new_content,
                     status=item.status if item.status else "completed",
                 )
+            elif isinstance(item, ConversationItemFunctionCall):
+                logger.info("FROG FROG ConversationItemFunctionCall")
+
+                processed_item = ConversationItemFunctionCallServer(
+                    id=item.id,
+                    status="completed",
+                    type=item.type,
+                    call_id=item.call_id,
+                    name=item.name,
+                    arguments=item.arguments
+                )
+            elif isinstance(item, ConversationItemFunctionCallOutput):
+                logger.info("FROG FROG Function call output")
+                processed_item = ConversationItemFunctionCallOutputServer(
+                    status="completed",
+                    call_id=item.call_id,
+                    output=item.output,
+                )
+
+            else:
+                logger.error(f"Unknown item type: {item.type}")
 
             return processed_item
         except Exception as e:
@@ -153,8 +178,6 @@ class WebSocketManager:
                         # get new item id
                         session.queues.vad_item_id = await session.queues.next_item()
 
-                        # put cancel event into queue
-
                         # send client
                         await websocket.send_json(InputAudioBufferSpeechStarted(
                             event_id=await session.queues.next_event(),
@@ -177,6 +200,7 @@ class WebSocketManager:
                             audio_end_ms=stt_response.vad_timestamp_ms,
                             item_id=session.queues.vad_item_id
                         ).model_dump())
+
 
                         # update tracking
                         session.queues.speech_end = stt_response.vad_timestamp_ms
@@ -224,7 +248,7 @@ class WebSocketManager:
         """Process items in unprocessed queue one at a time"""
         while True:
             item: ConversationItemCreate | ResponseCreate = await session.queues.unprocessed.get()
-
+            logger.info(f"Processing item: {item}")
             try:
                 if isinstance(item, ConversationItemCreate):
                     item_to_create = await self.handle_message_item(item.item)
@@ -250,18 +274,22 @@ class WebSocketManager:
                 elif isinstance(item, ResponseCreate):
                     # if there is audio commited, create an item for it
 
-                    modalities = "audio" if await session.queues.audio_exist() and "audio" in session.config.modalities else "text"
+                    modalities = "audio" if "audio" in session.config.modalities else "text"
                     logger.info(f"modalities: {modalities}")
                     logger.info(f"session.config.modalities: {session.config.modalities}")
                     # Process transcription and response
                     if modalities == "audio":
                         # wait until transcription is done
-                        transcription_done, vad_item_id = await session.queues.wait_for_transcription_done()
+                        if session.config.turn_detection and not session.config.turn_detection.create_response:
+                            transcription_done, vad_item_id = await session.queues.wait_for_transcription_done(use_vad=True)
+                        else:
+                            transcription_done, vad_item_id = await session.queues.wait_for_transcription_done(use_vad=False)
+
                         logger.info(f"transcription_done: {transcription_done}")
                         logger.info(f"vad_item_id: {vad_item_id}")
                         logger.info(f"session.queues.transcript_buffer: {session.queues.transcript_buffer}")
 
-                        if transcription_done and session.queues.transcript_buffer:
+                        if vad_item_id and transcription_done and session.queues.transcript_buffer:
 
                             user_audio_item = ConversationItemMessageServer(
                                 id=session.queues.vad_item_id,  # commit_unprocessed_audio save the id
@@ -310,19 +338,21 @@ class WebSocketManager:
                         logger.info(f"-------------------Set Current response")
                         session.current_response = response
 
-                    await response.response_initialize()
-
                     # at this point stt already completed, and text send to the llm
                     await response.response_initialize()
                     await response.response_start(response_create_request=item, session_config=session.config)
 
                     # update conversation list with assistant answer
+                    logger.info("update conversation list with assistant answer")
                     await session.queues.update_conversation_item_with_assistant_response(
-                        response_id=response.item_id,
+                        item_id=response.item_id,
                         _type=modalities,
                         text=response.text or response.transcription,   # for audio item, fill text with transcription
                         transcript=response.transcription,
                         audio=response.audio,
+                        function_calling_name=response.function_calling_name,
+                        function_calling_arguments=response.function_calling_arguments,
+                        function_calling_tool_id=response.function_calling_tool_id,
                         ws_llm=self.message_handler.ws_llm,
                     )
 

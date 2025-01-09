@@ -18,6 +18,8 @@ class WebSocketSession:
         self.voice_used = False
         self.queues = MessageQueues()
 
+        # self.vad_status: Literal["idle", "speech_start", "speech_end"] = "idle"
+
         self.current_response_lock = asyncio.Lock()
         self.current_response: "Response" = None  # this is to track the current response
 

@@ -9,7 +9,10 @@ from .server_dataclass import (
 
 from .data_class import (
     ChatMLQuery,
+    ToolSpec,
     ToolForce,
+    FunctionCall,
+    ChoiceDeltaToolCall,
     GenerateQuery,
     ModelObjectResponse,
     ModelObject,

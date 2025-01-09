@@ -61,7 +61,7 @@ class TurnDetectionConfig(BaseModel):
     type: Literal["server_vad"] = "server_vad"
     threshold: Optional[float] = Field(ge=0.0, le=1.0,default=0.5)
     prefix_padding_ms: Optional[int] = Field(ge=0, default=300)
-    silence_duration_ms: Optional[int] = Field(ge=0, default=500)
+    silence_duration_ms: Optional[int] = Field(ge=0, default=400)
     create_response: bool = True
 
     # gallama specific setting
@@ -93,6 +93,15 @@ class SessionConfig(BaseModel):
     user_interrupt_token: Optional[str] = Field(description= "Custom word to insert everytime user interrupt the assistant",default=" <user_interrupt>")
     input_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
     output_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
+
+    # extra argument for gallama tool calling:
+    tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
+    tool_call_thinking_token: int = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
+    tool_instruction_position: Literal["prefix", "postfix"] = (
+        Field(default="prefix", description="Position of the general instruction to use tool. prefix for best kv caching"))
+    tool_schema_position: Literal["prefix", "postfix"] = (
+        Field(default="prefix", description="Position of the schema of individual tools. If tool_schema is unchanged through out, "
+                                            "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
 
 
     class Config:

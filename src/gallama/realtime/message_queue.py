@@ -250,13 +250,21 @@ class MessageQueues:
         logger.info(f"reset after response completed")
 
 
-    async def wait_for_transcription_done(self):
+    async def wait_for_transcription_done(self, use_vad: bool = False):
         """wait for audio to commit with 10 second timeout
 
         Returns:
             bool: True if transcription completed, False if timeout occurred
         """
         try:
+            # just exit if use_vad but no speech detected
+            if use_vad and self.vad_item_id is None:
+                return False, None
+
+            # if not use vad, but audio not commited
+            if not use_vad and not self.audio_commited:
+                return False, None
+
             async def _wait():
                 while not self.transcription_complete:
                     await asyncio.sleep(0.05)
@@ -303,14 +311,14 @@ class MessageQueues:
 
             item_to_send = item
 
-            # send to ws_llm to sync with this item
-            stripped_item = item.strip_audio(mode="remove")
-            await ws_llm.send_pydantic_message(stripped_item)
-
             # send client update about new item created
             async with self.lock_conversation_item:
                 if not item.id:
                     item.id = await self.next_item()
+
+                # send to ws_llm to sync with this item
+                stripped_item = item.strip_audio(mode="remove")
+                await ws_llm.send_pydantic_message(stripped_item)
 
                 if item.id not in self.conversation_item_od.keys():
                     item_to_send = ConversationItemCreated(**{
@@ -332,11 +340,14 @@ class MessageQueues:
 
     async def update_conversation_item_with_assistant_response(
         self,
-        response_id: str,
+        item_id: str,
         _type: str,
         text: str,
         transcript: str,
         audio: np.ndarray,
+        function_calling_name: str,
+        function_calling_arguments: str,
+        function_calling_tool_id: str,
         ws_llm: WebSocketClient,  # web socket for llm
     ):
         """
@@ -345,17 +356,24 @@ class MessageQueues:
         """
         try:
             # update value in place to prevent moving its position
-            self.conversation_item_od[response_id].content = [
-                MessageContentServer(
-                    type=_type,
-                    text=text,
-                    transcript=transcript,
-                    audio=audio,
-                )
-            ]
+
+            if not function_calling_name:   # non function calling
+                self.conversation_item_od[item_id].content = [
+                    MessageContentServer(
+                        type=_type,
+                        text=text,
+                        transcript=transcript,
+                        audio=audio,
+                    )
+                ]
+                stripped_item = self.conversation_item_od[item_id].strip_audio()
+            else:
+                self.conversation_item_od[item_id].call_id = function_calling_tool_id
+                self.conversation_item_od[item_id].name = function_calling_name
+                self.conversation_item_od[item_id].arguments = function_calling_arguments
+                stripped_item = self.conversation_item_od[item_id]
 
             # send to ws_llm to sync with this item
-            stripped_item = self.conversation_item_od[response_id].strip_audio()
             await ws_llm.send_pydantic_message(stripped_item)
 
         except Exception as e:

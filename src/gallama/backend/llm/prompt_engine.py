@@ -145,24 +145,26 @@ class PromptEngine:
         content = msg.content if msg.content else ""
 
         try:
-            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n\n"
+            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
         except:
-            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n\n"
+            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
 
         return content
 
-    def _format_tool_call_msg(self, msg: BaseMessage) -> str:
+    def _format_tool_result_msg(self, msg: BaseMessage) -> str:
         """one msg might have multiple tool calls"""
-        tool_call_str = f"Please help to call these tool:\n"
+        # tool_call_str = f"Please help to call these tool:\n"
+        tool_call_str = "---"
 
         for tool_call in msg.tool_calls:
             tool_call_str += f"Request for tool call with reference id {tool_call.id}:\n"
             tool_call_str += self._format_tool_call(tool_call)
             tool_call_str += "\n\n"
 
+        tool_call_str += "---"
         return tool_call_str
 
-    def _format_tool_msg(self, pydantic_tool_list: Dict[str, BaseModel]) -> str:
+    def _format_tool_msg(self, pydantic_tool_list: Dict[str, BaseModel], pretty:bool = False) -> str:
         # append tools calling if it is a prompt
         tools_json = ("\nBelow are the functions available to you to use.\n"
                       "If you need to use multiple functions, please provide it in chronological order.\n"
@@ -173,12 +175,25 @@ class PromptEngine:
             tools_json += self.get_tool_start_token()
 
         for tool_name, tool in pydantic_tool_list.items():
-            tools_json = tools_json + tool_name + ":\n" + str(json.dumps(tool.schema(), indent=2)) + "\n---\n"
+            if pretty:
+                tools_json = tools_json + tool_name + ":\n" + str(json.dumps(tool.schema(), indent=2)) + "\n---\n"
+            else:
+                tools_json = tools_json + tool_name + ":\n" + str(json.dumps(tool.schema())) + "\n---\n"
 
         if self.tool_enabled:
             tools_json += self.get_tool_end_token()
 
         return tools_json
+
+    def _format_tool_msg_as_code(self, pydantic_tool_as_code: str) -> str:
+        # append tools calling if it is a prompt
+        tools_as_code = ("\nBelow are the functions available to you to use.\n"
+                      "The function definition and arguments are presented as pydantic class.\n\n")
+
+        if self.tool_enabled:
+            tools_as_code += pydantic_tool_as_code + "\n"
+
+        return tools_as_code
 
     def _get_one_msg(self, msg: BaseMessage) -> str:
         content = msg.content if msg.content else ""
@@ -189,8 +204,14 @@ class PromptEngine:
         if self._get_message_type(msg) == "tool_result":
             return self._format_tool_result(msg)
         elif self._get_message_type(msg) == "tool_call":
-            return self._format_tool_call_msg(msg)
-        elif self._get_message_type(msg) in ["assistant", "system", "user"]:
+            return self._format_tool_result_msg(msg)
+        elif self._get_message_type(msg) in ["system", "user"]:
+            return content
+        elif self._get_message_type(msg) in ["assistant"]:
+            # check if there is tool call
+            if msg.tool_calls:
+                content += self._format_tool_result_msg(msg)
+
             return content
 
     def _get_one_msg_grp(self, grp: List[BaseMessage]) -> str:
@@ -287,12 +308,13 @@ class PromptEngine:
         query: ChatMLQuery,
         pydantic_tool_dict: List[BaseModel] = None,
         answer_format_schema: bool = True,  # whether to add the instruction for tool calling answer schema
-        leading_prompt: str = None,
+        prefix_prompt: str = "",
+        leading_prompt: str = "",
         use_thinking: bool = True,
         thinking_template: str = None,
         thinking_response: str = None,
         backend: Literal["exllama", "llama_cpp", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
-        #prompt_mode: Literal["auto"]
+        pydantic_tool_code: str = None,     # the code representation of tool
     ) -> str:
         exllama_vision_token = (backend=="exllama")     # vision token in exllama is handled and assigned from the embedding itself
 
@@ -353,29 +375,38 @@ class PromptEngine:
 
         # if there is tool, return the prompt with tool
         if pydantic_tool_dict and query.tool_choice != "none":
-            prompt = prompt + self._format_tool_msg(pydantic_tool_dict)
+            if pydantic_tool_code:
+                if query.tool_schema_position=="postfix":
+                    prompt = prompt + self._format_tool_msg_as_code(pydantic_tool_code)
+                else:
+                    prompt = self._format_tool_msg_as_code(pydantic_tool_code) + prompt
+            else:
+                if query.tool_schema_position == "postfix":
+                    prompt = prompt + self._format_tool_msg(pydantic_tool_dict)
+                else:
+                    prompt = self._format_tool_msg(pydantic_tool_dict) + prompt
 
-            if answer_format_schema:
-                prompt += """
-IMPORTANT: If you use tool/ functions, please answer using the following schema using json format.
-Each item in the array under "functions_calling" is the "name" of the function to call and its "arguments".
-
-{
-  "functions_calling": [
-    {
-      "name": the name of function/ tool to call,
-      "arguments": {argument_name: argument_value}
-    }
-}
-
-
-If no functions_calling/ tool needed, the response can be:
-{
-  "functions_calling": []
-}
-End of Example of answer with Tool/ Function_calling usage.
-
-"""
+#             if answer_format_schema:
+#                 prompt += """
+# IMPORTANT: If you use tool/ functions, please answer using the following schema using json format.
+# Each item in the array under "functions_calling" is the "name" of the function to call and its "arguments".
+#
+# {
+#   "functions_calling": [
+#     {
+#       "name": the name of function/ tool to call,
+#       "arguments": {argument_name: argument_value}
+#     }
+# }
+#
+#
+# If no functions_calling/ tool needed, the response can be:
+# {
+#   "functions_calling": []
+# }
+# End of Example of answer with Tool/ Function_calling usage.
+#
+# """
         # TODO move the thinking_template check to request receiver
         # initialize thinking_template_dict
         thinking_template_dict = {}
@@ -433,7 +464,7 @@ End of Example of answer with Tool/ Function_calling usage.
         if leading_prompt:      # leading prompt that passed to this function take highest priority
             prompt += leading_prompt + "\n"
 
-        return prompt
+        return prefix_prompt + prompt
 
         # match tool call result #TODO
 

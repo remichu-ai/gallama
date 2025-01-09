@@ -32,6 +32,7 @@ referencing
 qwen_vl_utils
 websockets>=14.1
 scipy
+datamodel-code-generator
 
 # stt
 silero-vad

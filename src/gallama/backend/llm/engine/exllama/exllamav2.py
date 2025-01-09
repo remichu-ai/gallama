@@ -249,7 +249,8 @@ class ModelExllama(ModelInterface):
     async def check_disconnection(
         request: Request,
         job: ExLlamaV2DynamicJobAsync,
-        gen_queue_list: Union[GenQueue, QueueContext, List[QueueContext]]
+        gen_queue_list: Union[GenQueue, QueueContext, List[QueueContext]],
+        stop_event: asyncio.Event = None,
     ):
         """
         Helper function that handle stopping generation mid-stream
@@ -282,7 +283,9 @@ class ModelExllama(ModelInterface):
         except asyncio.CancelledError:
             logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            logger.error(f"An error occurred in check_disconnection: {str(e)}", exc_info=True)
+            raise
+            if not stop_event or (stop_event and not stop_event.is_set()):
+                logger.error(f"An error occurred in check_disconnection: {str(e)}", exc_info=True)
         finally:
             logger.debug("Exiting check_disconnection")
 
@@ -593,7 +596,7 @@ class ModelExllama(ModelInterface):
             # Create a task to check for disconnection
             disconnect_check_task = None
             if request:
-                disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list))
+                disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list, stop_event=stop_event))
 
             try:
                 # Start the generation
@@ -652,7 +655,7 @@ class ModelExllama(ModelInterface):
                     disconnect_check_task.cancel()
                     try:
                         await disconnect_check_task
-                    except asyncio.CancelledError:
+                    except:
                         pass
         except Exception as e:
             logger.error(e)

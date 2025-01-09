@@ -7,12 +7,10 @@ import websockets
 from starlette.websockets import WebSocket
 from websockets.protocol import State
 import samplerate
-from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS
+from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS, ChoiceDeltaToolCall
 from gallama.data_classes.realtime_client_proto import ResponseCancel,\
     ResponseCreate, SessionConfig
-from gallama.data_classes.realtime_server_proto import UsageResponseRealTime, ServerResponse, ResponseCreated, \
-    ResponseOutput_ItemAdded, ResponseContentPartAddedEvent, ResponseContentPartDoneEvent, ResponseDone, ResponseDelta, ConversationItemMessageServer, \
-    ResponseTextDone, ResponseAudioDone, ResponseTranscriptDone, parse_conversation_item, ConversationItemCreated, MessageContentServer, ResponseOutput_ItemDone
+from gallama.data_classes.realtime_server_proto import *
 from gallama.data_classes.internal_ws import WSInterCancel
 from gallama.realtime.websocket_client import WebSocketClient
 
@@ -58,10 +56,16 @@ class Response:
         self.transcription: str = ""
         self.transcription_done: bool = False
 
+        self.function_calling_arguments = None
+        self.function_calling_name = None
+        self.function_calling_tool_id = None
+
+
         # some tracker
         self.content_part_done_status: bool = False
         self.output_item_done_status: bool = False
         self.response_done_status: bool = False
+        self.conversation_item_created_status: bool = False     # track the initial conversation created
 
         # Add cancellation control
         self.cancel_event = asyncio.Event()
@@ -83,18 +87,24 @@ class Response:
             logger.error(f"Error during response cancellation: {str(e)}")
             raise
 
-    async def content_part_done(self, generation_type: Literal["text", "audio", "transcription"]):
+    async def content_part_done(self, generation_type: Literal["text", "audio", "transcription", "function_call"]):
         logger.info(f"content part done is called with type: {generation_type}")
-        logger.info(f"transcription: {self.transcription_done}")
-        logger.info(f"audio: {self.audio_done}")
-        logger.info(f"text: {self.text_done}")
+        logger.debug(f"transcription: {self.transcription_done}")
+        logger.debug(f"function_call: {self.function_calling_name}")
+        logger.debug(f"audio: {self.audio_done}")
+        logger.debug(f"text: {self.text_done}")
 
         done_check: bool = False
         content_part: Dict = {}
 
         # for text type, just the text finish is enough
         allowed_modalities = self.session.config.modalities
-        if generation_type == "text" and "text" in allowed_modalities and "audio" not in allowed_modalities:
+        if generation_type == "function_call":
+            # currently no content part done response for function call
+            done_check = True
+            pass
+
+        elif generation_type == "text" and "text" in allowed_modalities and "audio" not in allowed_modalities:
             if self.text_done:
                 done_check = True
                 content_part = {
@@ -122,38 +132,61 @@ class Response:
 
         # if done_check achieved meaning text finished or audio & transcription finished
         if done_check:
-            await self.ws_client.send_json(ResponseContentPartDoneEvent(**{
-                "event_id": await self.event_id_generator(),
-                "type": "response.content_part.done",
-                "response_id": self.response_id,
-                "item_id": self.item_id,
-                "output_index": 0,
-                "content_index": 0,
-                "part": content_part
-            }).model_dump(exclude_unset=True))  # if not, None will be set as audio to front end
+            # no content part done for function call
+            if not generation_type=="function_call":
+                await self.ws_client.send_json(ResponseContentPartDoneEvent(**{
+                    "event_id": await self.event_id_generator(),
+                    "type": "response.content_part.done",
+                    "response_id": self.response_id,
+                    "item_id": self.item_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "part": content_part
+                }).model_dump(exclude_unset=True))  # if not, None will be set as audio to front end
 
             # mark status of content_part as done
             self.content_part_done_status = True
             logger.info(f"Content part done")
 
             # trigger response output item done
-            await self.response_output_item_done()
+            await self.response_output_item_done(mode=generation_type)
 
-    async def response_output_item_done(self):
-        _type = "audio"if "audio" in self.session.config.modalities else "text"
+    async def response_output_item_done(self, mode:Literal["text", "audio", "transcription", "function_call"]):
 
-        item = ConversationItemMessageServer(
-            id=self.item_id,
-            object="realtime.item",
-            type="message",
-            status="completed",
-            role="assistant",
-            content=[MessageContentServer(
-                type=_type,
-                text=self.text if _type=="text" else None,
-                transcript=self.transcription if _type=="audio" else None,
-            )]
-        )
+        if mode=="audio" or mode=="transcription":
+            _type = "audio"
+        elif mode=="text":
+            _type = "text"
+        elif mode=="function_call":
+            _type = "function_call"
+        else:
+            raise Exception("Unknown mode in response_output_item_done()")
+
+        item = None
+
+        if mode != "function_call":
+            item = ConversationItemMessageServer(
+                id=self.item_id,
+                object="realtime.item",
+                type="message",
+                status="completed",
+                role="assistant",
+                content=[MessageContentServer(
+                    type=_type,
+                    text=self.text if _type=="text" else None,
+                    transcript=self.transcription if _type=="audio" else None,
+                )]
+            )
+        else:
+            item = ConversationItemFunctionCallServer(
+                id=self.item_id,
+                object="realtime.item",
+                status="completed",
+                type="function_call",
+                call_id=self.function_calling_tool_id,
+                name=self.function_calling_name,
+                arguments=self.function_calling_arguments
+            )
 
         # send user response output_item done
         await self.ws_client.send_json(ResponseOutput_ItemDone(**{
@@ -180,7 +213,17 @@ class Response:
                 _output = None
                 allowed_modalities = self.session.config.modalities
 
-                if "audio" in allowed_modalities:
+                if self.function_calling_name:  # function calling check first
+                    _output = parse_conversation_item({
+                        "id": self.item_id,
+                        "object": "realtime.item",
+                        "type": "function_call",
+                        "status": content_part_status,
+                        "name": self.function_calling_name,
+                        "call_id": self.function_calling_tool_id,
+                        "arguments": self.function_calling_arguments,
+                    })
+                elif "audio" in allowed_modalities:
                     _output = parse_conversation_item({
                         "id": self.item_id,
                         "object": "realtime.item",
@@ -256,39 +299,136 @@ class Response:
             }
         }).model_dump())
 
-        # also create an empty conversation item
+        # register the item id
         self.item_id, self.previous_item_id = await self.session.queues.next_item(return_current=True)
 
-        initial_item_created_object = ConversationItemCreated(**{
-            "event_id": await self.event_id_generator(),
-            "type": "conversation.item.created",
-            "previous_item_id": self.previous_item_id,
-            "item": {
-                "id": self.item_id,
-                "object": "realtime.item",
-                "type": "message",
-                "status": "in_progress",
-                "role": "assistant",
-                "content": []
-            }
-        })
-        await self.session.queues.update_conversation_item_ordered_dict(
-            ws_client=self.ws_client,
-            ws_llm=self.ws_llm,
-            item=initial_item_created_object.item
-        )
 
-        # send initial output_item created
-        await self.ws_client.send_json(ResponseOutput_ItemAdded(**{
-            "event_id": await self.event_id_generator(),
-            "response_id": self.response_id,
-            "output_index": 0,
-            "item": initial_item_created_object.item
-        }).model_dump())
+    async def send_conversation_item_created(
+        self,
+        mode: Literal["text", "transcription", "audio", "function_call"],
+        function_name: str = None,  # for function calling
+        call_id: str = None,        # for function calling
+    ):
+        if mode != "function_call":
+            initial_item_created_object = ConversationItemCreated(**{
+                "event_id": await self.event_id_generator(),
+                "type": "conversation.item.created",
+                "previous_item_id": self.previous_item_id,
+                "item": {
+                    "id": self.item_id,
+                    "object": "realtime.item",
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": []
+                }
+            })
+            await self.session.queues.update_conversation_item_ordered_dict(
+                ws_client=self.ws_client,
+                ws_llm=self.ws_llm,
+                item=initial_item_created_object.item
+            )
 
-    async def update_delta(self, mode: Literal["text", "transcription", "audio"], chunk: str,
-                           chunk_in_byte: bytes = None):
+            # send initial output_item created
+            await self.ws_client.send_json(ResponseOutput_ItemAdded(**{
+                "event_id": await self.event_id_generator(),
+                "response_id": self.response_id,
+                "output_index": 0,
+                "item": initial_item_created_object.item
+            }).model_dump())
+
+        elif mode == "function_call":   # function call
+            initial_item_created_object = ConversationItemCreated(**{
+                "event_id": await self.event_id_generator(),
+                "type": "conversation.item.created",
+                "previous_item_id": self.previous_item_id,
+                "item": {
+                    "id": self.item_id,
+                    "object": "realtime.item",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "name": function_name,
+                    "call_id": call_id,
+                }
+            })
+            await self.session.queues.update_conversation_item_ordered_dict(
+                ws_client=self.ws_client,
+                ws_llm=self.ws_llm,
+                item=initial_item_created_object.item
+            )
+
+            # send initial output_item created
+            await self.ws_client.send_json(ResponseOutput_ItemAdded(**{
+                "event_id": await self.event_id_generator(),
+                "response_id": self.response_id,
+                "output_index": 0,
+                "item": initial_item_created_object.item
+            }).model_dump())
+        else:
+            logger.error(f"Unknown mode in send_conversation_item_created() of mode: {mode}")
+
+
+        # send content_part added for text to let front end know that there is text coming
+        if mode == "audio" or mode == "transcription":
+            # Send initial audio content part added event
+            await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.content_part.added",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "audio",
+                    "audio": "",
+                    "transcript": ""
+                }
+            }).model_dump())
+        elif mode == "text":
+            await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.content_part.added",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                   "type": "text",
+                    "text": ""
+                }
+            }).model_dump())
+
+
+        # mark this as done
+        self.conversation_item_created_status = True
+
+
+    async def update_delta(
+        self,
+        mode: Literal["text", "transcription", "audio", "function_call"],
+        chunk: str | ChoiceDeltaToolCall,
+        chunk_in_byte: bytes = None,
+    ):
         """ send text chunk to client as well as update internal state """
+
+        # the first delta update will trigger conversation item creation accordingly
+
+        # for function_call mode, this will be sent in the if below where the details of the function call is obtained
+        if not self.conversation_item_created_status and mode != "function_call":
+            await self.send_conversation_item_created(mode=mode)
+
+        def convert_to_json_string(input_string):
+            # Convert the input string to a dictionary
+            data_dict = json.loads(input_string)
+
+            # Convert the dictionary to a JSON string with escaped quotation marks
+            json_string = json.dumps(data_dict)
+
+            return json_string
+
+
+        # for overwriting response. Currently use for tool calling
+        overwrite_response_dict = {}
 
         if mode == "text":
             _type = "response.text.delta"
@@ -296,6 +436,22 @@ class Response:
         elif mode == "transcription":
             _type = "response.audio_transcript.delta"
             self.transcription += chunk
+        elif mode == "function_call":
+            _type = "response.function_call_arguments.delta"
+            self.function_calling_arguments = convert_to_json_string(chunk.function.arguments)
+            self.function_calling_name = chunk.function.name
+            self.function_calling_tool_id = chunk.id
+            overwrite_response_dict = {
+                "call_id": chunk.id,
+                "delta": self.function_calling_arguments,
+            }
+
+            # create item
+            await self.send_conversation_item_created(
+                mode=mode,
+                function_name=self.function_calling_name,
+                call_id=self.function_calling_tool_id
+            )
         elif mode == "audio":
             _type = "response.audio.delta"
             if chunk_in_byte is None:
@@ -355,7 +511,7 @@ class Response:
                 raise
 
         # send chunk delta
-        await self.ws_client.send_json(ResponseDelta(**{
+        response_dict = {
             "event_id": await self.event_id_generator(),
             "type": _type,
             "response_id": self.response_id,
@@ -363,7 +519,14 @@ class Response:
             "output_index": 0,
             "content_index": 0,
             "delta": chunk  # for audio, send to client base64 string
-        }).model_dump())
+        }
+        if mode=="function_call":
+            response_dict.update(overwrite_response_dict)
+            response_dict.pop("content_index")
+
+        logger.info(f"response_dict: {response_dict}")
+
+        await self.ws_client.send_json(ResponseDelta(**response_dict).model_dump(exclude_unset=True))
 
 
 
@@ -371,7 +534,7 @@ class Response:
         """ send usage to client as well as update internal state """
         self.usage = usage
 
-    async def update_content_done(self, content_type: Literal["text", "audio", "transcription"]):
+    async def update_content_done(self, content_type: Literal["text", "audio", "transcription", "function_call"]):
         """update client that generation is done"""
         # send done status for one type of content
 
@@ -387,7 +550,18 @@ class Response:
                 "text": self.text
             }).model_dump())
             self.text_done = True
-
+        elif content_type=="function_call":
+            await self.ws_client.send_json(ResponseFunctionCallArgumentsDone(**{
+                "event_id": await self.event_id_generator(),
+                "type": "response.function_call_arguments.done",
+                "response_id": self.response_id,
+                "item_id": self.item_id,
+                "output_index": 0,
+                "call_id": self.function_calling_tool_id,
+                "name": self.function_calling_name,
+                "arguments": self.function_calling_arguments,
+            }).model_dump())
+            self.text_done = True
         elif content_type=="audio":
             await self.ws_client.send_json(ResponseAudioDone(**{
                 "event_id": await self.event_id_generator(),
@@ -415,6 +589,7 @@ class Response:
 
     async def update_text_or_transcription_task(self, mode: Literal["text", "audio"]):
         content_done_tracker = False
+        function_call_tracker = False
 
         try:
             while not self.cancel_event.is_set():
@@ -430,17 +605,35 @@ class Response:
                     llm_response = json.loads(message)
                     if llm_response.get("object") == "chat.completion.chunk":
                         chat_completion_chunk = ChatCompletionResponse(**llm_response)
+                        _delta = chat_completion_chunk.choices[0].delta
 
-                        text_chunk = chat_completion_chunk.choices[0].delta.content
-                        if text_chunk:
-                            if mode=="audio":
-                                # put generated text into tts queue for converting to audio
-                                await self.tts_queue.put(text_chunk)
+                        # finished reason returned with empty delta
+                        if _delta.content or (_delta.tool_calls and len(_delta.tool_calls) > 0):
+                            logger.info(f"FROG FROG {_delta}")
+                            text_chunk = _delta.content
+                            tool_calls = _delta.tool_calls
 
-                            await self.update_delta(
-                                mode="transcription" if mode=="audio" else "text",
-                                chunk=text_chunk
-                            )
+                            if text_chunk:      # text answer
+                                if mode=="audio":
+                                    # put generated text into tts queue for converting to audio
+                                    await self.tts_queue.put(text_chunk)
+
+                                await self.update_delta(
+                                    mode="transcription" if mode=="audio" else "text",
+                                    chunk=text_chunk
+                                )
+                            elif tool_calls and len(tool_calls) > 0:
+                                # for now only return the 1 st function calling even if LLM return multiple
+
+                                if tool_calls[0].function:
+                                    await self.update_delta(
+                                        mode="function_call",
+                                        chunk=tool_calls[0],
+                                    )
+                                function_call_tracker = True
+                            else:
+                                logger.error(f"Unknown response type in update_text_or_transcription_task: {llm_response}")
+
                     elif llm_response.get("type") == "conversation.update.ack":
                         logger.info("Received conversation update acknowledgement from ws_llm")
                     elif llm_response.get("type") == "usage.update":
@@ -453,9 +646,15 @@ class Response:
                         await self.update_usage(usage_data)
                     elif llm_response.get("type") == "generation.complete":
                         await self.tts_queue.put(None)  # mark that text generation completed for TTS
+                        if function_call_tracker:
+                            _content_type = "function_call"
+                        elif mode=="audio":
+                            _content_type = "transcription"
+                        else:
+                            _content_type = "text"
 
-                        await self.update_content_done(content_type="transcription" if mode=="audio" else "text")
-                        await self.content_part_done(generation_type="transcription")
+                        await self.update_content_done(content_type=_content_type)
+                        await self.content_part_done(generation_type=_content_type)
                         content_done_tracker = True
                         break   # exit the function
 
@@ -500,10 +699,7 @@ class Response:
                     raise Exception("Could not establish TTS connection")
 
                 try:
-                    message = await self.ws_tts.receive_message()
-                    if message is None:
-                        logger.error("Failed to receive message from TTS service")
-                        break
+                    message = await self.ws_tts.receive_message(timeout=0.05, max_retries=1, disable_warning = True)
 
                     if isinstance(message, str):
                         try:
@@ -534,8 +730,15 @@ class Response:
 
 
                 except asyncio.TimeoutError:
-                    logger.error("TTS websocket connection timed out")
-                    continue  # Changed from break to continue to retry
+                    # Check if self.function_calling_id is not None
+                    if self.function_calling_tool_id is not None:
+                        logger.info("Function calling ID is set, considering task completed and no audio needed")
+                        # self.audio_done = False
+                        # content_done_tracker = False
+                        # await self.update_content_done(content_type="audio")
+                        break
+                    else:
+                        continue  # Continue waiting
                 except websockets.exceptions.ConnectionClosed:
                     logger.error("TTS websocket connection closed")
                     break
@@ -546,14 +749,15 @@ class Response:
                     logger.error(f"Unexpected error occurred in send_audio_to_client_task: {str(e)}")
                     raise
 
-            if not content_done_tracker and not self.cancel_event.is_set():
-                logger.info("Audio generation task `did not complete due to task cancelling")
-                self.audio_done = True
-                await self.update_content_done(content_type="audio")
-                content_done_tracker = True
+            # check if function calling as well
+            if not self.function_calling_tool_id:
+                if not content_done_tracker and not self.cancel_event.is_set():
+                    logger.info("Audio generation task `did not complete due to task cancelling")
+                    self.audio_done = True
+                    await self.update_content_done(content_type="audio")
+                    content_done_tracker = True
 
-            await self.content_part_done(generation_type="audio")
-
+                await self.content_part_done(generation_type="audio")
 
         except Exception as e:
             logger.error(f"Error in audio_to_client_task: {str(e)}")
@@ -620,35 +824,6 @@ class Response:
             # at this point, the ws_llm state should already sync with user audio
             await self.ws_llm.send_pydantic_message(response_create_request)
 
-            # send content_part added for text to let front end know that there is text coming
-            if "audio" in current_session_config.modalities:
-                # Send initial audio content part added event
-                await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
-                    "event_id": await self.event_id_generator(),
-                    "type": "response.content_part.added",
-                    "response_id": self.response_id,
-                    "item_id": self.item_id,
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {
-                        "type": "audio",
-                        "audio": "",
-                        "transcript": ""
-                    }
-                }).model_dump())
-            else:
-                await self.ws_client.send_json(ResponseContentPartAddedEvent(**{
-                    "event_id": await self.event_id_generator(),
-                    "type": "response.content_part.added",
-                    "response_id": self.response_id,
-                    "item_id": self.item_id,
-                    "output_index": 0,
-                    "content_index": 0,
-                    "part": {
-                       "type": "text",
-                        "text": ""
-                    }
-                }).model_dump())
 
             tasks = []
             if "audio" in current_session_config.modalities:

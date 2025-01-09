@@ -27,11 +27,11 @@ class Query(BaseModel):
     stream: Optional[bool] = False
 
 
-class ToolCall(BaseModel):
-    class FunctionCall(BaseModel):
-        arguments: str
-        name: str
+class FunctionCall(BaseModel):
+    arguments: str
+    name: str
 
+class ToolCall(BaseModel):
     id: str
     function: FunctionCall
     type: str = "function"
@@ -195,8 +195,16 @@ class ChatMLQuery(BaseModel):
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
     thinking_template: Optional[str] = None
+
+    # tool call
     tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
-    tool_call_thinking_token: conint = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
+    tool_call_thinking_token: int = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
+    tool_instruction_position: Literal["prefix", "postfix"] = (
+        Field(default="prefix", description="Position of the general instruction to use tool. prefix for best kv caching"))
+    tool_schema_position: Literal["prefix", "postfix"] = (
+        Field(default="postfix", description="Position of the schema of individual tools. If tool_schema is unchanged through out, "
+                                            "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
+
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,
@@ -226,6 +234,13 @@ class ChatMLQuery(BaseModel):
                 re.compile(v)
             except re.error as e:
                 raise ValueError(f'Invalid regex pattern: {e}')
+        return v
+
+    @validator('tool_call_thinking_token')
+    def validate_tool_call_thinking_token(cls, v):
+        """ Validate that tool_call_thinking_token is greater than or equal to 0 """
+        if v < 0:
+            raise ValueError('tool_call_thinking_token must be greater than or equal to 0')
         return v
 
 

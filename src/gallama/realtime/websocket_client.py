@@ -135,7 +135,7 @@ class WebSocketClient:
                 return await self.send_pydantic_message(message)
             return False
 
-    async def receive_message(self, timeout: int = 30, max_retries: Optional[int] = None) -> Optional[str]:
+    async def receive_message(self, timeout: float = 30, max_retries: Optional[int] = None, disable_warning: bool = False) -> Optional[str]:
         """
         Receives a message from the WebSocket connection with retry logic.
 
@@ -161,11 +161,14 @@ class WebSocketClient:
                 return await asyncio.wait_for(self.connection.recv(), timeout=timeout)
 
             except asyncio.TimeoutError:
-                logger.warning(f"Timeout on receive attempt {retries + 1}")
+                if not disable_warning:
+                    logger.warning(f"Timeout on receive attempt {retries + 1}")
+
                 retries += 1
                 if retries > max_attempts:
-                    logger.error("Max receive retry attempts reached")
-                    return None
+                    if not disable_warning:
+                        logger.error("Max receive retry attempts reached")
+                    raise asyncio.TimeoutError
 
             except WebSocketException as e:
                 logger.error(f"Error receiving message on attempt {retries + 1}: {str(e)}")

@@ -2,6 +2,7 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from typing import AsyncGenerator, TypeVar
 from collections import OrderedDict
+
 from pydantic.json import pydantic_encoder
 from ..api_response.chat_response import chat_completion_response_stream
 from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item
@@ -11,6 +12,8 @@ from ..routes.chat import validate_api_request
 from ..data_classes.data_class import (
     BaseMessage,
     ChatMLQuery,
+    ToolCall,
+    FunctionCall,
     ChatCompletionResponse,
     ChatMessage,
     OneTool,
@@ -25,7 +28,7 @@ from ..data_classes.data_class import (
 )
 from ..data_classes.generation_data_class import (
     GenerationStats,
-    GenQueue,
+    GenQueueDynamic,
     GenText,
     GenEnd,
     GenStart,
@@ -109,24 +112,46 @@ class WebSocketSession:
                     role=role,
                     content=message_content
                 ))
+            elif item.type == "function_call":
+                logger.info(f"Function call: {item}")
+                messages.append(BaseMessage(
+                    role="assistant",
+                    tool_calls=[
+                        ToolCall(
+                            id=item.id,
+                            type="function",
+                            function=FunctionCall(
+                                name=item.name,
+                                arguments=item.arguments
+                            )
+                        )
+                    ]
+                ))
+            elif item.type == "function_call_output":
+                logger.info(f"Function call output: {item}")
+                messages.append(BaseMessage(
+                    role="tool",
+                    content=item.output,
+                    tool_call_id=item.call_id
+                ))
 
         # Convert tools from SessionConfig to ToolSpec format
         tools = None
-        # if session_config.tools:
-        #     tools = [
-        #         ToolSpec(
-        #             type="function",
-        #             function=FunctionSpec(
-        #                 name=tool.name,
-        #                 description=tool.description,
-        #                 parameters=ParameterSpec(
-        #                     type="object",
-        #                     properties=tool.parameters.properties,
-        #                     required=tool.parameters.required
-        #                 )
-        #             )
-        #         ) for tool in session_config.tools
-        #     ]
+        if session_config.tools:
+            tools = [
+                ToolSpec(
+                    type="function",
+                    function=FunctionSpec(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=ParameterSpec(
+                            type="object",
+                            properties=tool.parameters.properties,
+                            required=tool.parameters.required
+                        )
+                    )
+                ) for tool in session_config.tools
+            ]
 
         max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens != "inf" else None
         query = ChatMLQuery(
@@ -137,22 +162,27 @@ class WebSocketSession:
             max_tokens=max_token_to_use,
             artifact="No",
             tools=tools,
+            # tool extra setting
+            tool_call_thinking=session_config.tool_call_thinking,
+            tool_call_thinking_token=session_config.tool_call_thinking_token,
+            tool_instruction_position=session_config.tool_instruction_position,
+            tool_schema_position=session_config.tool_schema_position,
             # tool_choice=session_config.tool_choice
         )
 
         return validate_api_request(query)
 
-    async def process_generation_stream(self, gen_queue: GenQueue, model_name: str, query: ChatMLQuery) -> \
+    async def process_generation_stream(self, gen_queue: GenQueueDynamic, model_name: str, query: ChatMLQuery) -> \
     AsyncGenerator[dict, None]:
         """Process generation queue and yield response chunks by wrapping chat_completion_response_stream"""
         # Create a mock request object since chat_completion_response_stream expects one
         mock_request = type('MockRequest', (), {'is_disconnected': lambda: False})()
 
         async for chunk in chat_completion_response_stream(
-                query=query,
-                gen_queue=gen_queue,
-                model_name=model_name,
-                request=mock_request
+            query=query,
+            gen_queue=gen_queue,
+            model_name=model_name,
+            request=mock_request
         ):
             # Check if generation should be stopped
             if self.stop_event.is_set():
@@ -216,7 +246,7 @@ class WebSocketSession:
             # Reset stop event before starting new generation
             self.stop_event.clear()
 
-            gen_queue = GenQueue()
+            gen_queue = GenQueueDynamic()
             response_config = self.session_config.merge(message.get("response"))
             query = self.convert_conversation_to_chatml(response_config)
 
