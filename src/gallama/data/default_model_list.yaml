@@ -666,15 +666,16 @@ qwen-2-VL-2B:
 #        model_class: "transformers.Qwen2VLForConditionalGeneration"
 #        tokenizer_class: "transformers.AutoTokenizer"
 #        processor_class: "transformers.AutoProcessor"
-qwen-2-VL-7B:
+qwen-2-VL-72B:
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Qwen2-VL
   repo:
-    - repo: "turboderp/Qwen2-VL-7B-Instruct-exl2"
-      branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
-      quant: [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
+    - repo: "turboderp/Qwen2-VL-72B-Instruct-exl2"
+      branch: ['4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw']
+      quant: [4.0, 4.5, 5.0, 6.0]
       backend: exllama
+
 #    - repo: "Qwen/Qwen2-VL-7B-Instruct-AWQ"
 #      branch: ['main']
 #      quant: [4.0]
@@ -691,7 +692,7 @@ qwen-2-VL-7B:
 #        model_class: "transformers.Qwen2VLForConditionalGeneration"
 #        tokenizer_class: "transformers.AutoTokenizer"
 #        processor_class: "transformers.AutoProcessor"
-qwen-2-VL-72B:
+qwen-2-VL-7B:
   default_quant: 4.0
   default_cache_quant: Q4
   prompt_template: Qwen2-VL

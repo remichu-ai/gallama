@@ -217,7 +217,8 @@ class TranscriptionConnectionManager:
                     connection.processing_complete = True
                     complete_response = WSInterSTTResponse(type="stt.transcription_complete")
                     await websocket.send_json(complete_response.model_dump())
-                    logger.info("Send completion event for VAD based transcription")
+                    if is_final_from_vad:
+                        logger.info("Send completion event for VAD based transcription")
                 return success
             else:
                 connection.complete_audio.extend(audio_chunk)
@@ -250,7 +251,6 @@ class TranscriptionConnectionManager:
         if audio_chunk:
             connection.raw_buffer.extend(audio_chunk)
 
-        # Only process if we have enough samples or if this is the final chunk
         if len(connection.raw_buffer) >= RESAMPLING_WINDOW or (is_final and len(connection.raw_buffer) > 0):
             # Process the audio with proper buffering
             processed_audio = self.process_raw_buffer(connection.raw_buffer, connection.asr_processor, connection.input_sample_rate)
@@ -306,7 +306,50 @@ class TranscriptionConnectionManager:
                     connection.audio_buffer = np.array([], dtype=np.float32)
                     connection.is_first = True
 
+        # final message without any audio chunk to process
+        elif is_final and len(connection.raw_buffer) == 0:
+            start_time, end_time, transcription, vad_events = connection.asr_processor.process_audio(is_final=is_final)
+            logger.info(f"Transcription: {transcription}")
+            # Handle VAD events
+            for event in vad_events:
+                if event['type'] == 'start':
+                    response = WSInterSTTResponse(
+                        type="stt.vad_speech_start",
+                        vad_timestamp_ms=event['timestamp_ms'],
+                        confidence=event['confidence']
+                    )
+                    await websocket.send_json(response.dict())
+                    await asyncio.sleep(0.1)
+
+                if event['type'] == 'end':
+                    response = WSInterSTTResponse(
+                        type="stt.vad_speech_end",
+                        vad_timestamp_ms=event['timestamp_ms'],
+                        confidence=event['confidence']
+                    )
+                    await websocket.send_json(response.dict())
+                    is_final_from_vad = True
+
+            # Send transcription if available
+            if transcription:
+                response = WSInterSTTResponse(
+                    type="stt.add_transcription",
+                    transcription=transcription,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+                await websocket.send_json(response.dict())
+
+            # Reset buffers based on whether this is final
+            if not is_final:
+                connection.audio_buffer = np.array([], dtype=np.float32)
+                connection.is_first = False
+            else:
+                connection.audio_buffer = np.array([], dtype=np.float32)
+                connection.is_first = True
+
         return True, is_final_from_vad
+
 
     async def _process_complete_audio(self, connection: ConnectionData, websocket: WebSocket):
         """Handle one-shot audio processing"""

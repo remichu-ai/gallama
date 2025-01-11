@@ -80,7 +80,8 @@ class AudioBufferWithTiming:
             self.last_processed_sample_vad = len(self.buffer)
         else:
             # Move the pointer to end of current buffer
-            self.last_processed_sample = len(self.buffer)
+            # self.last_processed_sample = len(self.buffer)
+            pass
 
         self.is_processing = False
 

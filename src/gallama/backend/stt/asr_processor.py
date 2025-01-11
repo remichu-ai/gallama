@@ -28,7 +28,7 @@ class ASRProcessor:
         asr: ASRBase,
         tokenizer=None,
         buffer_trimming=("segment", 15),
-        min_context_needed=7.0,  # require 5 second for a content to be process -> higher number better accuracy
+        min_context_needed=4.0,  # require 5 second for a content to be process -> higher number better accuracy
         debug_audio_dir=None,  # New parameter for debug audio directory
         vad_config: Optional[TurnDetectionConfig] = None,
     ):
