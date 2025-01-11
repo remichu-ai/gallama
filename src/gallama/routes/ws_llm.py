@@ -254,10 +254,11 @@ class WebSocketSession:
             query.stream = True
 
             model_manager = get_model_manager()
-            llm = model_manager.llm_dict.get(query.model)
-
-            if not llm:
-                llm = model_manager.llm_dict.get(list(model_manager.llm_dict.keys())[0])
+            llm = model_manager.get_model(query.model, _type="llm")
+            # llm = model_manager.llm_dict.get(query.model)
+            #
+            # if not llm:
+            #     llm = model_manager.llm_dict.get(list(model_manager.llm_dict.keys())[0])
 
             if llm is None:
                 error_response = {

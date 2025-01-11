@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 from datetime import datetime
 import soundfile as sf
-from ...data_classes import TranscriptionResponse
+from ...data_classes import TranscriptionResponse, LanguageType
 from ...data_classes.realtime_client_proto import TurnDetectionConfig
 from .audio_buffer import AudioBufferWithTiming
 from .vad import VADProcessor
@@ -28,7 +28,7 @@ class ASRProcessor:
         asr: ASRBase,
         tokenizer=None,
         buffer_trimming=("segment", 15),
-        min_context_needed=4.0,  # require 5 second for a content to be process -> higher number better accuracy
+        min_context_needed=2.0,  # require 2 second for a content to be process -> higher number better accuracy
         debug_audio_dir=None,  # New parameter for debug audio directory
         vad_config: Optional[TurnDetectionConfig] = None,
     ):
@@ -284,26 +284,39 @@ class ASRProcessor:
         self.audio_buffer.clear_until(cut_samples)
 
     # Rest of the methods remain the same as they don't directly interact with the buffer
-    def transcribe(self, audio: Union[str, BinaryIO, np.ndarray], init_prompt: str = "",
-                   temperature: float = 0.0, language: str = None,
-                   include_segments: bool = False) -> TranscriptionResponse:
+    def transcribe(
+        self,
+        audio: Union[str, BinaryIO, np.ndarray],
+        init_prompt: str = "",
+        temperature: float = 0.0,
+        language: Optional[LanguageType] = None,
+        include_segments: bool = False,
+        batch: bool = False,
+    ) -> TranscriptionResponse:
+
         return self.asr.transcribe(
             audio,
             init_prompt=init_prompt,
             temperature=temperature,
             language=language,
-            include_segments=include_segments
+            include_segments=include_segments,
+            batch=batch
         )
 
-    async def transcribe_async(self, audio: Union[str, BinaryIO, np.ndarray], init_prompt: str = "",
-                               temperature: float = 0.0, language: str = None,
-                               include_segments: bool = False) -> TranscriptionResponse:
+    async def transcribe_async(
+        self, audio: Union[str, BinaryIO, np.ndarray],
+        init_prompt: str = "",
+        temperature: float = 0.0,
+        language: str = None,
+        include_segments: bool = False,
+        batch: bool = False,
+    ) -> TranscriptionResponse:
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as pool:
             return await loop.run_in_executor(
                 pool,
                 self.transcribe,
-                audio, init_prompt, temperature, language, include_segments
+                audio, init_prompt, temperature, language, include_segments, batch
             )
 
     def construct_prompt(self):

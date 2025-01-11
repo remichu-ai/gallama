@@ -12,7 +12,8 @@ router = APIRouter(prefix="/v1", tags=["embedding"])
 @router.post("/embeddings")
 async def embeddings(request: Request, query: EmbeddingRequest):
     model_manager = get_model_manager()
-    embedding_model = model_manager.embedding_dict[query.model]
+    embedding_model = model_manager.get_model(query.model, _type="embedding")
+    # embedding_model = model_manager.embedding_dict[query.model]
 
     # for embedding, hard enforcement of matching model name
     if query.model != embedding_model.model_name:

@@ -62,13 +62,14 @@ class TranscriptionConnectionManager:
             await websocket.accept()
 
             model_manager = get_model_manager()
-            asr_processor = model_manager.stt_dict.get(model)
-            if not asr_processor:
-                try:
-                    asr_processor = next(iter(model_manager.stt_dict.values()))
-                except Exception as e:
-                    logger.error(f"No STT model found in model_manager: {str(e)}")
-                    asr_processor = None
+            asr_processor = model_manager.get_model(model, _type="stt")
+            # asr_processor = model_manager.stt_dict.get(model)
+            # if not asr_processor:
+            #     try:
+            #         asr_processor = next(iter(model_manager.stt_dict.values()))
+            #     except Exception as e:
+            #         logger.error(f"No STT model found in model_manager: {str(e)}")
+            #         asr_processor = None
 
             if asr_processor is None:
                 await websocket.close(code=4000, reason="Model not found")
@@ -239,7 +240,7 @@ class TranscriptionConnectionManager:
             return False
 
     async def _process_streaming_chunk(self, connection: ConnectionData, websocket: WebSocket, audio_chunk: bytes, is_final: bool):
-        logger.info(f"Processing {'final' if is_final else 'intermediate'} streaming chunk")
+        logger.debug(f"Processing {'final' if is_final else 'intermediate'} streaming chunk")
         is_final_from_vad = False
 
         # Calculate minimum samples needed for good resampling

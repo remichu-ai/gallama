@@ -1,12 +1,122 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union, Literal
 from fastapi import Query
+
+
+_LANGUAGE_CODES = [
+    "af",
+    "am",
+    "ar",
+    "as",
+    "az",
+    "ba",
+    "be",
+    "bg",
+    "bn",
+    "bo",
+    "br",
+    "bs",
+    "ca",
+    "cs",
+    "cy",
+    "da",
+    "de",
+    "el",
+    "en",
+    "es",
+    "et",
+    "eu",
+    "fa",
+    "fi",
+    "fo",
+    "fr",
+    "gl",
+    "gu",
+    "ha",
+    "haw",
+    "he",
+    "hi",
+    "hr",
+    "ht",
+    "hu",
+    "hy",
+    "id",
+    "is",
+    "it",
+    "ja",
+    "jw",
+    "ka",
+    "kk",
+    "km",
+    "kn",
+    "ko",
+    "la",
+    "lb",
+    "ln",
+    "lo",
+    "lt",
+    "lv",
+    "mg",
+    "mi",
+    "mk",
+    "ml",
+    "mn",
+    "mr",
+    "ms",
+    "mt",
+    "my",
+    "ne",
+    "nl",
+    "nn",
+    "no",
+    "oc",
+    "pa",
+    "pl",
+    "ps",
+    "pt",
+    "ro",
+    "ru",
+    "sa",
+    "sd",
+    "si",
+    "sk",
+    "sl",
+    "sn",
+    "so",
+    "sq",
+    "sr",
+    "su",
+    "sv",
+    "sw",
+    "ta",
+    "te",
+    "tg",
+    "th",
+    "tk",
+    "tl",
+    "tr",
+    "tt",
+    "uk",
+    "ur",
+    "uz",
+    "vi",
+    "yi",
+    "yo",
+    "zh",
+    "yue",
+]
+
+# Create a reusable type for language
+LanguageType = Optional[Union[List[Literal[*_LANGUAGE_CODES]], Literal[*_LANGUAGE_CODES]]]
 
 
 # class for audio api call
 class TranscriptionResponse(BaseModel):
     task: Optional[str] = Field(default="transcribe", description="The task performed.")
-    language: Optional[str] = Field(default=None, description="The detected or specified language of the audio.")
+    language: LanguageType = Field(
+        default=None,
+        description="The detected or specified language of the audio."
+    )
     duration: Optional[float] = Field(default=None, description="The duration of the audio in seconds.")
     text: str = Field(description="The transcription text.")
     words: Optional[List[dict]] = Field(default=None, description="Word-level timestamps, if requested.")
@@ -31,5 +141,6 @@ class TTSRequest(BaseModel):
     voice: str = "alloy"
     response_format: str = Query(DEFAULT_FORMAT, enum=list(SUPPORTED_FORMATS))
     speed: float = Query(1.0, ge=0.25, le=4.0)
+
 
 

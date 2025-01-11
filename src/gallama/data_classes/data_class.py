@@ -507,7 +507,7 @@ class ModelSpec(BaseModel):
     max_concurrent_requests: int = Field(description="number of concurrent request this model can handle", default=1)
 
     # extra argument for specific backend or model
-    backend_extra_args: Dict[Any, Any] = Field(description="extra args to pass to the backend", default_factory=dict)
+    backend_extra_args: Optional[Dict[Any, Any]] = Field(description="extra args to pass to the backend", default_factory=dict)
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -516,6 +516,10 @@ class ModelSpec(BaseModel):
     draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
+
+
+    # whether require api call to match model name or not
+    strict: bool = Field(description="whether require api call to match model name or not", default=False)
 
     # argument for different voice sample
     voice: Optional[Dict[str, VoiceConfig]] = Field(
@@ -605,7 +609,7 @@ class ModelSpec(BaseModel):
             backend = None
         cache_quant = input_dict.get('cache_quant', None)
 
-        if gpus:
+        if gpus and isinstance(gpus, str) and gpus.lower() != "auto":
             gpus = [float(x) for x in gpus.split(',')]
 
         if cache_size:
@@ -614,16 +618,20 @@ class ModelSpec(BaseModel):
         if cache_size:
             cache_size = int(cache_size)
 
+        strict = input_dict.get('strict', False)
+        voice = input_dict.get('voice', {})
+
         model_type = input_dict.get('model_type', None)
         if model_type is None:
             model_type = cls.get_model_type_from_backend(backend)
 
+        prompt_template = input_dict.get('prompt_template', None)
 
         # concurrent request
         allowed_concurrency = 50 if backend in ["exllama", "embedding"] else 1  # TODO to look into optimal number for each backend
         max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
 
-        backend_extra_args = input_dict.get('backend_extra_args', None)
+        backend_extra_args = input_dict.get('backend_extra_args', {})
 
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
@@ -645,9 +653,12 @@ class ModelSpec(BaseModel):
         if draft_cache_size:
             draft_cache_size = int(draft_cache_size)
 
-        # Note: We don't need to set model_name here, as the validator will handle it
         return cls(model_id=model_id, model_name=model_name, model_type=model_type,
                    gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+                   strict=strict,
+                   voice=voice,
+                   prompt_template=prompt_template,
+                   backend_extra_args=backend_extra_args,
                    max_concurrent_requests=max_concurrent_requests,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,

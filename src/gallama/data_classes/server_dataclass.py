@@ -16,6 +16,7 @@ class ModelInstanceInfo(BaseModel):
     pid: int  # Changed from process to pid
     status: str
     model_type: Literal["stt", "llm", "tts", "embedding"]
+    strict: bool = Field(description="whether require api call to match model name or not", default=False)
 
     class Config:
         # Override protected namespaces to suppress warning

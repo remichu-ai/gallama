@@ -322,27 +322,27 @@ async def wait_for_model_ready(port, timeout=300):  # 5 minutes timeout
     return False
 
 
-async def run_model(model: ModelSpec):
+async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
 
     try:
         # add the entry for the dictionary (where key is the model name)
-        if model.model_name not in server_manager.models:
-            server_manager.models[model.model_name] = ModelInfo(instances=[])
+        if model_spec.model_name not in server_manager.models:
+            server_manager.models[model_spec.model_name] = ModelInfo(instances=[])
 
         # Find the next available port
         port = START_PORT
         while any(instance.port == port for model_info in server_manager.models.values() for instance in model_info.instances):
             port += 1
 
-        server_logger.info(f"Attempting to start model {model.model_name} on port {port}")
+        server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
 
-        model_config = config_manager.configs.get(model.model_name)
-        backend = model.backend or model_config.get('backend')
+        model_config = config_manager.configs.get(model_spec.model_name)
+        backend = model_spec.backend or model_config.get('backend')
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
-            model_json = model.model_dump_json()
+            model_json = model_spec.model_dump_json()
             model_b64 = base64.b64encode(model_json.encode('utf-8')).decode('utf-8')
 
 
@@ -369,7 +369,7 @@ async def run_model(model: ModelSpec):
                 env = os.environ.copy()
 
                 # Set CUDA_VISIBLE_DEVICES
-                env['CUDA_VISIBLE_DEVICES'] = model.get_visible_gpu_indices()
+                env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
 
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")
@@ -381,37 +381,38 @@ async def run_model(model: ModelSpec):
                 )
 
         except Exception as e:
-            server_logger.error(f"Failed to create subprocess for model {model.model_id} on port {port}: {str(e)}")
+            server_logger.error(f"Failed to create subprocess for model {model_spec.model_id} on port {port}: {str(e)}")
             return
 
         # Wait for the model to become ready
         if await wait_for_model_ready(port):
-            server_logger.info(f"Model {model.model_name} on port {port} is ready")
+            server_logger.info(f"Model {model_spec.model_name} on port {port} is ready")
             instance_info = ModelInstanceInfo(
                 port=port,
                 pid=process.pid,
                 status="running",
-                model_name=model.model_name,
-                model_type=ModelSpec.get_model_type_from_backend(backend)
+                model_name=model_spec.model_name,
+                model_type=ModelSpec.get_model_type_from_backend(backend),
+                strict=model_spec.strict
             )
-            server_manager.models[model.model_name].instances.append(instance_info)
+            server_manager.models[model_spec.model_name].instances.append(instance_info)
         else:
-            server_logger.error(f"Timeout waiting for model {model.model_name} on port {port} to become ready")
-            await stop_model_instance(model.model_name, port)
+            server_logger.error(f"Timeout waiting for model {model_spec.model_name} on port {port} to become ready")
+            await stop_model_instance(model_spec.model_name, port)
             return
 
-        server_logger.info(f"Model {model.model_id} instance on port {port} is fully loaded and ready")
+        server_logger.info(f"Model {model_spec.model_id} instance on port {port} is fully loaded and ready")
         log_model_status(server_manager.models, custom_logger=server_logger)  # Log status after successfully loading a model
 
         # Instead of entering an infinite loop, we'll exit the function here
         return
 
     except Exception as e:
-        server_logger.exception(f"Error running model {model.model_name} instance on port {port}: {str(e)}")
-        await stop_model_instance(model.model_name, port)
+        server_logger.exception(f"Error running model {model_spec.model_name} instance on port {port}: {str(e)}")
+        await stop_model_instance(model_spec.model_name, port)
     finally:
-        await cleanup_after_model_load(model.model_name)
-        server_logger.info(f"Exiting run_model for {model.model_name} on port {port}")
+        await cleanup_after_model_load(model_spec.model_name)
+        server_logger.info(f"Exiting run_model for {model_spec.model_name} on port {port}")
 
 
 async def cleanup_after_model_load(model: str):
@@ -502,28 +503,31 @@ async def load_balanced_router(request: Request, path: str):
         available_instances = []
 
         if strict_mode:
+            # In strict mode, the model must be specified and found
             if model not in server_manager.models:
                 raise HTTPException(status_code=404, detail="Specified model not found")
             available_instances = [inst for inst in server_manager.models[model].instances if inst.status == "running"]
         else:
-            # Try to find a matching model first
-            if model:
-                if model in server_manager.models:
-                    available_instances = [inst for inst in server_manager.models[model].instances if inst.status == "running"]
+            # Try to find a matching model first (if model is specified)
+            if model and model in server_manager.models:
+                available_instances = [inst for inst in server_manager.models[model].instances if inst.status == "running"]
 
-            # If no matching model or no instances found, pick any running instance
+            # If no matching model or no instances found, pick any running instance of the correct type that is not strict
             if not available_instances:
+                # Determine the model type based on the request path
+                if "/audio/transcriptions" in path:
+                    model_type = "stt"
+                elif "embeddings" in path:
+                    model_type = "embedding"
+                elif "/audio/speech" in path:
+                    model_type = "tts"
+                else:
+                    model_type = "llm"
+
                 for model_info in server_manager.models.values():
                     for inst in model_info.instances:
-                        if inst.status == "running":
-                            if is_embedding:
-                                # For embedding requests, select instances with matching model name
-                                if not model or inst.model_name == model:
-                                    available_instances.append(inst)
-                            else:
-                                # For non-embedding requests, select all non-embedding instances
-                                if inst.model_type != "embedding":
-                                    available_instances.append(inst)
+                        if inst.status == "running" and inst.model_type == model_type and not inst.strict:
+                            available_instances.append(inst)
 
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")

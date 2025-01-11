@@ -4,7 +4,8 @@ import io
 import soundfile as sf
 from gallama.data_classes import (
     TranscriptionResponse,
-    TTSRequest
+    TTSRequest,
+    LanguageType
 )
 
 from typing import List, Literal, Optional, Dict
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/v1/audio", tags=["audio"])
 async def create_transcription(
     file: UploadFile = File(..., description="The audio file to transcribe."),
     model: str = Form(..., description="ID of the model to use."),
-    language: Optional[str] = Form(None, description="The language of the input audio in ISO-639-1 format."),
+    language: Optional[LanguageType] = Form(None, description="The language of the input audio in ISO-639-1 format."),
     prompt: Optional[str] = Form(None, description="An optional text to guide the model's style or continue a previous segment."),
     response_format: Optional[Literal["json", "text", "srt", "verbose_json", "vtt"]] = Form("json", description="The format of the output."),
     temperature: Optional[float] = Form(0.0, description="The sampling temperature, between 0 and 1."),
@@ -30,10 +31,10 @@ async def create_transcription(
     Transcribe an audio file into the input language.
     """
     model_manager = get_model_manager()
-    stt = model_manager.stt_dict.get(model, None)
-    # TODO to implement a global change
-    if not stt:
-        model_name, stt = next(iter(model_manager.stt_dict.items()))
+    stt = model_manager.get_model(model, _type="stt")
+    # stt = model_manager.stt_dict.get(model, None)
+    # if not stt:
+    #     model_name, stt = next(iter(model_manager.stt_dict.items()))
 
     if stt is None:
         raise HTTPException(status_code=400, detail="Model not found")
@@ -51,6 +52,7 @@ async def create_transcription(
         temperature=temperature,
         language=language,
         include_segments=include_segments,
+        batch=True
     )
 
     return transcribed_object
@@ -67,7 +69,9 @@ async def create_speech(request: TTSRequest):
 
     global tts_dict
     model_manager = get_model_manager()
-    tts = model_manager.tts_dict[request.model]
+    tts = model_manager.get_model(request.model, _type="tts")
+
+    # tts = model_manager.tts_dict[request.model]
 
     if len(request.input) > 4096:
         raise HTTPException(status_code=400, detail="Input text exceeds 4096 characters")

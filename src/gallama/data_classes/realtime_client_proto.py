@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Union, Dict, Any, Literal
 from enum import Enum
+from .audio_data_class import LanguageType
 
 
 # Enums and Pydantic models
@@ -65,7 +66,7 @@ class TurnDetectionConfig(BaseModel):
     create_response: bool = True
 
     # gallama specific setting
-    language: Optional[str] = "en"
+    language: Optional[LanguageType] = ["en", "vi"]
     factor_prefix_padding_in_truncate: bool = Field(default=True,
                                                     description="Prefix padding will ensure speech start event only emitted "
                                                                 "after certain ms of continuous speak, after which user will send conversation.item.truncate event"

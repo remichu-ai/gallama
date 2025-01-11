@@ -27,7 +27,8 @@ from .data_class import (
 from .audio_data_class import (
     TranscriptionResponse,
     TimeStampedWord,
-    TTSRequest
+    TTSRequest,
+    LanguageType
 )
 from .internal_ws import (
     WSInterTTS,
