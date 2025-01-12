@@ -17,7 +17,8 @@ async def embeddings(request: Request, query: EmbeddingRequest):
 
     # for embedding, hard enforcement of matching model name
     if query.model != embedding_model.model_name:
-        raise HTTPException(status_code=400,
-                            detail=f"Embedding model {query.model} is not found. Current loaded model is {embedding_model.model_name}")
+        logger.warning(f"Embedding model {query.model} is not found. Use current loaded model: {embedding_model.model_name}")
+        # raise HTTPException(status_code=400,
+        #                     detail=f"Embedding model {query.model} is not found. Current loaded model is {embedding_model.model_name}")
 
     return await embedding_model.text_embeddings(query=query)

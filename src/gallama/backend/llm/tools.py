@@ -23,7 +23,7 @@ class Tools:
 
         # initialize tool as code
         self.tool_def_as_code: str = self.create_tool_def_as_code()
-        logger.info(f"tool_def_as_code: {self.tool_def_as_code}")
+        logger.debug(f"tool_def_as_code: {self.tool_def_as_code}")
 
     def create_tool_def_as_code(self):
         _temp_tool_list = [

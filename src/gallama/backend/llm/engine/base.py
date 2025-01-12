@@ -603,6 +603,7 @@ arg_dict = """
         query:ChatMLQuery,
         request: Request,
         tool_handler: Tools,
+        tool_as_code_prompt: str
     ) -> ToolCallV2:
 
         # queue for generating output
@@ -630,79 +631,18 @@ arg_dict = """
             preference=query.guided_decoding_backend
         )
 
-        # create prompt
-        tool_as_code_prompt = """
-Remember:
-Use Function calling if:
-It is needed to answer user question.
-Be conservative and only use function calling if it is necessary and suitable.
-
-Reply to user if:
-It is uncertain if user wants function calling.
-Function calling is not related to user's question.
-Clarification is needed. 
-
-When a tool/ function is requested, it's result will be run by the system and be returned with reference to the tool call if available
-e.g. Result of tool call reference id <tool_call_id>.
-```python
-def run_function(arg_dict):
-    function_calls = arg_dict["functions_calling"]
-
-    if function_calls == []:
-        print("No function/tool calling needed")
-        return
-
-    for call in function_calls:
-        function_name = call["name"]
-        arguments = call["arguments"]
-        globals()[function_name](**arguments)
-"""
-
-        _tool_thinking_fn_header = ""
-        _tool_answer_prefix = "to="
-        if query.tool_call_thinking:
-            _tool_thinking_fn_header = 'internal_thinking: str="",'
-            _tool_answer_prefix = "thinking="
-
-        tool_decision_as_code_prompt = """
-allow_functions = [""" + tool_handler.tool_name_list + """]
-
-def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"], arg_dict: Optional[List[]]=[]):
-   if to=="user":
-       # NO function calling needed
-       break  # exit for a normal answer
-   elif to=="function" and arg_dict!=[]:
-       run_function(arg_dict)
-    else:
-      raise Exception("Either response to user without function calling or function calling is required.")
-```
-Example:
-# No function calling needed:
-response(to="user") # to let system know that no function calling is needed
-my answer is...
-
-# Function calling needed:
-response(to="function", arg_dict={
-  "functions_calling": [{
-      "name": "function_name",
-      "arguments": {"argument_name": "value"}
-    }
-]}) # answer to user is prohibited if using function calling
----
-"""
-
-
+        # shar prompt with tool decision for better KV
         tool_answer_as_code = """
     
 # Perform function calling if need to by continuing this code. Return {"functions_calling": []} if function calling is not needed.
-arg_dict = """
+response(to="function", arg_dict="""
 
         if query.tool_instruction_position == "prefix":
-            _prefix_prompt = tool_as_code_prompt + tool_decision_as_code_prompt
+            _prefix_prompt = tool_as_code_prompt
             _leading_prompt = tool_answer_as_code
         else:
             _prefix_prompt = ""
-            _leading_prompt = tool_as_code_prompt + tool_decision_as_code_prompt + textwrap.dedent(tool_as_code_prompt + tool_answer_as_code).strip()
+            _leading_prompt = tool_as_code_prompt + tool_answer_as_code
 
         prompt = prompt_eng.get_prompt(
             query,
@@ -742,73 +682,16 @@ arg_dict = """
         query: ChatMLQuery,
         request: Request,
         tool_handler: Tools,
+        tool_as_code_prompt: str
     ) -> Tuple[ToolCallV2, Callable[[str], bool]]:
         # queue for generating output
         gen_queue_dynamic = [GenQueueDynamic()]
 
         # create prompt
         # reuse tool call to share the kv cache as possible
-        tool_as_code_prompt = """
-Remember:
-Use Function calling if:
-It is needed to answer user question.
-Be conservative and only use function calling if it is necessary and suitable.
-
-Reply to user if and AVOID function calling if:
-No function schema available for the intended purpose.
-It is uncertain if user wants function calling.
-Function calling is not related to user's question.
-Clarification is needed. 
-
-When a tool/ function is requested, it's result will be run by the system and be returned with reference to the tool call if available
-e.g. Result of tool call reference id <tool_call_id>.
-```python
-def run_function(arg_dict):
-    function_calls = arg_dict["functions_calling"]
-
-    if function_calls == []:
-        print("No function/tool calling needed")
-        return
-
-    for call in function_calls:
-        function_name = call["name"]
-        arguments = call["arguments"]
-        globals()[function_name](**arguments)
-"""
-
-        _tool_thinking_fn_header = ""
         _tool_answer_prefix = "to="
         if query.tool_call_thinking:
-            _tool_thinking_fn_header = 'internal_thinking: str="",'
             _tool_answer_prefix = "thinking="
-
-        tool_decision_as_code_prompt = """
-allow_functions = [""" + tool_handler.tool_name_list + """]
-
-def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"], arg_dict: Optional[List[]]=[]):
-   if to=="user":
-       # NO function calling needed
-       break  # exit for a normal answer
-   elif to=="function" and arg_dict!=[]:
-       run_function(arg_dict)
-    else:
-      raise Exception("Either response to user without function calling or function calling is required.")
-```
-Example:
-# No function calling needed:
-response(to="user") # to let system know that no function calling is needed
-my answer is...
-
-# Function calling needed:
-response(to="function", arg_dict={
-  "functions_calling": [{
-      "name": "function_name",
-      "arguments": {"argument_name": "value"}
-    }
-]}) # answer to user is prohibited if using function calling
-
----
-        """
 
         tool_decision_answer_as_code_prompt = """
 response(""" + _tool_answer_prefix
@@ -830,11 +713,11 @@ response(""" + _tool_answer_prefix
                 return False
 
         if query.tool_instruction_position=="prefix":
-            _prefix_prompt = tool_as_code_prompt + tool_decision_as_code_prompt
+            _prefix_prompt = tool_as_code_prompt
             _postfix_prompt = tool_decision_answer_as_code_prompt
         else:
             _prefix_prompt = ""
-            _postfix_prompt = tool_as_code_prompt + tool_decision_as_code_prompt + tool_decision_answer_as_code_prompt
+            _postfix_prompt = tool_as_code_prompt + tool_decision_answer_as_code_prompt
 
         prompt = prompt_eng.get_prompt(
             query,
@@ -938,18 +821,91 @@ response(""" + _tool_answer_prefix
             tool_choice=query.tool_choice,
         )
 
+        # create prompt
+        _tool_thinking_fn_header = ""
+        _tool_answer_prefix = "to="
+        if query.tool_call_thinking:
+            _tool_thinking_fn_header = 'internal_thinking: str="",'
+            _tool_answer_prefix = "thinking="
+
+        tool_as_code_prompt = """
+Function/ Tool calling Instruction:
+# Use Function calling if:
+- It is needed to answer user question.
+- Be conservative and only use function calling if it is necessary and suitable.
+
+# Reply directly to user if:
+- It is uncertain if user wants function calling.
+- Function calling is not related to user's question.
+- Clarification is needed. 
+
+When a tool/ function is requested, it's result will be run by the system and be returned with reference to the tool call if available
+e.g. Result of tool call reference id <tool_call_id>.
+```python
+def run_function(arg_dict):
+    function_calls = arg_dict["functions_calling"]
+
+    if function_calls == []:
+        print("No function/tool calling needed")
+        return
+
+    for call in function_calls:
+        function_name = call["name"]
+        arguments = call["arguments"]
+        globals()[function_name](**arguments)
+        
+allow_functions = [""" + tool_handler.tool_name_list + """]
+
+def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"], arg_dict: Optional[List[]]=[]):
+   if to=="user":
+       # NO function calling needed
+       break  # exit for a normal answer
+   elif to=="function" and arg_dict!=[]:
+       run_function(arg_dict)
+    else:
+      raise Exception("Either response to user without function calling or function calling is required.")
+```
+Example:
+# No function calling needed:
+response(to="user") # to let system know that no function calling is needed
+my answer is...
+
+# Function calling needed:
+response(to="function", arg_dict={
+  "functions_calling": [{
+      "name": "function_name",
+      "arguments": {"argument_name": "value"}
+    }
+]}) # answer to user is prohibited if using function calling
+
+# Follow up answer after function calling result provided by user
+User: what is 2^3?
+Assitant: ---Request for tool call with reference id X:                                                                                                                                                             
+power_number_tool({number: 2, power: 3})
+
+Result of tool call reference id X:
+Calculation result is 8
+Assitant: 2^3 is 8
+---
+End of Function Calling Instruction
+---
+"""
+
+
         tool_call = await self._tool_calling_task(
             prompt_eng=prompt_eng,
             query=query,
             request=request,
-            tool_handler=tool_handler
+            tool_handler=tool_handler,
+            tool_as_code_prompt=tool_as_code_prompt
         )
 
         tool_decision, tool_decision_check_fn = await self._tool_decision_task(
             prompt_eng=prompt_eng,
             query=query,
             request=request,
-            tool_handler=tool_handler
+            tool_handler=tool_handler,
+            tool_as_code_prompt=tool_as_code_prompt
         )
 
 

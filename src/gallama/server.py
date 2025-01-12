@@ -55,7 +55,7 @@ async def log_requests(request: Request, call_next):
         if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
             content_type = request.headers.get("Content-Type", "")
             if "multipart/form-data" in content_type or "application/octet-stream" in content_type:
-                server_logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n[Binary content omitted]")
+                server_logger.debug(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n[Binary content omitted]")
             else:
                 request_content = await request.body()
                 if request_content:
@@ -375,8 +375,8 @@ async def run_model(model_spec: ModelSpec):
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
-                    # stdout=asyncio.subprocess.DEVNULL,
-                    # stderr=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
                 )
 
