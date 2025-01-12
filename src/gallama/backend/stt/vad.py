@@ -118,7 +118,7 @@ class VADProcessor:
                     if not self.potential_speech_end_flag:
                         self.potential_speech_end_flag = True
 
-                    if self.continuous_silence_ms > self.min_silence_ms:
+                    if self.continuous_silence_ms > self.min_silence_ms and self.speech_start_sent:
                         self.prob_speech_end = prob
                         speech_end_object = {
                             'speech_detected': True,

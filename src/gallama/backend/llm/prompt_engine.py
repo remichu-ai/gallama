@@ -86,7 +86,7 @@ class PromptEngine:
     def get_image_pad_token(self):
         return self.model_prompt.get("image_pad", "")
 
-    def _get_role_token(self, role, token_type: str):
+    def _get_role_token(self, role, token_type: Literal["start", "end"]):
         if token_type == "start":
             if role == "system":
                 return self.get_sys_start_token()
@@ -145,11 +145,11 @@ class PromptEngine:
         content = msg.content if msg.content else ""
 
         try:
-            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
+            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
         except:
-            content = f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
+            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
 
-        return content
+        return content + self._get_role_token(role="user",token_type="end")
 
     def _format_tool_result_msg(self, msg: BaseMessage) -> str:
         """one msg might have multiple tool calls"""
@@ -166,10 +166,7 @@ class PromptEngine:
 
     def _format_tool_msg(self, pydantic_tool_list: Dict[str, BaseModel], pretty:bool = False) -> str:
         # append tools calling if it is a prompt
-        tools_json = ("\nBelow are the functions available to you to use.\n"
-                      "If you need to use multiple functions, please provide it in chronological order.\n"
-                      "If user or system prompt request certain restriction (examples: can only use one tool, "
-                      "must use a specific tool etc; then please respect the instruction.)\n\n")
+        tools_json = ("\nBelow are the functions available to you to use. Only use the tool if it is neccessary")
 
         if self.tool_enabled:
             tools_json += self.get_tool_start_token()

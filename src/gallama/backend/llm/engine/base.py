@@ -690,10 +690,13 @@ response(to="function", arg_dict="""
         # create prompt
         # reuse tool call to share the kv cache as possible
         _tool_answer_prefix = "to="
+        _tool_thinking_length_guide = ""
         if query.tool_call_thinking:
             _tool_answer_prefix = "thinking="
+            _tool_thinking_length_guide = "# briefly think if tool thinking is needed. Never redo a tool with same arguments."
 
-        tool_decision_answer_as_code_prompt = """
+        tool_decision_answer_as_code_prompt = f"""
+{_tool_thinking_length_guide}
 response(""" + _tool_answer_prefix
 
         def tool_decision_check_fn(tool_decision_answer: str) -> bool:
@@ -838,6 +841,7 @@ Function/ Tool calling Instruction:
 - It is uncertain if user wants function calling.
 - Function calling is not related to user's question.
 - Clarification is needed. 
+- Call a tool only when needed, and never re-do a tool call that you previously did with the exact same parameters.
 
 When a tool/ function is requested, it's result will be run by the system and be returned with reference to the tool call if available
 e.g. Result of tool call reference id <tool_call_id>.
@@ -862,7 +866,7 @@ def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"],
        break  # exit for a normal answer
    elif to=="function" and arg_dict!=[]:
        run_function(arg_dict)
-    else:
+   else:
       raise Exception("Either response to user without function calling or function calling is required.")
 ```
 Example:
@@ -880,12 +884,12 @@ response(to="function", arg_dict={
 
 # Follow up answer after function calling result provided by user
 User: what is 2^3?
-Assitant: ---Request for tool call with reference id X:                                                                                                                                                             
+Assistant: ---Request for tool call with reference id X:                                                                                                                                                             
 power_number_tool({number: 2, power: 3})
 
 Result of tool call reference id X:
 Calculation result is 8
-Assitant: 2^3 is 8
+Assistant: 2^3 is 8
 ---
 End of Function Calling Instruction
 ---

@@ -176,13 +176,13 @@ class WebSocketManager:
                     elif stt_response.type == "stt.vad_speech_start":
                         logger.info(f"websocket_manager: VAD speech start: {stt_response}")
                         # get new item id
-                        session.queues.vad_item_id = await session.queues.next_item()
-
+                        # session.queues.vad_item_id = await session.queues.next_item()
+                        session.queues.vad_item_id_next_inqueue = await session.queues.next_item()
                         # send client
                         await websocket.send_json(InputAudioBufferSpeechStarted(
                             event_id=await session.queues.next_event(),
                             audio_start_ms=stt_response.vad_timestamp_ms,
-                            item_id=session.queues.vad_item_id
+                            item_id=session.queues.vad_item_id_next_inqueue
                         ).model_dump())
 
                         # update tracking
@@ -195,6 +195,10 @@ class WebSocketManager:
 
                     elif stt_response.type == "stt.vad_speech_end":
                         logger.info(f"websocket_manager: VAD speech end: {stt_response}")
+                        # swap the item id in
+                        session.queues.vad_item_id = session.queues.vad_item_id_next_inqueue
+                        session.queues.vad_item_id_next_inqueue = None
+
                         await websocket.send_json(InputAudioBufferSpeechStopped(
                             event_id=await session.queues.next_event(),
                             audio_end_ms=stt_response.vad_timestamp_ms,

@@ -121,7 +121,8 @@ async def chat_completion(request: Request, query: ChatMLQuery):
 async def generate(request: Request, query: GenerateQuery):
     model_manager = get_model_manager()
     gen_queue = GenQueueDynamic()      # this queue will hold the result for this generation
-    llm = model_manager.llm_dict[query.model]
+    llm = model_manager.get_model(query.model, _type="llm")
+    # llm = model_manager.llm_dict[query.model]
 
     # start the generation task
     asyncio.create_task(llm.chat_raw(

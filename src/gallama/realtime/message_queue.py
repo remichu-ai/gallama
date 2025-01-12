@@ -67,6 +67,9 @@ class MessageQueues:
         self.lock_audio_commited = asyncio.Lock()     # ensure that audio is sync with ws_stt
 
         self.vad_item_id = None
+        # this is id to assign to vad_item_id while it is not commited yet
+        # the reason to have this variable is because response will clear audio once it done
+        self.vad_item_id_next_inqueue = None
         self.speech_start = None
         self.speech_end = None
         # self.latest_item: Optional[ConversationItem] = None
