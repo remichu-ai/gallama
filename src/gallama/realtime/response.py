@@ -609,7 +609,6 @@ class Response:
 
                         # finished reason returned with empty delta
                         if _delta.content or (_delta.tool_calls and len(_delta.tool_calls) > 0):
-                            logger.info(f"FROG FROG {_delta}")
                             text_chunk = _delta.content
                             tool_calls = _delta.tool_calls
 

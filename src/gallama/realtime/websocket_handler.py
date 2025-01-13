@@ -28,8 +28,10 @@ class WebSocketMessageHandler:
     This class is the entry point for all client messages.
     This class should refrain from actually doing any processing, but pass on the job to the appropriate handler.
     """
+    def __init__(self):
+        pass
 
-    def __init__(self, stt_url: str, llm_url: str, tts_url: str):
+    def initialize(self, stt_url: str, llm_url: str, tts_url: str):
         self.stt_url = stt_url
         self.llm_url = llm_url
         self.tts_url = tts_url
@@ -60,7 +62,7 @@ class WebSocketMessageHandler:
             "response.cancel": self._response_cancel
         }
 
-    async def initialize(self):
+    async def initialize_connection(self):
         await self.ws_stt.connect()
 
         await self.ws_llm.connect()

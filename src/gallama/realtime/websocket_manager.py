@@ -49,7 +49,15 @@ class WebSocketManager:
                 task.cancel()
             session.tasks = []  # Clear the list of tasks
 
-    async def initialize_session(self, websocket: WebSocket, model: str, api_key: str = None) -> WebSocketSession:
+    async def initialize_session(
+        self,
+        websocket: WebSocket,
+        model: str,
+        api_key: str = None,
+        stt_url: str = None,
+        llm_url: str = None,
+        tts_url: str = None,
+    ) -> WebSocketSession:
         protocols = websocket.headers.get("sec-websocket-protocol", "").split(", ")
         if "openai-beta.realtime-v1" in protocols:
             await websocket.accept(subprotocol="openai-beta.realtime-v1")
@@ -65,6 +73,8 @@ class WebSocketManager:
             instructions="",
             streaming_transcription=True
         )
+
+        self.message_handler.initialize(stt_url, llm_url, tts_url)
 
         session = self.session_manager.create_session(session_id, config)
 
@@ -86,7 +96,7 @@ class WebSocketManager:
 
         # start connection with individual ws
         if not self.message_handler.initialize_ws:
-            await self.message_handler.initialize()
+            await self.message_handler.initialize_connection()
 
         session.tasks = [
             asyncio.create_task(self.process_unprocessed_queue(session, websocket)),

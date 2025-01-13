@@ -1,20 +1,23 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter, Query
 import logging
 from gallama.realtime.websocket_handler import WebSocketMessageHandler
+from ..data_classes import ModelInstanceInfo
 from ..realtime.websocket_manager import WebSocketManager
 from ..realtime.session_manager import SessionManager
+from ..dependencies_server import get_server_manager
 
 # Create router
 router = APIRouter(prefix="", tags=["realtime"])
 
+server_manager = get_server_manager()
 
 # Initialize managers
 session_manager = SessionManager()
-message_handler = WebSocketMessageHandler(
-    stt_url="ws://localhost:8001/speech-to-text",
-    llm_url="ws://localhost:8002/llm",
-    tts_url="ws://localhost:8003/ws/speech"
-)
+message_handler = WebSocketMessageHandler()
+#     stt_url="ws://localhost:8001/speech-to-text",
+#     llm_url="ws://localhost:8002/llm",
+#     tts_url="ws://localhost:8003/ws/speech"
+# )
 websocket_manager = WebSocketManager(session_manager, message_handler)
 
 
@@ -51,11 +54,18 @@ async def websocket_endpoint(
         if authorization and authorization.startswith("Bearer "):
             api_key = authorization.replace("Bearer ", "")
 
+        stt_instance = server_manager.get_instance(model_type="stt")
+        llm_instance = server_manager.get_instance(model_type="llm")
+        tts_instance = server_manager.get_instance(model_type="tts")
+
         # Create session
         session = await websocket_manager.initialize_session(
             websocket,
             model=model,
-            api_key=api_key
+            api_key=api_key,
+            stt_url=f"ws://localhost:{stt_instance.port}/speech-to-text",
+            llm_url=f"ws://localhost:{llm_instance.port}/llm",
+            tts_url=f"ws://localhost:{tts_instance.port}/ws/speech",
         )
 
         try:
