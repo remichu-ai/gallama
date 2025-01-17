@@ -26,6 +26,9 @@ from ..data_classes.data_class import (
     FunctionSpec,
     ParameterSpec,
 )
+
+from ..data_classes.internal_ws import WSInterLLM
+
 from ..data_classes.generation_data_class import (
     GenerationStats,
     GenQueueDynamic,
@@ -42,7 +45,7 @@ from ..utils.utils import get_response_uid, get_response_tool_uid
 import json
 import asyncio
 
-from ..dependencies import get_model_manager
+from ..dependencies import get_model_manager, get_video_collection
 
 
 router = APIRouter(prefix="", tags=["llm"])
@@ -84,7 +87,12 @@ class WebSocketSession:
             **new_session_config
         })
 
-    def convert_conversation_to_chatml(self, session_config: SessionConfig) -> ChatMLQuery:
+    def convert_conversation_to_chatml(
+        self,
+        session_config: SessionConfig,
+        video_start_time: float = None,
+        video_end_time: float = None,
+    ) -> ChatMLQuery:
         """Convert conversation history to ChatML format"""
         messages = []
 
@@ -153,6 +161,22 @@ class WebSocketSession:
                 ) for tool in session_config.tools
             ]
 
+        # handling video
+        video_for_llm = None
+        if session_config.video_stream:
+            video_collection = get_video_collection()
+            if video_start_time and video_end_time:
+                video_for_llm = video_collection.get_frames_between_timestamps(video_start_time, video_end_time)
+            else:
+                video_for_llm = video_collection.get_all_frames()
+                video_collection.clear()
+
+            # add special token to the last message
+            messages.append(BaseMessage(
+                role = "user",
+                content = "{{VIDEO-PlaceHolderTokenHere}}"
+            ))
+
         max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens != "inf" else None
         query = ChatMLQuery(
             messages=messages,
@@ -167,6 +191,7 @@ class WebSocketSession:
             tool_call_thinking_token=session_config.tool_call_thinking_token,
             tool_instruction_position=session_config.tool_instruction_position,
             tool_schema_position=session_config.tool_schema_position,
+            video=video_for_llm if video_for_llm else None,
             # tool_choice=session_config.tool_choice
         )
 
@@ -242,13 +267,19 @@ class WebSocketSession:
                 "item_id": item_id
             })
 
-        elif message.get("type") in ["response.create", "generate_cache"]:
+        elif message.get("type") in ["response.create"]:
+            message_pydantic = WSInterLLM(**message)
+
             # Reset stop event before starting new generation
             self.stop_event.clear()
 
             gen_queue = GenQueueDynamic()
-            response_config = self.session_config.merge(message.get("response"))
-            query = self.convert_conversation_to_chatml(response_config)
+            response_config = self.session_config.merge(message.get("response", {}))
+            query = self.convert_conversation_to_chatml(
+                response_config,
+                video_start_time = message_pydantic.video_start_time,
+                video_end_time = message_pydantic.video_end_time
+            )
 
             # Ensure stream is set to True for streaming responses
             query.stream = True
@@ -288,12 +319,14 @@ class WebSocketSession:
                 await self.websocket.send_json({
                     "type": "generation.complete",
                 })
-            else:  # generate_cache
-                async for _ in self.process_generation_stream(gen_queue, llm.model_name, query):
-                    pass
-                await self.websocket.send_json({
-                    "type": "pre_cache.complete",
-                })
+            # elif essage["type"] == "response.create_cache":  # generate_cache
+            #     async for _ in self.process_generation_stream(gen_queue, llm.model_name, query):
+            #         pass
+            #     await self.websocket.send_json({
+            #         "type": "pre_cache.complete",
+            #     })
+            else:
+                raise Exception(f"Unknown message type: {message['type']}")
         elif message.get("type") == "common.cancel":
             # abort generation
             self.stop_event.set()

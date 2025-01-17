@@ -7,6 +7,7 @@ import time
 import torch
 import re
 import base64
+from .video import VideoFrame
 
 
 class TextTag(BaseModel):
@@ -187,6 +188,9 @@ class ChatMLQuery(BaseModel):
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
     tool_call_id: Optional[str] = None
     max_tokens: Optional[int] = None
+
+    # for video, currently for websocket
+    video: Optional[List[Any]] = None    # Any should -> VideoFrame
 
     # not part of openai api
     leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the  generated response")

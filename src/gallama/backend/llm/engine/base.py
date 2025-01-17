@@ -31,7 +31,8 @@ from gallama.data_classes import (
     GenStart,
     GenerationStats,
     QueueContext,
-    GenQueueDynamic
+    GenQueueDynamic,
+    VideoFrame,
 )
 from ....config.config_manager import ConfigManager
 # handle prompting
@@ -157,6 +158,7 @@ class ModelInterface(ABC):
         max_tokens: int = None,
         quiet: bool = False,
         messages: List = None,  # query.message is used for multimodal
+        video: List[VideoFrame] = None,
         stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
@@ -288,6 +290,7 @@ class ModelInterface(ABC):
                 stop_words=thinking.root_key_stop_words,
                 request=request,
                 stop_event=stop_event,
+                video=query.video,
             )
             thinking_response, _ = await get_response_from_queue(thinking_queue)
 
@@ -320,6 +323,7 @@ class ModelInterface(ABC):
                 request=request,
                 # stop_words=query.stop_words,
                 stop_event=stop_event,
+                video=query.video,
             )
 
             first_response, _ = await get_response_from_queue(prefix_queue)
@@ -368,6 +372,7 @@ class ModelInterface(ABC):
                 'banned_strings': banned_strings,
                 'request': request,
                 'stop_event': stop_event,
+                'video': query.video,
             }
         )
 
@@ -422,7 +427,7 @@ class ModelInterface(ABC):
             request=request,
             # formatter=formatter_regex  # no longer enforce format
             stop_event=stop_event,
-
+            video=query.video,
         )
 
         # evaluate tool usage necessity
@@ -487,6 +492,7 @@ class ModelInterface(ABC):
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 formatter=formatter_regex,  # no longer enforce format
                 stop_event = stop_event,
+                video=query.video,
             )
 
             # evaluate tool usage necessity
@@ -567,6 +573,7 @@ arg_dict = """
                 max_tokens=query.max_tokens,
                 request=request,
                 stop_event=stop_event,
+                video=query.video,
             )
 
         # NOT USE TOOL
@@ -588,6 +595,7 @@ arg_dict = """
                     max_tokens=query.max_tokens,
                     request=request,
                     stop_event=stop_event,
+                    video=query.video,
                 )
             else:
                 # tool choice is forced -> return empty tool calling
@@ -668,6 +676,7 @@ response(to="function", arg_dict="""
             "max_tokens": query.max_tokens,
             "request": request,
             "stop_event": stop_event,
+            "video": query.video
         }
 
         return ToolCallV2(
@@ -753,6 +762,7 @@ response(""" + _tool_answer_prefix
             "request": request,
             "stop_event": stop_event,
             "stop_words": ['"user"', '"function"', "'user'", "'function'"],
+            "video": query.video
         }
 
         tool_decision_check_fn_to_use = tool_decision_check_fn if query.tool_call_thinking else tool_decision_check_with_thinking_fn
@@ -791,6 +801,7 @@ response(""" + _tool_answer_prefix
             "max_tokens": query.max_tokens,
             "request": request,
             "stop_event": stop_event,
+            "video": query.video,
         }
 
         return ToolCallV2(

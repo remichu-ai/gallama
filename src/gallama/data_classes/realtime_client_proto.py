@@ -87,6 +87,7 @@ class SessionConfig(BaseModel):
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
 
     # extra
+    video_stream: Optional[bool] = True
     model: Optional[str] = None
 
     # extra for gallama backend

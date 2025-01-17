@@ -6,3 +6,4 @@ from .audio import router as audio_router
 from .ws_stt import router as ws_stt_router
 from .ws_llm import router as ws_llm_router
 from .ws_tts import router as ws_tts_router
+from .ws_video import router as ws_video_router

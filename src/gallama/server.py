@@ -358,8 +358,8 @@ async def run_model(model_spec: ModelSpec):
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    # stdout=asyncio.subprocess.DEVNULL,
+                    # stderr=asyncio.subprocess.DEVNULL,
                 )
             else:
                 # other than exllama, we will use env setting to set visible GPUs
@@ -375,8 +375,8 @@ async def run_model(model_spec: ModelSpec):
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
+                    # stdout=asyncio.subprocess.DEVNULL,
+                    # stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
                 )
 

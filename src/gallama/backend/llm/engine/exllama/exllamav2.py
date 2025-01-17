@@ -10,6 +10,7 @@ import traceback
 
 from gallama.logger.logger import logger
 from gallama.data_classes import (
+    BaseMessage,
     ModelSpec,
     GenStart,
     GenEnd,
@@ -17,7 +18,7 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
-    GenQueueDynamic
+    GenQueueDynamic, VideoFrame
 )
 from gallama.utils.utils import get_image
 
@@ -364,7 +365,7 @@ class ModelExllama(ModelInterface):
         return None
 
     @staticmethod
-    @lru_cache(128)     # TODO set this dynamically
+    @lru_cache(512)     # TODO set this dynamically
     def get_image_embedding_cached(processor, model, tokenizer, url):
         """
         function to return image embedding for exllama
@@ -376,11 +377,29 @@ class ModelExllama(ModelInterface):
             model=model,
             tokenizer=tokenizer,
             image=img,
-            text_alias=None,    # passing None will let me llm generate its one embedding
+            text_alias=None,    # passing None will let the llm generate its own embedding
+        )
+
+    @staticmethod
+    # @lru_cache(32)     # unhashable type list
+    def get_video_embedding_cached(processor, model, tokenizer, video: List[VideoFrame]):
+        """
+        function to return image embedding for exllama
+        lru_cache to cache frequently used image
+        """
+
+        return processor.get_video_embeddings(
+            model=model,
+            tokenizer=tokenizer,
+            video=video,
+            text_alias=None,    # passing None will let the llm generate its own embedding
         )
 
     def _generate_image_embeddings(self, prompt, image_list):
         """Generate embeddings for images and update prompt"""
+        # in prompt processing step, each image was substituted with the following token
+        # TODO move this token to better place
+
         image_token = "{{IMG-PlaceHolderTokenHere}}"
 
         # Validate image token count matches number of images
@@ -402,8 +421,35 @@ class ModelExllama(ModelInterface):
 
         return prompt, image_embeddings
 
-    def _process_vision_inputs(self, prompt, messages):
+    def _generate_video_embeddings(self, prompt, video: List[VideoFrame]):
+        """Generate embeddings for video and update prompt"""
+        # in prompt processing step, each image was substituted with the following token
+        # TODO move this token to better place
+        video_token = "{{VIDEO-PlaceHolderTokenHere}}"
+
+        # Validate only 1 video
+        assert prompt.count(video_token) == 1, "Video support currently limit to 1 token mismatch"
+
+        # get the image from each of the VideoFrame object
+        _video = [ f.image for f in video ]
+
+        video_embeddings = self.get_video_embedding_cached(
+            processor=self.processor,
+            model=self.model,
+            tokenizer=self.tokenizer,
+            video=_video
+        )
+
+        # replace prompt token
+        prompt = prompt.replace(video_token, video_embeddings.text_alias, 1)
+
+        return prompt, video_embeddings
+
+    def _process_vision_inputs(self, prompt, messages: List[BaseMessage], video: List[VideoFrame] = None):
         """Handle image embedding and token replacement for vision inputs"""
+
+        _prompt = prompt
+        _vision_embeddings = []
 
         if not messages:
             return prompt, None
@@ -424,9 +470,15 @@ class ModelExllama(ModelInterface):
 
         # Process image embeddings if vision is required
         if vision_required and self.processor:
-            return self._generate_image_embeddings(prompt, image_list)
+            _prompt,_vision_embeddings = self._generate_image_embeddings(prompt, image_list)
 
-        return prompt, None
+        # handle video input
+        if video:
+            _prompt, _video_embeddings = self._generate_video_embeddings(_prompt, video)
+            _vision_embeddings.append(_video_embeddings)
+
+        return _prompt, _vision_embeddings
+
 
     def _get_format_enforcer_filter(self, formatter):
         """Determine appropriate format enforcer filter"""
@@ -484,7 +536,8 @@ class ModelExllama(ModelInterface):
         banned_strings: list[str] | None = None,
         max_tokens: int = None,
         quiet=False,
-        messages: List = None,  # query.message for multimodal
+        messages: List[BaseMessage] = None,  # query.message for multimodal
+        video: List[VideoFrame] = None,
         stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
@@ -522,7 +575,7 @@ class ModelExllama(ModelInterface):
             settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
-            prompt, image_embeddings = self._process_vision_inputs(prompt, messages)
+            prompt, image_embeddings = self._process_vision_inputs(prompt, messages, video)
 
             # Convert prompt to token IDs
             if image_embeddings:

@@ -8,6 +8,7 @@ from .server_dataclass import (
 )
 
 from .data_class import (
+    BaseMessage,
     ChatMLQuery,
     ToolSpec,
     ToolForce,
@@ -49,3 +50,5 @@ from .generation_data_class import (
     GenQueueDynamic
 )
 
+
+from .video import VideoFrameCollection, VideoFrame

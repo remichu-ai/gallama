@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 
 from pydantic import BaseModel, validator
-from .realtime_client_proto import SessionConfig
+from .realtime_client_proto import SessionConfig, ResponseCreate
 # this file contain websocket message schema for message sent between internal ws and tts, llm, stt
 
 
@@ -39,6 +39,13 @@ class WSInterSTTResponse(BaseModel):
     end_time: Optional[float] = None
     vad_timestamp_ms: Optional[int] = None
     confidence: Optional[float] = None  # VAD confidence score
+
+# LLM
+# optional time time stamp for video
+class WSInterLLM(ResponseCreate):
+    video_start_time: Optional[float] = None
+    video_end_time: Optional[float] = None
+
 
 
 # TTS
