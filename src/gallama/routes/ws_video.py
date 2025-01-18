@@ -36,7 +36,7 @@ async def websocket_video(websocket: WebSocket):
             # Optional: Send an acknowledgment back to the client
             await websocket.send_text(f"Frame received with timestamp: {frame.timestamp}")
     except Exception as e:
-        print(f"WebSocket closed with exception: {e}")
+        logger.info(f"WebSocket closed with exception: {e}")
     finally:
         # Check if the WebSocket is still open before closing it
         try:
@@ -44,4 +44,5 @@ async def websocket_video(websocket: WebSocket):
             await websocket.close()
         except RuntimeError as e:
             # Ignore the error if the WebSocket is already closed
-            print(f"WebSocket already closed: {e}")
+            logger.info(f"WebSocket already closed: {e}")
+
