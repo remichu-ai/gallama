@@ -69,9 +69,14 @@ class MessageQueues:
         self.vad_item_id = None
         # this is id to assign to vad_item_id while it is not commited yet
         # the reason to have this variable is because response will clear audio once it done
-        self.vad_item_id_next_inqueue = None
+        self.vad_item_id_next_in_queue = None
         self.speech_start = None
         self.speech_end = None
+
+        # keep track of when speech start and end for video
+        self.speech_start_time: float = 0.0
+        self.speech_start_time_in_queue: float = 0.0
+        self.speech_end_time: float = 0.0
         # self.latest_item: Optional[ConversationItem] = None
 
         # self.uncommitted_audio_data: Optional[bytes] = None
@@ -220,6 +225,14 @@ class MessageQueues:
     async def clear_audio_buffer(self):
         async with self.lock_audio_buffer:
             self.audio_buffer = np.array([], dtype=np.float32)
+
+    def calculate_audio_duration(self):
+        """Calculate the duration of the audio in the audio_buffer in seconds."""
+        if self.audio_buffer.any():
+            duration = len(self.audio_buffer) / self.sample_rate
+            return duration
+        else:
+            return 0
 
     async def reset_audio(self):
         try:

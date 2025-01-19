@@ -516,7 +516,7 @@ class ModelSpec(BaseModel):
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
     draft_model_name: Optional[str] = Field(description='name of the draft model', default=None)
-    draft_gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+    draft_gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
@@ -641,17 +641,14 @@ class ModelSpec(BaseModel):
         draft_model_id = input_dict.get('draft_model_id')
         if draft_model_id:
             draft_model_id = draft_model_id.strip("'")  # Remove single quotes if present
-        draft_model_name = input_dict.get('draft_model_name')
-        if not draft_model_name and draft_model_id:
-            draft_model_name = draft_model_id.split('/')[-1]
-        else:
-            draft_model_name = None
+
+        draft_model_name = input_dict.get('draft_model_name', None)
 
         draft_gpus = input_dict.get('draft_gpus')
         draft_cache_size = input_dict.get('draft_cache_size')
         draft_cache_quant = input_dict.get('draft_cache_quant', None)
 
-        if draft_gpus:
+        if draft_gpus and isinstance(draft_gpus, str) and draft_gpus.lower() != "auto":
             draft_gpus = [float(x) for x in draft_gpus.split(',')]
 
         if draft_cache_size:

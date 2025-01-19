@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import traceback
 from starlette.websockets import WebSocket
 from websockets import ConnectionClosed
@@ -138,7 +139,6 @@ class WebSocketManager:
                     status=item.status if item.status else "completed",
                 )
             elif isinstance(item, ConversationItemFunctionCall):
-                logger.info("FROG FROG ConversationItemFunctionCall")
 
                 processed_item = ConversationItemFunctionCallServer(
                     id=item.id,
@@ -187,12 +187,18 @@ class WebSocketManager:
                         logger.info(f"websocket_manager: VAD speech start: {stt_response}")
                         # get new item id
                         # session.queues.vad_item_id = await session.queues.next_item()
-                        session.queues.vad_item_id_next_inqueue = await session.queues.next_item()
+                        session.queues.vad_item_id_next_in_queue = await session.queues.next_item()
+
+                        # track the current time for llm, offset by prefix padding from vad
+                        session.queues.speech_start_time_in_queue = time.time()
+                        if session.config.turn_detection and session.config.turn_detection.prefix_padding_ms and session.config.turn_detection.prefix_padding_ms>0:
+                            session.queues.speech_start_time_in_queue -= session.config.turn_detection.prefix_padding_ms / 1000
+
                         # send client
                         await websocket.send_json(InputAudioBufferSpeechStarted(
                             event_id=await session.queues.next_event(),
                             audio_start_ms=stt_response.vad_timestamp_ms,
-                            item_id=session.queues.vad_item_id_next_inqueue
+                            item_id=session.queues.vad_item_id_next_in_queue
                         ).model_dump())
 
                         # update tracking
@@ -206,15 +212,18 @@ class WebSocketManager:
                     elif stt_response.type == "stt.vad_speech_end":
                         logger.info(f"websocket_manager: VAD speech end: {stt_response}")
                         # swap the item id in
-                        session.queues.vad_item_id = session.queues.vad_item_id_next_inqueue
-                        session.queues.vad_item_id_next_inqueue = None
+                        session.queues.vad_item_id = session.queues.vad_item_id_next_in_queue
+                        session.queues.vad_item_id_next_in_queue = None
+
+                        session.queues.speech_end_time = time.time()
+                        session.queues.speech_start_time = session.queues.speech_start_time_in_queue
+                        session.queues.speech_start_time_in_queue = None
 
                         await websocket.send_json(InputAudioBufferSpeechStopped(
                             event_id=await session.queues.next_event(),
                             audio_end_ms=stt_response.vad_timestamp_ms,
                             item_id=session.queues.vad_item_id
                         ).model_dump())
-
 
                         # update tracking
                         session.queues.speech_end = stt_response.vad_timestamp_ms
@@ -231,7 +240,11 @@ class WebSocketManager:
                         }).model_dump())
 
                         # trigger response
-                        response_event = ResponseCreate(id=await session.queues.next_resp())
+                        response_event = ResponseCreate(
+                            id=await session.queues.next_resp(),
+                            speech_start_time=session.queues.speech_start_time,
+                            speech_end_time=session.queues.speech_end_time,
+                        )
                         await session.queues.unprocessed.put(response_event)
                     elif stt_response.type == "stt.transcription_complete":
                         logger.info(f"Received Transcription complete from TTS")
@@ -351,6 +364,14 @@ class WebSocketManager:
                     async with session.current_response_lock:
                         logger.info(f"-------------------Set Current response")
                         session.current_response = response
+
+                    # if there is no timing in the response create (non vad mode)
+                    # using timing of audio as timing for video
+                    if not item.speech_start_time and not item.speech_end_time:
+                        if session.queues.audio_buffer.any():
+                            item.speech_end_time = time.time()
+                            item.speech_start_time = item.speech_end_time - session.queues.calculate_audio_duration()
+
 
                     # at this point stt already completed, and text send to the llm
                     await response.response_initialize()

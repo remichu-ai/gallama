@@ -41,7 +41,7 @@ class WSInterSTTResponse(BaseModel):
     confidence: Optional[float] = None  # VAD confidence score
 
 # LLM
-# optional time time stamp for video
+# optional time stamp for video
 class WSInterLLM(ResponseCreate):
     video_start_time: Optional[float] = None
     video_end_time: Optional[float] = None

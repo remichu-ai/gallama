@@ -34,12 +34,12 @@ async def websocket_video(websocket: WebSocket):
 
         # Connect directly to the LLM WebSocket
         llm_websocket = await websockets.connect(llm_websocket_url)
-        logger.info(f"Connected to LLM WebSocket at {llm_websocket_url}")
+        logger.debug(f"Connected to LLM WebSocket at {llm_websocket_url}")
 
         while True:
             # Receive raw data from the client
             data = await websocket.receive_bytes()
-            logger.info(f"Received {len(data)} bytes from /video WebSocket")
+            logger.debug(f"Received {len(data)} bytes from /video WebSocket")
 
             # Forward the raw data directly to the LLM WebSocket
             await llm_websocket.send(data)

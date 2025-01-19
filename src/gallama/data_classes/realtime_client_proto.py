@@ -73,6 +73,12 @@ class TurnDetectionConfig(BaseModel):
                                                                 "This setting is to automatically offset truncate timing by this amount of ms")
 
 
+class VideoStreamSetting(BaseModel):
+    video_stream: Optional[bool] = True
+    # if video_max_resolution is None, there wont be any rescaling of image
+    video_max_resolution: Literal["240p", "360p", "480p", "540p", "720p", "900p", "1080p", None] = "720p"
+
+
 class SessionConfig(BaseModel):
     modalities: List[Literal["text", "audio"]] = Field(default_factory=lambda: ["text", "audio"])
     instructions: Optional[str] = ""    # system prompt
@@ -87,7 +93,7 @@ class SessionConfig(BaseModel):
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
 
     # extra
-    video_stream: Optional[bool] = True
+    video: VideoStreamSetting = Field(default_factory=VideoStreamSetting)
     model: Optional[str] = None
 
     # extra for gallama backend
@@ -119,6 +125,7 @@ class SessionConfig(BaseModel):
         """
         Merge this SessionConfig with another SessionConfig or dictionary.
         The values from 'other' will overwrite existing values if present.
+        Properly handles nested Pydantic models like VideoStreamSetting and TurnDetectionConfig.
 
         Args:
             other: Either a dictionary or another SessionConfig instance containing
@@ -134,13 +141,37 @@ class SessionConfig(BaseModel):
         if isinstance(other, SessionConfig):
             other_config = other.dict()
         else:
-            other_config = other
+            other_config = other.copy() if other else {}
 
-        # Merge the dictionaries, with other_config taking precedence
-        merged_config = {
-            **current_config,
-            **{k: v for k, v in other_config.items() if v is not None}
-        }
+        # Recursively merge nested objects
+        def recursive_merge(current, other):
+            merged = current.copy()
+            for key, value in other.items():
+                if value is None:
+                    continue
+
+                if key not in merged:
+                    merged[key] = value
+                    continue
+
+                current_value = merged[key]
+
+                # Handle nested Pydantic models
+                if isinstance(current_value, dict) and isinstance(value, dict):
+                    merged[key] = recursive_merge(current_value, value)
+                elif isinstance(value, dict) and isinstance(current_value, BaseModel):
+                    # Convert current Pydantic model to dict and merge
+                    current_dict = current_value.dict()
+                    merged_dict = recursive_merge(current_dict, value)
+                    # Create new instance of the same model type
+                    merged[key] = current_value.__class__(**merged_dict)
+                else:
+                    merged[key] = value
+
+            return merged
+
+        # Perform the merge
+        merged_config = recursive_merge(current_config, other_config)
 
         # Create and return a new SessionConfig instance
         return SessionConfig(**merged_config)
@@ -234,7 +265,8 @@ class ResponseCreate(BaseModel):
     event_id: Optional[str] = None
     type: Literal["response.create"] = "response.create"
     response: Optional[SessionConfig] = Field(description="Optional session config object to overwrite the session config for this response", default=None)
-
+    speech_start_time: Optional[float] = None
+    speech_end_time: Optional[float] = None
 
 class ResponseCancel(BaseModel):
     event_id: Optional[str] = None

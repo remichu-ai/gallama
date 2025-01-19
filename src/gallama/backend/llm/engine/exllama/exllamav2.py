@@ -119,9 +119,9 @@ class ModelExllama(ModelInterface):
         )
 
         # load draft model
-        if self.draft_model_id is not None:
+        if self.draft_model_id:
             # tokenizer and processor already set above
-            draft_model, _, draft_cache, _ = self.load_model_exllama(
+            self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
                 model_id=self.draft_model_id,
                 backend=self.backend,
                 max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model

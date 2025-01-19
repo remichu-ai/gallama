@@ -1,7 +1,7 @@
 from fastapi import WebSocket, APIRouter
 from ..data_classes import VideoFrame
 import struct
-from ..dependencies import get_video_collection
+from ..dependencies import get_video_collection, get_session_config
 from ..logger import logger
 
 video_frames = get_video_collection()
@@ -15,7 +15,10 @@ async def websocket_video(websocket: WebSocket):
         while True:
             data = await websocket.receive_bytes()
             timestamp = None
-            logger.info(f"Received {len(data)} bytes")
+            # logger.info(f"Received {len(data)} bytes")
+
+            session_config = await get_session_config()
+
             # Check if the message includes a timestamp (first 8 bytes)
             if len(data) >= 8:
                 try:
@@ -31,7 +34,7 @@ async def websocket_video(websocket: WebSocket):
 
             # Create a VideoFrame object
             frame = VideoFrame(frame_data, timestamp)
-            video_frames.add_frame(frame)
+            video_frames.add_frame(frame, video_max_resolution=session_config.video.video_max_resolution)
 
             # Optional: Send an acknowledgment back to the client
             await websocket.send_text(f"Frame received with timestamp: {frame.timestamp}")

@@ -100,10 +100,10 @@ class ModelInterface(ABC):
         # draft model is via cli only
         self.draft_model_id = draft_model_config.get("model_id")
         self.draft_model_name = model_spec.draft_model_name or None
-        self.draft_gpus = model_spec.gpus or draft_model_config.get("gpus") or "auto"
+        self.draft_gpus = model_spec.draft_gpus or draft_model_config.get("draft_gpus") or "auto"
         self.draft_cache_size = self.cache_size   # set to the same as main model
         self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "Q4"
-        assert (self.draft_model_id is None) == (self.draft_model_name is None)
+        # assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # get the eos_token_str by merging the default config with anything set by user
         self.eos_token_str = list(set(model_spec.eos_token_list + self.prompt_eng.eos_token_list))

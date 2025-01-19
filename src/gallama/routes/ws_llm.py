@@ -7,7 +7,7 @@ from pydantic.json import pydantic_encoder
 from ..api_response.chat_response import chat_completion_response_stream
 from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item
 from ..logger import logger
-from gallama.data_classes.realtime_client_proto import *
+from ..data_classes.realtime_client_proto import *
 from ..routes.chat import validate_api_request
 from ..data_classes.data_class import (
     BaseMessage,
@@ -27,25 +27,20 @@ from ..data_classes.data_class import (
     ParameterSpec,
 )
 
-from ..data_classes.internal_ws import WSInterLLM
+from ..data_classes.internal_ws import WSInterLLM, WSInterConfigUpdate
 
 from ..data_classes.generation_data_class import (
-    GenerationStats,
     GenQueueDynamic,
-    GenText,
-    GenEnd,
-    GenStart,
 )
 from ..data_classes.realtime_client_proto import (
     SessionConfig
 )
-import time
-from ..utils.utils import get_response_uid, get_response_tool_uid
+
 
 import json
 import asyncio
 
-from ..dependencies import get_model_manager, get_video_collection
+from ..dependencies import get_model_manager, get_video_collection, get_session_config, dependency_update_session_config
 
 
 router = APIRouter(prefix="", tags=["llm"])
@@ -80,12 +75,12 @@ class WebSocketSession:
     def reset(self):
         self.conversation_history = OrderedDict()
 
-    def update_session_config(self, new_session_config: SessionConfig):
+    async def update_session_config(self, new_session_config: SessionConfig):
         """Update session config"""
-        self.session_config = SessionConfig(**{
-            **self.session_config.model_dump(),
-            **new_session_config
-        })
+        self.session_config = self.session_config.merge(new_session_config)
+
+        # update session config in dependencies for video to refer to
+        await dependency_update_session_config(self.session_config)
 
     def convert_conversation_to_chatml(
         self,
@@ -163,7 +158,7 @@ class WebSocketSession:
 
         # handling video
         video_for_llm = None
-        if session_config.video_stream:
+        if session_config.video.video_stream:
             video_collection = get_video_collection()
             if video_start_time and video_end_time:
                 video_for_llm = video_collection.get_frames_between_timestamps(video_start_time, video_end_time)
@@ -171,11 +166,14 @@ class WebSocketSession:
                 video_for_llm = video_collection.get_all_frames()
                 video_collection.clear()
 
-            # add special token to the last message
-            messages.append(BaseMessage(
-                role = "user",
-                content = "{{VIDEO-PlaceHolderTokenHere}}"
-            ))
+            logger.info(f"Number of video frames used for LLM: {len(video_for_llm)}")
+
+            # add special token to the last message if there is video
+            if len(video_for_llm) > 0:
+                messages.append(BaseMessage(
+                    role = "user",
+                    content = "{{VIDEO-PlaceHolderTokenHere}}"
+                ))
 
         max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens != "inf" else None
         query = ChatMLQuery(
@@ -191,7 +189,7 @@ class WebSocketSession:
             tool_call_thinking_token=session_config.tool_call_thinking_token,
             tool_instruction_position=session_config.tool_instruction_position,
             tool_schema_position=session_config.tool_schema_position,
-            video=video_for_llm if video_for_llm else None,
+            video=video_for_llm if len(video_for_llm)>0 else None,
             # tool_choice=session_config.tool_choice
         )
 
@@ -268,7 +266,7 @@ class WebSocketSession:
             })
 
         elif message.get("type") in ["response.create"]:
-            message_pydantic = WSInterLLM(**message)
+            message_pydantic = ResponseCreate(**message)
 
             # Reset stop event before starting new generation
             self.stop_event.clear()
@@ -333,6 +331,10 @@ class WebSocketSession:
         elif message.get("type") == "common.cleanup":
             # abort generation
             self.reset()
+        elif message.get("type") == "common.config_update":
+            message_pydantic = WSInterConfigUpdate(**message)
+            await self.update_session_config(message_pydantic.config)
+
 
 class LLMWebSocketServer:
     def __init__(self):

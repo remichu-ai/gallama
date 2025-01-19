@@ -80,7 +80,19 @@ class ModelManager:
         if not model_config:
             raise Exception(f"Model config for '{model_name}' not exist in ~/gallama/model_config.yaml")
 
+
         model_config.update({"model_name": model_name})
+
+        # handle draft model
+        if model_spec.draft_model_name and not model_spec.draft_model_id:
+            draft_model_config = self.config_manager.get_model_config(model_spec.draft_model_name)
+            model_config.update({
+                "draft_model_id": model_spec.draft_model_id or draft_model_config["model_id"],
+                "draft_model_name": model_spec.draft_model_name or draft_model_config["model_name"],
+                "draft_gpus": model_spec.draft_gpus or draft_model_config["gpus"],
+                "draft_cache_quant": model_spec.draft_cache_quant or draft_model_config["cache_quant"],
+            })
+
         _default_model_spec = ModelSpec.from_dict(model_config)
 
         # Merge configurations that user pass in with default setting of the model
