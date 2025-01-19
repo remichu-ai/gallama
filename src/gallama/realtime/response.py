@@ -821,6 +821,7 @@ class Response:
 
 
             # at this point, the ws_llm state should already sync with user audio
+
             await self.ws_llm.send_pydantic_message(response_create_request)
 
 
