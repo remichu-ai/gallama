@@ -275,8 +275,8 @@ class WebSocketSession:
             response_config = self.session_config.merge(message.get("response", {}))
             query = self.convert_conversation_to_chatml(
                 response_config,
-                video_start_time = message_pydantic.video_start_time,
-                video_end_time = message_pydantic.video_end_time
+                video_start_time = message_pydantic.speech_start_time,
+                video_end_time = message_pydantic.speech_end_time
             )
 
             # Ensure stream is set to True for streaming responses
