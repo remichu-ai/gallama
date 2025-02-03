@@ -882,26 +882,27 @@ def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"],
 ```
 Example:
 # No function calling needed:
-response(to="user") # to let system know that no function calling is needed
+response(thinking="because... so function calling is not required ", to="user")
 my answer is...
 
 # Function calling needed:
-response(to="function", arg_dict={
+response(thinking="because... so function calling is required", to="function", arg_dict={
   "functions_calling": [{
       "name": "function_name",
       "arguments": {"argument_name": "value"}
     }
-]}) # answer to user is prohibited if using function calling
+]}) 
+# answer to user is prohibited if using function calling
 
-# Follow up answer after function calling result provided by user
+# Example of follow-up answer after function calling result provided by user
 User: what is 2^3?
-Assistant: ---Request for tool call with reference id X:                                                                                                                                                             
+Assistant:                                                                                                                                                             
 power_number_tool({number: 2, power: 3})
-
-Result of tool call reference id X:
-Calculation result is 8
+8
 Assistant: 2^3 is 8
 ---
+IMPORTANT: 'Request for tool call with reference id' and 'Result of tool call reference id' are auto populated by the system for reference
+            DO NOT output Request for tool call with reference id by yourself
 End of Function Calling Instruction
 ---
 """

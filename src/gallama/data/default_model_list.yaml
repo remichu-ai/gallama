@@ -1,7 +1,7 @@
 llama-3.1-8B:
   remark: "v3.1"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Llama3.1
   repo:
     - repo: "turboderp/Llama-3.1-8B-Instruct-exl2"
@@ -41,7 +41,7 @@ llama-3.1-8B:
 llama-3.1-70B:
   remark: "v3.1"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Llama3.1
   repo:
     - repo: "turboderp/Llama-3.1-70B-Instruct-exl2"
@@ -66,7 +66,7 @@ llama-3.1-70B:
 mistral:
   remark: "v0.3"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Mistral_large
   repo:
     - repo: "turboderp/Mistral-7B-instruct-v0.3-exl2"
@@ -105,7 +105,7 @@ mistral:
       backend: llama_cpp
 mistral-large-2407:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Mistral_large
   repo:
     - repo: "turboderp/Mistral-Large-Instruct-2407-123B-exl2"
@@ -118,7 +118,7 @@ mistral-large-2407:
       backend: exllama
 mistral-large-2411:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Mistral_large
   repo:
     - repo: "bartowski/Mistral-Large-Instruct-2411-exl2"
@@ -131,7 +131,7 @@ mistral-large-2411:
       backend: exllama
 mistral-nemo:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Mistral
   repo:
     - repo: "turboderp/Mistral-Nemo-Instruct-12B-exl2"
@@ -166,7 +166,7 @@ mistral-nemo:
 codestral:
   remark: "v0.1"
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Mistral
   repo:
     - repo: "bartowski/Codestral-22B-v0.1-exl2"
@@ -226,7 +226,7 @@ codestral:
 gemma-2-9B:
   remark: "v2"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Gemma2
   repo:
     - repo: "turboderp/gemma-2-27b-it-exl2"
@@ -236,7 +236,7 @@ gemma-2-9B:
 gemma-2-27B:
   remark: "v2"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Gemma2
   repo:
     - repo: "turboderp/gemma-2-27b-it-exl2"
@@ -292,7 +292,7 @@ qwen-2-1.5B:
 qwen-2-7B:
   remark: "v2"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "LoneStriker/Qwen2-7B-Instruct-3.0bpw-h6-exl2"
@@ -318,7 +318,7 @@ qwen-2-7B:
 qwen-2-72B:
   remark: "v2"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "LoneStriker/Qwen2-72B-Instruct-3.0bpw-h6-exl2"
@@ -371,7 +371,7 @@ qwen-2-72B:
 yi-1.5-34B:
   remark: "v1.5"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Yi1.5
   repo:
     - repo: "Zoyd/01-ai_Yi-1.5-34B-Chat-16K-3_0bpw_exl2"
@@ -413,7 +413,7 @@ yi-1.5-34B:
 qwen-2.5-72B:
   remark: "v2.5"
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-72B-Instruct-exl2"
@@ -456,7 +456,7 @@ qwen-2.5-72B:
       backend: llama_cpp
 qwen-2.5-32B:
   default_quant: 4.65
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "LoneStriker/Qwen2.5-32B-Instruct-3.0bpw-h6-exl2"
@@ -510,7 +510,7 @@ qwen-2.5-32B:
       backend: llama_cpp
 qwen-2.5-14B:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-14B-Instruct-exl2"
@@ -548,7 +548,7 @@ qwen-2.5-14B:
       backend: transformers
 qwen-2.5-7B:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-7B-Instruct-exl2"
@@ -582,7 +582,7 @@ qwen-2.5-7B:
       backend: llama_cpp
 qwen-2.5-3B:
   default_quant: 6.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-3B-Instruct-GGUF"
@@ -617,7 +617,7 @@ qwen-2.5-3B:
 
 qwen-2.5-1.5B:
   default_quant: 6.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF"
@@ -643,7 +643,7 @@ qwen-2.5-1.5B:
 
 qwen-2-VL-2B:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2-VL
   repo:
     - repo: "turboderp/Qwen2-VL-2B-Instruct-exl2"
@@ -668,7 +668,7 @@ qwen-2-VL-2B:
 #        processor_class: "transformers.AutoProcessor"
 qwen-2-VL-72B:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2-VL
   repo:
     - repo: "turboderp/Qwen2-VL-72B-Instruct-exl2"
@@ -694,7 +694,7 @@ qwen-2-VL-72B:
 #        processor_class: "transformers.AutoProcessor"
 qwen-2-VL-7B:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2-VL
   repo:
     - repo: "turboderp/Qwen2-VL-7B-Instruct-exl2"
@@ -718,10 +718,20 @@ qwen-2-VL-7B:
 #        tokenizer_class: "transformers.AutoTokenizer"
 #        processor_class: "transformers.AutoProcessor"
 
+qwen-2.5-VL-7B:
+  default_quant: 4.0
+  default_cache_quant: Q6
+  prompt_template: Qwen2-VL
+  repo:
+    - repo: "turboderp/Qwen2.5-VL-7B-Instruct-exl2"
+      branch: ['4.0bpw', '5.0bpw', '6.0bpw', '8.0bpw']
+      quant: [4.0, 5.0, 6.0, 8.0]
+      backend: exllama
+
 # qwen 2.5 Coder
 qwen-2.5-Coder-32B:
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-Coder-32B-Instruct-exl2"
@@ -730,7 +740,7 @@ qwen-2.5-Coder-32B:
       backend: exllama
 qwen-2.5-Coder-14B:
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-Coder-14B-Instruct-exl2"
@@ -739,7 +749,7 @@ qwen-2.5-Coder-14B:
       backend: exllama
 qwen-2.5-Coder-7B:
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Qwen2
   repo:
     - repo: "bartowski/Qwen2.5-Coder-7B-Instruct-exl2"
@@ -750,7 +760,7 @@ qwen-2.5-Coder-7B:
 # pixtral
 pixtral:
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Pixtral
   repo:
     - repo: "turboderp/pixtral-12b-exl2"
@@ -761,7 +771,7 @@ pixtral:
 llama-3.2-Vision-11B:
   remark: "v3.1"
   default_quant: 4.0
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Llama3.2-VL
   repo:
     - repo: "unsloth/Llama-3.2-11B-Vision-Instruct"
@@ -778,7 +788,7 @@ llama-3.2-Vision-11B:
 llama-3.1-nemotron-70B:
   remark: "v3.1"
   default_quant: 4.25
-  default_cache_quant: Q4
+  default_cache_quant: Q6
   prompt_template: Llama3.1
   repo:
     - repo: "bartowski/Llama-3.1-Nemotron-70B-Instruct-HF-exl2"

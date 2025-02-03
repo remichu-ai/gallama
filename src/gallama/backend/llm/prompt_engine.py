@@ -166,7 +166,7 @@ class PromptEngine:
 
     def _format_tool_msg(self, pydantic_tool_list: Dict[str, BaseModel], pretty:bool = False) -> str:
         # append tools calling if it is a prompt
-        tools_json = ("\nBelow are the functions available to you to use. Only use the tool if it is neccessary")
+        tools_json = ("\nBelow are the functions available to you to use. Only use the tool if it is necessary\n")
 
         if self.tool_enabled:
             tools_json += self.get_tool_start_token()

@@ -50,7 +50,7 @@ async def main():
                 print(event.delta, flush=True, end="")
 
             elif event.type == 'response.text.done':
-                print()
+                print("text done")
 
             elif event.type == "response.done":
                 print(f"time taken: {time.time() - start}")
