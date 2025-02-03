@@ -859,3 +859,25 @@ gte-large-en-v1.5:
       branch: ['main']
       quant: [16.0]
       backend: embedding
+
+
+# tts
+gpt-sovits:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "lj1995/GPT-SoVITS"
+      branch: [ 'main' ]
+      quant: [ 16.0 ]
+      backend: gpt_sovits
+      extra_url:
+        china_voice_url: https://paddlespeech.bj.bcebos.com/Parakeet/released_models/g2p/G2PWModel_1.1.zip
+      backend_extra_args:
+        device: cuda
+        chunk_size_in_s: 0.1
+        is_half: false
+        version: v2
+        bert_base_path: <<HOME_DIR>>/chinese-roberta-wwm-ext-large
+        cnhuhbert_base_path: <<HOME_DIR>>/chinese-hubert-base
+        t2s_weights_path: <<HOME_DIR>>/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt
+        vits_weights_path: <<HOME_DIR>>/gsv-v2final-pretrained/s2G2333k.pth

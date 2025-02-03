@@ -64,6 +64,7 @@ g2pk2
 # sudo apt install ffmpeg
 # cuBLAS
 # https://developer.nvidia.com/cudnn
+# sudo apt-get install portaudio19-dev
 
 #tts
 samplerate

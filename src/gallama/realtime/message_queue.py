@@ -348,7 +348,7 @@ class MessageQueues:
                 item_server = parse_conversation_item(item.model_dump())
                 self.conversation_item_od[item.id] = item_server
 
-                # send to client
+                # convert audio to base64 & send to client
                 await ws_client.send_json(item_to_send)
         except Exception as e:
             logger.error(f"Error in update_conversation_item_ordered_dict: {str(e)}")

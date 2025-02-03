@@ -520,7 +520,7 @@ class Response:
             "content_index": 0,
             "delta": chunk  # for audio, send to client base64 string
         }
-        if mode=="function_call":
+        if mode == "function_call":
             response_dict.update(overwrite_response_dict)
             response_dict.pop("content_index")
 

@@ -17,7 +17,7 @@ class ContentTypeServer(str, Enum):
 
 
 class MessageContentServer(BaseModel):
-    type: Literal["input_text", "input_audio", "text", "item_reference", "audio"]
+    type: Union[Literal["input_text", "input_audio", "text", "item_reference", "audio"], ContentTypeServer]
     text: Optional[str] = None
     audio: Optional[Union[np.ndarray, str]] = None         # bytes audio, this is different to client class
     transcript: Optional[str] = None
