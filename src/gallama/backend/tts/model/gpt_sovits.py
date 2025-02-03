@@ -160,8 +160,10 @@ class TTS_GPT_SoVITS(TTSBase):
 
         if speed_factor:
             speed_factor_to_use = speed_factor
-        else:
+        elif voice_to_use:
             speed_factor_to_use = voice_to_use.speed_factor or 1.0
+        else:
+            raise Exception("There must be at least one voice to use")
 
         params = {
             "text": text,
