@@ -326,7 +326,7 @@ class Response:
             await self.session.queues.update_conversation_item_ordered_dict(
                 ws_client=self.ws_client,
                 ws_llm=self.ws_llm,
-                item=initial_item_created_object.item
+                item=initial_item_created_object.item,
             )
 
             # send initial output_item created

@@ -103,7 +103,7 @@ class SessionConfig(BaseModel):
     output_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
 
     # extra argument for gallama tool calling:
-    tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
+    tool_call_thinking: bool = Field(default= False, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
     tool_call_thinking_token: int = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
     tool_instruction_position: Literal["prefix", "postfix"] = (
         Field(default="prefix", description="Position of the general instruction to use tool. prefix for best kv caching"))

@@ -312,7 +312,7 @@ class MessageQueues:
         self,
         ws_client: WebSocket,               # web socket for client
         ws_llm: WebSocketClient,            # web socket for llm
-        item: ConversationItemServer        # item to create
+        item: ConversationItemServer,        # item to create
     ):
         """
         Add an item to the conversation item list.
@@ -349,6 +349,9 @@ class MessageQueues:
                 self.conversation_item_od[item.id] = item_server
 
                 # convert audio to base64 & send to client
+                if not isinstance(item_to_send, dict):
+                    item_to_send = item_to_send.model_dump(exclude_none=True)
+
                 await ws_client.send_json(item_to_send)
         except Exception as e:
             logger.error(f"Error in update_conversation_item_ordered_dict: {str(e)}")
