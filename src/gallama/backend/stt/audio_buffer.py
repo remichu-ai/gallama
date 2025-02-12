@@ -13,7 +13,7 @@ class VADEvent:
 class AudioBufferWithTiming:
     """Manages audio data with precise timing information."""
 
-    def __init__(self, sample_rate: int, max_length_minutes: float = 30.0):
+    def __init__(self, sample_rate: int, max_length_minutes: float = 30.0, trim_duration_minutes: float = 5.0):
         self.buffer = np.array([], dtype=np.float32)
         self.sample_rate = sample_rate
         self.total_samples = 0
@@ -22,7 +22,9 @@ class AudioBufferWithTiming:
         self.last_processed_sample_vad = 0  # Track the last processed sample position for VAD
         self.is_processing = False  # Flag to track if processing is ongoing
         self.max_length_minutes = max_length_minutes
+        self.trim_duration_minutes = trim_duration_minutes
         self.max_length_samples = int(self.max_length_minutes * 60 * self.sample_rate)
+        self.trim_length_samples = int(self.trim_duration_minutes * 60 * self.sample_rate)
 
     def __len__(self) -> int:
         """Return the length of the underlying audio buffer."""
@@ -35,11 +37,11 @@ class AudioBufferWithTiming:
 
         # Check if the buffer exceeds the maximum length
         if len(self.buffer) > self.max_length_samples:
-            excess_samples = len(self.buffer) - self.max_length_samples
-            self.buffer = self.buffer[excess_samples:]
-            self.start_offset += excess_samples
-            self.last_processed_sample = max(0, self.last_processed_sample - excess_samples)
-            self.last_processed_sample_vad = max(0, self.last_processed_sample_vad - excess_samples)
+            # Instead of just removing excess, remove trim_duration worth of samples
+            self.buffer = self.buffer[self.trim_length_samples:]
+            self.start_offset += self.trim_length_samples
+            self.last_processed_sample = max(0, self.last_processed_sample - self.trim_length_samples)
+            self.last_processed_sample_vad = max(0, self.last_processed_sample_vad - self.trim_length_samples)
 
     def get_time_ms(self, sample_index: int) -> float:
         """Convert sample index to milliseconds from stream start."""

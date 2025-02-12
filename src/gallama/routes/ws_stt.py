@@ -181,12 +181,12 @@ class TranscriptionConnectionManager:
         try:
             # Read the raw audio buffer using soundfile
             with soundfile.SoundFile(
-                    io.BytesIO(raw_buffer),
-                    channels=1,
-                    samplerate=sample_rate,
-                    subtype="PCM_16",
-                    format="RAW",
-                    endian="LITTLE"
+                io.BytesIO(raw_buffer),
+                channels=1,
+                samplerate=sample_rate,
+                subtype="PCM_16",
+                format="RAW",
+                endian="LITTLE"
             ) as sf_file:
                 audio = sf_file.read(dtype=np.float32)  # Read audio as float32
 
