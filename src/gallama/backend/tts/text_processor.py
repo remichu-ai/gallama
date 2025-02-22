@@ -14,20 +14,21 @@ class TextToTextSegment:
     PUNCTUATION_MARKS = {',', '.', ';', '?', '!', '、', '，', '。', '？', '！', ';', '：', '…'}
     SEGMENTATION_METHODS = Literal["sentence_group", "char_count", "period", "all_punctuation"]
 
-    def __init__(self,
-                 segmentation_method: SEGMENTATION_METHODS = "sentence_group",
-                 initial_segment_size: int = 1,
-                 max_segment_size: int = 4,
-                 segment_size_increase_interval: int = 3,  # Number of segments before increasing
-                 char_limit: int = 50,
-                 min_segment_length: int = 5,
-                 max_queue_size: int = 1000,
-                 buffer_size: int = 500,
-                 custom_segmenter: Optional[Callable[[str], List[str]]] = None,
-                 quick_start: bool = False,
-                 quick_start_min_words: int = 5,
-                 quick_start_max_words: int = 15
-                 ):
+    def __init__(
+        self,
+         segmentation_method: SEGMENTATION_METHODS = "sentence_group",
+         initial_segment_size: int = 1,
+         max_segment_size: int = 4,
+         segment_size_increase_interval: int = 2,  # Number of segments before increasing
+         char_limit: int = 50,
+         min_segment_length: int = 5,
+         max_queue_size: int = 1000,
+         buffer_size: int = 500,
+         custom_segmenter: Optional[Callable[[str], List[str]]] = None,
+         quick_start: bool = False,
+         quick_start_min_words: int = 3,
+         quick_start_max_words: int = 15
+     ):
         """
         Initialize the pipeline with configurable parameters.
         Added parameters for dynamic segment size adjustment.

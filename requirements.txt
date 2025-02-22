@@ -69,3 +69,6 @@ g2pk2
 #tts
 samplerate
 fuzzywuzzy
+
+# misaki
+# misaki[zh]

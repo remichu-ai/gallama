@@ -490,7 +490,16 @@ class VoiceConfig(BaseModel):
 
 
 # list of supported backend. None meaning it the api will take backend set from yaml config file
-SUPPORTED_BACKENDS = ["exllama", "llama_cpp", "transformers", "embedding", "faster_whisper", "gpt_sovits", None]
+SUPPORTED_BACKENDS = [
+    "exllama",
+    "llama_cpp",
+    "transformers",
+    "embedding",
+    "faster_whisper",
+    "gpt_sovits",
+    "kokoro",
+    None
+]
 
 class ModelSpec(BaseModel):
     model_id: Optional[str] = Field(description='id of the model which should be the path to the model', default=None)
@@ -578,7 +587,7 @@ class ModelSpec(BaseModel):
             return "llm"
         elif backend in ["faster_whisper"]:
             return "stt"
-        elif backend in ["gpt_sovits"]:
+        elif backend in ["gpt_sovits", "kokoro"]:
             return "tts"
         elif backend in ["embedding"]:
             return "embedding"

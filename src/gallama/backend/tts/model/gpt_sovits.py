@@ -1,6 +1,6 @@
 from ..base import TTSBase
 from .gpt_sovits_source import TTS, TTS_Config
-from typing import Dict, Any, AsyncGenerator, Tuple, AsyncIterator
+from typing import Dict, Any, Tuple, AsyncIterator
 import numpy as np
 import asyncio
 from concurrent.futures import ThreadPoolExecutor

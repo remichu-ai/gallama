@@ -6,6 +6,7 @@ import asyncio
 from ..dependencies import get_video_collection, get_session_config
 from ..logger import logger
 from pydantic import BaseModel
+import os
 import time
 
 try:
@@ -102,7 +103,7 @@ async def video_via_livekit(
 
     return {"message": "Video processing started"}
 
-async def process_video_stream(livekit_url: str, token: str, save_frame: bool):
+async def process_video_stream(livekit_url: str, token: str, save_frame: bool = False):
     """Background task to process the video stream."""
     room = rtc.Room()
     try:
@@ -110,7 +111,7 @@ async def process_video_stream(livekit_url: str, token: str, save_frame: bool):
         session_config = await get_session_config()
 
         if save_frame:
-            save_directory = "./video_frames"
+            save_directory = "/home/remichu/work/ML/gallama/experiment/video_frames"
             os.makedirs(save_directory, exist_ok=True)
 
         frames_per_second = 1
@@ -173,11 +174,13 @@ async def process_video_stream(livekit_url: str, token: str, save_frame: bool):
             logger.info(f"Found existing participant: {participant.identity}")
             for publication in participant.track_publications.values():
                 if (publication.track and
-                    publication.source == rtc.TrackSource.SOURCE_CAMERA):
+                    (publication.source == rtc.TrackSource.SOURCE_CAMERA
+                    or publication.source == rtc.TrackSource.SOURCE_SCREENSHARE)
+                ):
                     asyncio.create_task(process_track(publication.track))
 
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     except asyncio.CancelledError:
         logger.info("Video processing task cancelled")

@@ -66,7 +66,7 @@ class TurnDetectionConfig(BaseModel):
     create_response: bool = True
 
     # gallama specific setting
-    language: Optional[LanguageType] = ["en", "vi"]
+    language: Optional[LanguageType] = ["en", "vi", "zh"]
     factor_prefix_padding_in_truncate: bool = Field(default=True,
                                                     description="Prefix padding will ensure speech start event only emitted "
                                                                 "after certain ms of continuous speak, after which user will send conversation.item.truncate event"
@@ -88,7 +88,7 @@ class SessionConfig(BaseModel):
     input_audio_transcription: Optional[AudioTranscriptionConfig] = None
     turn_detection: Optional[TurnDetectionConfig] = Field(default_factory=TurnDetectionConfig)
     tools: Optional[List[Tool]] = Field(default_factory=list)
-    tool_choice: Optional[Union[ToolChoice, str]] = "auto"
+    tool_choice: Optional[Literal["auto", "none", "required"]] = "auto"
     temperature: Optional[float] = Field(0.4, ge=0.1, le=1.2)
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
 

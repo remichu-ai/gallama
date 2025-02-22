@@ -161,6 +161,16 @@ class ModelManager:
                 model_spec=model_spec,
                 model_object=tts
             )
+        elif model_spec.backend == "kokoro":  # embedding model
+            from gallama.backend.tts import TTSKokoro
+            tts = TTSKokoro(model_spec=model_spec)
+
+            # update dict
+            self._update_model(
+                model_name=model_name,
+                model_spec=model_spec,
+                model_object=tts
+            )
 
         else:
             raise Exception(f"Unknown backend: {model_spec.backend}")

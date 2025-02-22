@@ -85,7 +85,7 @@ async def startup_event():
             await _model.chat_raw(
                 prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
                 # stream=False,
-                max_tokens=100,
+                max_tokens=50,
                 gen_queue=gen_queue,
                 quiet=True,
                 request=None,
