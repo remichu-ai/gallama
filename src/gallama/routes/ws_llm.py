@@ -5,7 +5,7 @@ from collections import OrderedDict
 
 from pydantic.json import pydantic_encoder
 from ..api_response.chat_response import chat_completion_response_stream
-from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item
+from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item, MessageContentServer
 from ..logger import logger
 from ..data_classes.realtime_client_proto import *
 from ..routes.chat import validate_api_request
@@ -35,6 +35,7 @@ from ..data_classes.generation_data_class import (
 from ..data_classes.realtime_client_proto import (
     SessionConfig
 )
+from ..data_classes.video import VideoFrameCollection
 
 
 import json
@@ -83,10 +84,10 @@ class WebSocketSession:
         await dependency_update_session_config(self.session_config)
 
     def convert_conversation_to_chatml(
-        self,
-        session_config: SessionConfig,
-        video_start_time: float = None,
-        video_end_time: float = None,
+            self,
+            session_config: SessionConfig,
+            video_start_time: float = None,
+            video_end_time: float = None,
     ) -> ChatMLQuery:
         """Convert conversation history to ChatML format"""
         messages = []
@@ -140,7 +141,7 @@ class WebSocketSession:
 
         # Convert tools from SessionConfig to ToolSpec format
         tools = None
-        if session_config.tools:
+        if session_config.tools and len(session_config.tools) > 0:
             tools = [
                 ToolSpec(
                     type="function",
@@ -156,7 +157,7 @@ class WebSocketSession:
                 ) for tool in session_config.tools
             ]
 
-        # handling video
+        # Handling video
         video_for_llm = None
         if session_config.video.video_stream:
             video_collection = get_video_collection()
@@ -168,12 +169,31 @@ class WebSocketSession:
 
             logger.info(f"Number of video frames used for LLM: {len(video_for_llm)}")
 
-            # add special token to the last message if there is video
+            # Add special token to the messages if there is video
             if len(video_for_llm) > 0:
                 messages.append(BaseMessage(
-                    role = "user",
-                    content = "{{VIDEO-PlaceHolderTokenHere}}"
+                    role="user",
+                    content="{{VIDEO-PlaceHolderTokenHere}}"
                 ))
+
+                # Get retained video frames
+                retained_video_frames = VideoFrameCollection.get_retained_frames_from_list(
+                    frames=video_for_llm,
+                    retained_video_frames_per_message=session_config.retained_video_frames_per_message,
+                    return_base64=True
+                )
+
+                # Update the last conversation item with the retained frames if possible
+                if retained_video_frames:
+                    last_item = next(reversed(self.conversation_history.values()), None)
+                    if last_item is not None and last_item.type == "message" and last_item.content:
+                        for base64_frame in retained_video_frames:
+                            last_item.content.append(
+                                MessageContentServer(
+                                    type="input_image",
+                                    image=base64_frame,
+                                )
+                            )
 
         max_token_to_use = session_config.max_response_output_tokens if session_config and session_config.max_response_output_tokens != "inf" else None
         query = ChatMLQuery(
@@ -183,20 +203,19 @@ class WebSocketSession:
             stream=True,
             max_tokens=max_token_to_use,
             artifact="No",
-            tools=tools,
-            # tool extra setting
+            tools=tools if tools else None,
+            # tool extra settings
             tool_call_thinking=session_config.tool_call_thinking,
             tool_call_thinking_token=session_config.tool_call_thinking_token,
             tool_instruction_position=session_config.tool_instruction_position,
             tool_schema_position=session_config.tool_schema_position,
-            video=video_for_llm if len(video_for_llm)>0 else None,
-            # tool_choice=session_config.tool_choice
+            video=video_for_llm if video_for_llm and len(video_for_llm) > 0 else None,
         )
 
         return validate_api_request(query)
 
-    async def process_generation_stream(self, gen_queue: GenQueueDynamic, model_name: str, query: ChatMLQuery) -> \
-    AsyncGenerator[dict, None]:
+    async def process_generation_stream(self, gen_queue: GenQueueDynamic, model_name: str, query: ChatMLQuery
+        ) -> AsyncGenerator[dict, None]:
         """Process generation queue and yield response chunks by wrapping chat_completion_response_stream"""
         # Create a mock request object since chat_completion_response_stream expects one
         mock_request = type('MockRequest', (), {'is_disconnected': lambda: False})()

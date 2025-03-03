@@ -161,7 +161,7 @@ async def process_video_stream(livekit_url: str, token: str, save_frame: bool = 
 
         @room.on("track_subscribed")
         def on_track_subscribed(track: rtc.Track, publication: rtc.RemoteTrackPublication, participant: rtc.RemoteParticipant):
-            logger.info(f"Track subscribed: {publication.sid}")
+
             if track.kind == rtc.TrackKind.KIND_VIDEO:
                 asyncio.create_task(process_track(track))
 
@@ -177,6 +177,7 @@ async def process_video_stream(livekit_url: str, token: str, save_frame: bool = 
                     (publication.source == rtc.TrackSource.SOURCE_CAMERA
                     or publication.source == rtc.TrackSource.SOURCE_SCREENSHARE)
                 ):
+                    logger.info(f"Track subscribed: {publication.sid}")
                     asyncio.create_task(process_track(publication.track))
 
         while True:

@@ -1,7 +1,9 @@
-from typing import Optional, Deque, List
+from typing import Optional, Deque, List, Union
 import time
 from PIL import Image
 import io
+from io import BytesIO
+import base64
 from collections import deque
 from ..logger import logger
 
@@ -124,3 +126,53 @@ class VideoFrameCollection:
     def clear(self):
         """Clear all frames from the collection."""
         self.frames.clear()
+
+    @classmethod
+    def get_retained_frames_from_list(
+        cls,
+        frames: List['VideoFrame'],
+        retained_video_frames_per_message: int,
+        return_base64: bool = False,
+    ) -> Union[List['VideoFrame'], List[str]]:
+        """
+        Select a number of frames from the provided list and return them.
+        If return_base64 is True, converts each frame's image to a base64 Data URI
+        (using PNG format), otherwise returns the VideoFrame objects directly.
+        When only one frame is requested, the middle frame is selected.
+        """
+        if not frames:
+            return []
+
+        total_frames = len(frames)
+        if retained_video_frames_per_message >= total_frames:
+            sampled_frames = frames
+        else:
+            if retained_video_frames_per_message == 1:
+                # Select the middle frame
+                middle_index = total_frames // 2
+                sampled_frames = [frames[middle_index]]
+            else:
+                # Evenly sample indices from 0 to total_frames-1.
+                indices = [
+                    int(round(i * (total_frames - 1) / (retained_video_frames_per_message - 1)))
+                    for i in range(retained_video_frames_per_message)
+                ]
+                sampled_frames = [frames[idx] for idx in indices]
+
+        if not return_base64:
+            return sampled_frames
+
+        # Convert each sampled frame to a base64 encoded PNG Data URI
+        base64_frames = []
+        for frame in sampled_frames:
+            # Assuming each VideoFrame has a method get_image() that returns a PIL.Image
+            image = frame.get_image()
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            img_bytes = buffered.getvalue()
+            b64_encoded = base64.b64encode(img_bytes).decode("utf-8")
+            # Format must match: data:image/png;base64,<base64_data>
+            data_uri = f"data:image/png;base64,{b64_encoded}"
+            base64_frames.append(data_uri)
+
+        return base64_frames

@@ -1,6 +1,7 @@
 from typing import AsyncIterator, List, Callable, Optional, Literal
 from ...logger.logger import logger
 from ...data_classes import TTSEvent
+import time
 import asyncio
 
 
@@ -16,18 +17,21 @@ class TextToTextSegment:
 
     def __init__(
         self,
-         segmentation_method: SEGMENTATION_METHODS = "sentence_group",
-         initial_segment_size: int = 1,
-         max_segment_size: int = 4,
-         segment_size_increase_interval: int = 2,  # Number of segments before increasing
-         char_limit: int = 50,
-         min_segment_length: int = 5,
-         max_queue_size: int = 1000,
-         buffer_size: int = 500,
-         custom_segmenter: Optional[Callable[[str], List[str]]] = None,
-         quick_start: bool = False,
-         quick_start_min_words: int = 3,
-         quick_start_max_words: int = 15
+        segmentation_method: SEGMENTATION_METHODS = "sentence_group",
+        initial_segment_size: int = 1,
+        max_segment_size: int = 4,
+        segment_size_increase_interval: int = 2,  # Number of segments before increasing
+        char_limit: int = 50,
+        min_segment_length: int = 3,
+        max_queue_size: int = 1000,
+        buffer_size: int = 500,
+        custom_segmenter: Optional[Callable[[str], List[str]]] = None,
+        quick_start: bool = False,
+        quick_start_min_words: int = 6,
+        quick_start_max_words: int = 15,
+        slow_feed_threshold: float = 4.0,  # words per second
+        fast_feed_threshold: float = 6.0,   # words per second
+        max_flush_wait: float = 1.0  # Maximum time in seconds to wait for a punctuation flush
      ):
         """
         Initialize the pipeline with configurable parameters.
@@ -49,9 +53,20 @@ class TextToTextSegment:
 
         # Quick start parameters
         self.quick_start = quick_start
+        logger.info(f"TTS Quick Start: {self.quick_start}")
         self.quick_start_min_words = quick_start_min_words
         self.quick_start_max_words = quick_start_max_words
         self.first_segment_processed = False
+
+        # Adaptive segment size variables
+        self.last_buffer_update: Optional[float] = None
+        self.last_flush_time: Optional[float] = None
+        self.slow_feed_threshold = slow_feed_threshold
+        self.fast_feed_threshold = fast_feed_threshold
+        self.min_words_for_adjustment = 5  # Only adjust if segment has at least 5 words
+        self.min_interval_for_adjustment = 0.5  # Only adjust if flush interval is at least 0.5 sec
+        self.max_flush_wait = max_flush_wait
+
 
     def _maybe_increase_segment_size(self):
         """
@@ -63,18 +78,68 @@ class TextToTextSegment:
             self.current_segment_size += 1
             logger.info(f"Increased segment size to: {self.current_segment_size}")
 
+    def _adjust_segment_size(self, complete_text: str) -> None:
+        import time
+        now = time.time()
+        num_words = len(complete_text.split())
+
+        # Log the flush event details
+        logger.info(f"Flush event at {now:.2f} with {num_words} words in flushed segment.")
+
+        if self.last_flush_time is not None:
+            interval = now - self.last_flush_time
+            logger.info(f"Time since last flush: {interval:.2f} seconds")
+            # Only adjust if we have enough words and a meaningful interval.
+            if num_words < self.min_words_for_adjustment or interval < self.min_interval_for_adjustment:
+                logger.info("Skipping adjustment due to insufficient words or interval.")
+                self.last_flush_time = now
+                return
+
+            feed_rate = num_words / interval
+            logger.info(
+                f"Computed feed rate: {feed_rate:.2f} words/sec (Segment: {num_words} words over {interval:.2f} sec)")
+
+            # Update moving average feed rate
+            if self.avg_feed_rate is None:
+                self.avg_feed_rate = feed_rate
+            else:
+                self.avg_feed_rate = (
+                        self.smoothing_factor * feed_rate +
+                        (1 - self.smoothing_factor) * self.avg_feed_rate
+                )
+            logger.info(
+                f"Updated avg feed rate: {self.avg_feed_rate:.2f} words/sec (Current segment size: {self.current_segment_size})")
+
+            # Decide whether to adjust the segment size
+            if self.avg_feed_rate < self.slow_feed_threshold and self.current_segment_size > self.initial_segment_size:
+                self.current_segment_size -= 1
+                logger.info(f"Decreased segment size to: {self.current_segment_size}")
+            elif self.avg_feed_rate > self.fast_feed_threshold and self.current_segment_size < self.max_segment_size:
+                self.current_segment_size += 1
+                logger.info(f"Increased segment size to: {self.current_segment_size}")
+        else:
+            logger.info("This is the first flush; initializing last_flush_time and avg_feed_rate.")
+
+        # Update the timestamp for the next flush measurement.
+        self.last_flush_time = now
+
     def _find_quick_start_break(self, text: str) -> int:
-        # First check if we have complete words by looking at word boundaries
+        """
+        Find a quick start break point:
+          - Do not flush immediately upon reaching quick_start_min_words.
+          - Starting from the word after quick_start_min_words up to quick_start_max_words,
+            check if the text forms a complete sentence (i.e. ends with punctuation).
+          - If a natural break is found, return that break point.
+          - Otherwise, once quick_start_max_words is reached, return that boundary.
+        """
         words = text.split()
         if len(words) < self.quick_start_min_words:
             return -1
 
-        # Find actual word boundaries in the original text
+        # Determine word boundaries.
         word_boundaries = []
         start = 0
         in_word = False
-
-        # Find all word boundaries
         for i, char in enumerate(text):
             if char.isspace():
                 if in_word:
@@ -84,33 +149,28 @@ class TextToTextSegment:
                 if not in_word:
                     start = i
                     in_word = True
-
-        # Add last word if it's complete (ends with space or punctuation)
-        if in_word and (len(text) == len(text.rstrip()) or text[-1] in self.PUNCTUATION_MARKS):
+        if in_word:
             word_boundaries.append((start, len(text)))
 
-        # Not enough complete words yet
         if len(word_boundaries) < self.quick_start_min_words:
             return -1
 
-        # Try to find punctuation break at word boundary
-        current_word_count = 0
-        for start, end in word_boundaries:
-            current_word_count += 1
-            if current_word_count > self.quick_start_max_words:
-                # Return the end of previous word boundary
-                return word_boundaries[current_word_count - 2][1]
+        # Look for a natural break only after the minimum word count.
+        natural_break = -1
+        # Start checking from the boundary immediately after quick_start_min_words.
+        for i in range(self.quick_start_min_words, min(len(word_boundaries), self.quick_start_max_words)):
+            candidate_end = word_boundaries[i][1]
+            candidate = text[:candidate_end]
+            if self._is_complete_sentence(candidate):
+                natural_break = candidate_end
+                break
 
-            if text[end - 1] in self.PUNCTUATION_MARKS and current_word_count >= self.quick_start_min_words:
-                return end
+        if natural_break > 0:
+            return natural_break
 
-        # If we have enough words but no punctuation, break at max words
-        if len(word_boundaries) > self.quick_start_max_words:
+        # No natural break found: if we have reached the max word count, flush there.
+        if len(word_boundaries) >= self.quick_start_max_words:
             return word_boundaries[self.quick_start_max_words - 1][1]
-
-        # Use all complete words if between min and max
-        if len(word_boundaries) >= self.quick_start_min_words:
-            return word_boundaries[-1][1]
 
         return -1
 
@@ -131,44 +191,83 @@ class TextToTextSegment:
 
     def _buffer_text(self, text: str) -> str:
         """
-        Buffer incomplete text and return complete sentences.
-        Now handles quick start optimization for first segment.
+        Buffer incoming text and flush only when a complete segment is available.
+        Now holds off flushing incomplete segments until either a punctuation arrives or
+        a maximum wait time has passed since the last buffer update.
         """
-        # Add space if the buffer isn't empty and doesn't end with a space
-        # and the new text doesn't start with a space
-        if (self.text_buffer and
-                not self.text_buffer.endswith(' ') and
-                not text.startswith(' ')):
+        import time
+        current_time = time.time()
+
+        # Update the last buffer update timestamp every time new text is appended.
+        self.last_buffer_update = current_time
+
+        # Add a space if needed between buffered text and new text.
+        if self.text_buffer and not self.text_buffer.endswith(' ') and not text.startswith(' '):
             if any(self.text_buffer.rstrip().endswith(p) for p in self.PUNCTUATION_MARKS | {' '}):
                 self.text_buffer += ' '
         self.text_buffer += text
 
+        # Quick start handling remains unchanged.
         if self.quick_start and not self.first_segment_processed:
             break_point = self._find_quick_start_break(self.text_buffer)
             if break_point > 0:
                 complete_text = self.text_buffer[:break_point]
                 self.text_buffer = self.text_buffer[break_point:].lstrip()
                 self.first_segment_processed = True
+                self.last_flush_time = current_time  # update flush time
                 return complete_text
             elif len(self.text_buffer) > self.max_buffer_size:
                 complete_text = self.text_buffer
                 self.text_buffer = ""
                 self.first_segment_processed = True
+                self.last_flush_time = current_time
                 return complete_text
             return ""
 
-        # Regular buffering logic for subsequent segments
+        # For regular buffering: look for a sentence-ending punctuation.
         break_point = self._find_last_sentence_break(self.text_buffer)
 
         if break_point == -1:
+            # If no punctuation found and the buffer is too large, flush everything.
             if len(self.text_buffer) > self.max_buffer_size:
                 complete_text = self.text_buffer
                 self.text_buffer = ""
+                self.last_flush_time = current_time
                 return complete_text
             return ""
 
+        # A candidate flush segment has been identified.
         complete_text = self.text_buffer[:break_point]
+        word_count = len(complete_text.split())
+
+        # Set thresholds for flushing.
+        min_flush_words = 5  # Only flush if there are at least 5 words.
+        min_flush_interval = 0.3  # Only flush if at least 0.3 seconds have passed since the last flush.
+
+        # Calculate time since last flush; if this is the first flush, use a large value.
+        if self.last_flush_time is None:
+            time_since_last_flush = float('inf')
+        else:
+            time_since_last_flush = current_time - self.last_flush_time
+
+        # If the candidate segment does not end with punctuation (i.e. appears incomplete)
+        # and the time since the last buffer update is less than max_flush_wait, hold off flushing.
+        if not self._is_complete_sentence(complete_text):
+            buffer_wait = current_time - self.last_buffer_update
+            if buffer_wait < self.max_flush_wait:
+                logger.info(
+                    f"Holding flush: segment incomplete (no ending punctuation) and only {buffer_wait:.2f}s since last update."
+                )
+                return ""
+
+        # Also, if the segment is too short and the flush interval is too brief, hold the flush.
+        if word_count < min_flush_words and time_since_last_flush < min_flush_interval:
+            logger.info(f"Hold flush: only {word_count} words and {time_since_last_flush:.2f}s since last flush.")
+            return ""
+
+        # Otherwise, flush the segment.
         self.text_buffer = self.text_buffer[break_point:]
+        self.last_flush_time = current_time
         return complete_text
 
     def _split_by_punctuation(self, text: str) -> List[str]:
@@ -268,7 +367,7 @@ class TextToTextSegment:
         if self.segmentation_method == "sentence_group":
             sentences = self._split_by_punctuation(text)
             segments = self._group_sentences(sentences, self.current_segment_size)
-            self._maybe_increase_segment_size()
+            # self._maybe_increase_segment_size()       # changed to new adaptive rate management
             return segments
 
         elif self.segmentation_method == "char_count":
@@ -315,6 +414,9 @@ class TextToTextSegment:
                 if isinstance(item, str):
                     complete_text = self._buffer_text(item)
                     if complete_text:
+                        # Adjust the segment size based on the flushed text
+                        self._adjust_segment_size(complete_text)
+
                         segments = self.segment_text(complete_text)
                         for segment in segments:
                             logger.debug(f"segment: {segment}")
@@ -325,6 +427,9 @@ class TextToTextSegment:
                     if item.type == "text_end":
                         # Process remaining buffer if any
                         if self.text_buffer:
+                            # Adjust segment size before processing remaining text
+                            self._adjust_segment_size(self.text_buffer)
+
                             segments = self.segment_text(self.text_buffer)
                             for segment in segments:
                                 await self.processing_queue.put(segment)

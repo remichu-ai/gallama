@@ -93,7 +93,6 @@ class SessionConfig(BaseModel):
     max_response_output_tokens: Optional[Union[int, Literal["inf"]]] = "inf"
 
     # extra
-    video: VideoStreamSetting = Field(default_factory=VideoStreamSetting)
     model: Optional[str] = None
 
     # extra for gallama backend
@@ -103,13 +102,20 @@ class SessionConfig(BaseModel):
     output_sample_rate: Optional[int] = Field(description="Sample rate of input audio",default=24000)
 
     # extra argument for gallama tool calling:
-    tool_call_thinking: bool = Field(default= False, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
+    tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
     tool_call_thinking_token: int = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
     tool_instruction_position: Literal["prefix", "postfix"] = (
         Field(default="prefix", description="Position of the general instruction to use tool. prefix for best kv caching"))
     tool_schema_position: Literal["prefix", "postfix"] = (
         Field(default="prefix", description="Position of the schema of individual tools. If tool_schema is unchanged through out, "
                                             "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
+
+    # extra argument for gallama video
+    video: VideoStreamSetting = Field(default_factory=VideoStreamSetting)
+    retained_video_frames_per_message: int = Field(
+        description="number of frame retained per message for old messages", default=1)
+    number_of_message_with_retained_frame: int = Field(
+        description="number of Human messagesthat will have video frame retained", default=10)
 
 
     class Config:
