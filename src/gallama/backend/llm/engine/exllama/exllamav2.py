@@ -466,7 +466,8 @@ class ModelExllama(ModelInterface):
                     if msg.type == "image_url"
                 ]
                 image_list.extend(image_urls)
-                vision_required = bool(image_urls)
+
+        vision_required = True if len(image_list) >0 else False
 
         # Process image embeddings if vision is required
         if vision_required and self.processor:
@@ -567,10 +568,6 @@ class ModelExllama(ModelInterface):
             else:
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
-            if not quiet:
-                logger.info("----------------------Prompt---------------\n" + prompt)
-                logger.debug("----------------------temperature---------\n" + str(temperature))
-
             # Get generation settings
             settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
@@ -610,6 +607,11 @@ class ModelExllama(ModelInterface):
             max_tokens_to_use = min(
                 self.max_seq_len - len(input_ids[0]),
                 max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
+
+
+            if not quiet:
+                logger.info("----------------------Prompt---------------\n" + prompt)
+                logger.debug("----------------------temperature---------\n" + str(temperature))
 
             # Prepare arguments for the job
             argument_list = {

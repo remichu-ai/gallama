@@ -113,7 +113,7 @@ class SessionConfig(BaseModel):
     # extra argument for gallama video
     video: VideoStreamSetting = Field(default_factory=VideoStreamSetting)
     retained_video_frames_per_message: int = Field(
-        description="number of frame retained per message for old messages", default=1)
+        description="number of frame retained per message for old messages", default=2)
     number_of_message_with_retained_frame: int = Field(
         description="number of Human messagesthat will have video frame retained", default=10)
 

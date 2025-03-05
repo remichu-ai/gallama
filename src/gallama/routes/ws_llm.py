@@ -111,6 +111,16 @@ class WebSocketSession:
                             type="text",
                             text=content.text or content.transcript
                         ))
+                    elif content.type == "input_image":
+                        logger.info("-----------------------------------------append images-------------------------------")
+                        logger.info(content.image[:50])
+                        message_content.append(MultiModalImageContent(
+                            type="image_url",
+                            image_url=MultiModalImageContent.ImageDetail(
+                                url=content.image,
+                                detail="high"
+                            )
+                        ))
 
                 messages.append(BaseMessage(
                     role=role,

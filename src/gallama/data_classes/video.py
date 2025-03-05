@@ -141,7 +141,7 @@ class VideoFrameCollection:
         When only one frame is requested, the middle frame is selected.
         """
         if not frames:
-            return []
+            return "" if return_base64 else []
 
         total_frames = len(frames)
         if retained_video_frames_per_message >= total_frames:
