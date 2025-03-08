@@ -33,12 +33,16 @@ from gallama.data_classes import (
     QueueContext,
     GenQueueDynamic,
     VideoFrame,
+    MultiModalTextContent,
+    MultiModalImageContent
 )
 from ....config.config_manager import ConfigManager
 # handle prompting
 from gallama.backend.llm.prompt_engine import PromptEngine
 from dataclasses import dataclass
 
+# video handling
+from ....data_classes import VideoFrameCollection
 
 config_manager = ConfigManager()
 
@@ -130,6 +134,9 @@ class ModelInterface(ABC):
         self.TOOL_THINKING = THINKING_TEMPLATE["tool_necessity_evaluation"]
         self.TOOL_FORCE_THINKING = THINKING_TEMPLATE["tool_forced_evaluation"]
 
+        # standard modalities
+        # this set should contain either "text", "image", "video"
+        self.modalities = {"text"}     # TODO current backend just assume that image is supported
 
     ## *************** the following method must be implemented by each backend ********
     @property
@@ -171,8 +178,79 @@ class ModelInterface(ABC):
     ) -> (str, GenerationStats):
         pass
 
+    @property
+    def support_video(self) -> bool:
+        """
+        whether this backend/ model support concurrent request
+        """
+        return "video" in self.modalities
+
+    @property
+    def video_token_by_backend(self) -> str:
+        return ""
 
     ## ******************************************************************************
+    def validate_video_support(self, query: ChatMLQuery):
+        """
+        Validate if the current model have video support.
+        Convert video frame to base64 images if the current model does not support video.
+        The converted images will be attached to the last message's content.
+        After conversion, the query.video is cleared.
+        """
+        # If no video frames exist, nothing to do.
+        # If no messages, nothing to do
+        # If already support video, nothing to do
+        if not query.video or not query.messages or self.support_video:
+            # add in video token if need to
+            if self.video_token_by_backend:
+                last_message = query.messages[-1]
+
+                if isinstance(last_message.content, str):
+                    last_message.content += self.video_token_by_backend
+                elif isinstance(last_message.content, list):
+                    last_message.content.append(
+                        MultiModalTextContent(type="text", text=self.video_token_by_backend)
+                    )
+
+            return query
+
+        # raise error if image is not support
+        if query.video and "image" not in self.modalities:
+            raise Exception("Error while generating chat response: " + str(e))
+
+        # Convert all video frames to base64-encoded PNG Data URIs.
+        # We assume query.video is a list of VideoFrame objects.
+        logger.debug("Converting video frame to base64 images")
+        base64_images = VideoFrameCollection.convert_frames_to_base64(query.video)
+
+        # If there are messages, update the last message.
+        last_message = query.messages[-1]
+
+        # If the content is a string, convert it into a list.
+        if isinstance(last_message.content, str):
+            # Preserve existing text if any.
+            if last_message.content:
+                last_message.content = [MultiModalTextContent(type="text", text=last_message.content)]
+            else:
+                last_message.content = []
+
+        # Append each base64 image as a new image content.
+        for img in base64_images:
+            last_message.content.append(
+                MultiModalImageContent(
+                    type="image_url",
+                    image_url=MultiModalImageContent.ImageDetail(
+                        url=img,
+                        detail="high"
+                    )
+                )
+            )
+
+        # Remove video frames from the query.
+        query.video = None
+
+        return query
+
     async def chat(
         self,
         query: ChatMLQuery,
@@ -184,6 +262,9 @@ class ModelInterface(ABC):
         """
         This function will route the request to chat with tool or without tool accordingly
         """
+
+        query = self.validate_video_support(query)
+
         if query.tools or query.tool_choice != "none":
             chat_method = self.chat_with_tool_v2    # TODO
         else:
@@ -833,7 +914,6 @@ response(""" + _tool_answer_prefix
         dynamically swap to the best answer by LLM
         This will reduce the wait time from generating sequentially
         """
-        # TODO implement non async version
 
         # tool class have the method to handle converting processing or tool requirement, schema and response
         tool_handler = Tools(

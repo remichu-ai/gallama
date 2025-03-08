@@ -163,19 +163,8 @@ class VideoFrameCollection:
             return sampled_frames
 
         # Convert each sampled frame to a base64 encoded PNG Data URI
-        base64_frames = []
-        for frame in sampled_frames:
-            # Assuming each VideoFrame has a method get_image() that returns a PIL.Image
-            image = frame.get_image()
-            buffered = BytesIO()
-            image.save(buffered, format="PNG")
-            img_bytes = buffered.getvalue()
-            b64_encoded = base64.b64encode(img_bytes).decode("utf-8")
-            # Format must match: data:image/png;base64,<base64_data>
-            data_uri = f"data:image/png;base64,{b64_encoded}"
-            base64_frames.append(data_uri)
 
-        return base64_frames
+        return cls.convert_frames_to_base64(sampled_frames)
 
     @classmethod
     def sample_frames_time_based(cls, frames: List[VideoFrame], interval: int) -> List[VideoFrame]:
@@ -197,3 +186,24 @@ class VideoFrameCollection:
         if frames[-1] not in selected:
             selected.append(frames[-1])
         return selected
+
+    @classmethod
+    def convert_frames_to_base64(cls, frames: List['VideoFrame']) -> List[str]:
+        """
+        Convert a list of VideoFrame objects to a list of base64-encoded PNG Data URIs.
+
+        Args:
+            frames (List[VideoFrame]): The list of video frames to convert.
+
+        Returns:
+            List[str]: A list of Data URIs in the format "data:image/png;base64,<base64_data>".
+        """
+        base64_frames = []
+        for frame in frames:
+            buffered = BytesIO()
+            frame.get_image().save(buffered, format="PNG")
+            img_bytes = buffered.getvalue()
+            b64_encoded = base64.b64encode(img_bytes).decode("utf-8")
+            data_uri = f"data:image/png;base64,{b64_encoded}"
+            base64_frames.append(data_uri)
+        return base64_frames

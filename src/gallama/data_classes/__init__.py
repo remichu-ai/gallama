@@ -22,7 +22,9 @@ from .data_class import (
     ModelDownloadSpec,
     SUPPORTED_BACKENDS,
     ChatCompletionResponse,
-    UsageResponse
+    UsageResponse,
+    MultiModalTextContent,
+    MultiModalImageContent
 )
 
 from .audio_data_class import (

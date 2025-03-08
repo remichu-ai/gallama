@@ -18,7 +18,7 @@ class ContentTypeServer(str, Enum):
 
 class MessageContentServer(BaseModel):
     ## type: Union[Literal["input_text", "input_audio", "text", "item_reference", "audio"], ContentTypeServer]
-    type: Literal["input_text", "input_audio", "text", "item_reference", "audio", "input_image"]
+    type: Literal["input_text", "input_audio", "text", "item_reference", "audio", "input_image", "video_frame"]
     text: Optional[str] = None
     image: Optional[str] = Field(default=None, description="base64 image in format that comply with MultiModalImageContent in data_class")
     audio: Optional[Union[np.ndarray, str]] = None         # bytes audio, this is different to client class

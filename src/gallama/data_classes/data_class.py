@@ -105,6 +105,7 @@ class MultiModalImageContent(BaseModel):
     image_url: ImageDetail
 
 
+
 class BaseMessage(BaseModel):
     role: Literal['system', 'user', 'assistant', 'tool']
     content: Optional[Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]] = ""
@@ -190,7 +191,7 @@ class ChatMLQuery(BaseModel):
     max_tokens: Optional[int] = None
 
     # for video, currently for websocket
-    video: Optional[List[Any]] = None    # Any should -> VideoFrame
+    video: Optional[List[Any]] = None    # TODO to have handling for list of base64 video frame
 
     # not part of openai api
     leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the  generated response")

@@ -235,8 +235,21 @@ class ModelExllama(ModelInterface):
             except:
                 processor = None
 
+        # check if image is supported
+        if processor and processor.preprocess_func:
+            self.modalities.add("image")
+
+        # check if video is supported
+        if processor and processor.video_preprocess_func:
+            self.modalities.add("video")
+
         return model, tokenizer, cache, processor
 
+
+    @property
+    def video_token_by_backend(self) -> str:
+        """ exllama use this specific token for video embedding"""
+        return "{{VIDEO-PlaceHolderTokenHere}}"
 
 
     def generate_eos_tokens_id(self) -> List[int]:
@@ -371,7 +384,7 @@ class ModelExllama(ModelInterface):
         return None
 
     @staticmethod
-    @lru_cache(512)     # TODO set this dynamically
+    @lru_cache(1024)     # TODO set this dynamically
     def get_image_embedding_cached(processor, model, tokenizer, url):
         """
         function to return image embedding for exllama

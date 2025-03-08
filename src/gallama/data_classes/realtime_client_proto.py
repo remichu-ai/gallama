@@ -77,7 +77,8 @@ class VideoStreamSetting(BaseModel):
     video_stream: Optional[bool] = True
     # if video_max_resolution is None, there wont be any rescaling of image
     video_max_resolution: Literal["240p", "360p", "480p", "540p", "720p", "900p", "1080p", None] = "720p"
-    retain_video: Optional[Literal["disable","message_based", "time_based"]] = Field(description="whether to retain images for past message", default="per_second")
+    retain_video: Optional[Literal["disable","message_based", "time_based"]] = Field(
+        description="whether to retain images for past message", default="time_based")
     retain_per_message: int = Field(
         description="number of frame retained per message for old messages", default=1)
     second_per_retain: int = Field(

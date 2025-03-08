@@ -92,6 +92,15 @@ class WebSocketSession:
         """Convert conversation history to ChatML format"""
         messages = []
 
+        # track the number of message retained for past message
+        number_of_retained_frames = 0
+
+        total_user_messages = sum(
+            1 for item in self.conversation_history.values()
+            if item.type == "message" and item.content
+        )
+        user_message_counter = 0
+
         if session_config.instructions != "":
             messages.append(BaseMessage(
                 role="system",
@@ -102,19 +111,23 @@ class WebSocketSession:
             role = item.role.value if hasattr(item, 'role') and item.role else "user"
 
             if item.type == "message" and item.content:
+
+                user_message_counter += 1
                 message_content: List[Union[MultiModalTextContent, MultiModalImageContent]] = []
 
                 for content in item.content:
-                    if content.type in [ContentTypeServer.INPUT_TEXT, ContentTypeServer.TEXT,
-                                        ContentTypeServer.INPUT_AUDIO, ContentTypeServer.AUDIO]:
+                    if content.type in [
+                        ContentTypeServer.INPUT_TEXT,
+                        ContentTypeServer.TEXT,
+                        ContentTypeServer.INPUT_AUDIO,
+                        ContentTypeServer.AUDIO
+                    ]:
                         message_content.append(MultiModalTextContent(
                             type="text",
                             text=content.text or content.transcript
                         ))
                     elif content.type == "input_image":
-                        logger.info(
-                            "-----------------------------------------append images-------------------------------")
-                        logger.info(content.image[:50])
+                        # image are the type that sent by user
                         message_content.append(MultiModalImageContent(
                             type="image_url",
                             image_url=MultiModalImageContent.ImageDetail(
@@ -122,6 +135,18 @@ class WebSocketSession:
                                 detail="high"
                             )
                         ))
+                    elif content.type == "video_frame":
+                        # video frame is prepared by the websocket itself not sent by user
+                        # x2 assuming one user follow by 1 assistant message
+                        if user_message_counter > total_user_messages - (session_config.video.max_message_with_retained_video * 2):
+                            message_content.append(MultiModalImageContent(
+                                type="image_url",
+                                image_url=MultiModalImageContent.ImageDetail(
+                                    url=content.image,
+                                    detail="high"
+                                )
+                            ))
+                            number_of_retained_frames += 1
 
                 messages.append(BaseMessage(
                     role=role,
@@ -178,14 +203,17 @@ class WebSocketSession:
                 video_for_llm = video_collection.get_all_frames()
                 video_collection.clear()
 
+            if number_of_retained_frames >0:
+                logger.info(f"Number of video frames retained for past conversation: {number_of_retained_frames}")
+
             logger.info(f"Number of video frames used for LLM: {len(video_for_llm)}")
 
             if len(video_for_llm) > 0:
-                # Insert a special token indicating that video is available.
-                messages.append(BaseMessage(
-                    role="user",
-                    content="{{VIDEO-PlaceHolderTokenHere}}"
-                ))
+                # # Insert a special token indicating that video is available.
+                # messages.append(BaseMessage(
+                #     role="user",
+                #     content="{{VIDEO-PlaceHolderTokenHere}}"
+                # ))
 
                 # Determine which video retention mode to use.
                 retained_video_frames = []
@@ -194,20 +222,15 @@ class WebSocketSession:
                 elif session_config.video.retain_video == "message_based":
                     retained_video_frames = VideoFrameCollection.get_retained_frames_from_list(
                         frames=video_for_llm,
-                        retained_video_frames_per_message=session_config.video.max_message_with_retained_video,
+                        retained_video_frames_per_message=session_config.video.retain_per_message,
                         return_base64=True
                     )
                 elif session_config.video.retain_video == "time_based":
                     # New mode: use second_per_retain interval sampling.
                     sampled_frames = VideoFrameCollection.sample_frames_time_based(video_for_llm, session_config.video.second_per_retain)
+
                     # Convert sampled frames to base64-encoded PNG Data URIs.
-                    for frame in sampled_frames:
-                        buffered = BytesIO()
-                        frame.get_image().save(buffered, format="PNG")
-                        img_bytes = buffered.getvalue()
-                        b64_encoded = base64.b64encode(img_bytes).decode("utf-8")
-                        data_uri = f"data:image/png;base64,{b64_encoded}"
-                        retained_video_frames.append(data_uri)
+                    retained_video_frames = VideoFrameCollection.convert_frames_to_base64(sampled_frames)
 
                 # Update the last conversation item with the retained video frames if possible.
                 if retained_video_frames:
@@ -216,7 +239,7 @@ class WebSocketSession:
                         for base64_frame in retained_video_frames:
                             last_item.content.append(
                                 MessageContentServer(
-                                    type="input_image",
+                                    type="video_frame",
                                     image=base64_frame,
                                 )
                             )
@@ -240,8 +263,12 @@ class WebSocketSession:
 
         return validate_api_request(query)
 
-    async def process_generation_stream(self, gen_queue: GenQueueDynamic, model_name: str, query: ChatMLQuery
-        ) -> AsyncGenerator[dict, None]:
+    async def process_generation_stream(
+        self,
+        gen_queue: GenQueueDynamic,
+        model_name: str,
+        query: ChatMLQuery
+    ) -> AsyncGenerator[dict, None]:
         """Process generation queue and yield response chunks by wrapping chat_completion_response_stream"""
         # Create a mock request object since chat_completion_response_stream expects one
         mock_request = type('MockRequest', (), {'is_disconnected': lambda: False})()
