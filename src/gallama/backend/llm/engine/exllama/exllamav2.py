@@ -103,6 +103,12 @@ class ModelExllama(ModelInterface):
         super().__init__(model_spec)
         self.model, self.tokenizer, self.cache, self.processor = self.load_model()
 
+    @property
+    def support_concurrency(self) -> bool:
+        """
+        whether this backend/ model support concurrent request
+        """
+        return True
 
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""

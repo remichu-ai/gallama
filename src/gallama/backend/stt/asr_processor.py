@@ -239,6 +239,9 @@ class ASRProcessor:
     def reset_state(self, initial_offset=0):
         """Resets the internal state of the processor."""
         self.audio_buffer.reset()
+        if self.vad_enable:
+            self.vad_audio_buffer.reset()  # Clear the VAD-specific buffer
+
         self.transcript_buffer = HypothesisBuffer()
         self.transcript_buffer.last_committed_time = initial_offset * 1000
         self.committed_transcriptions = []

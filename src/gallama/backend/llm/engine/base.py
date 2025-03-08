@@ -132,6 +132,13 @@ class ModelInterface(ABC):
 
 
     ## *************** the following method must be implemented by each backend ********
+    @property
+    def support_concurrency(self) -> bool:
+        """
+        whether this backend/ model support concurrent request
+        """
+        return False
+
     @abstractmethod
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
@@ -941,58 +948,80 @@ End of Function Calling Instruction
         # ensure result is out for decision
         tool_decision_outcome: Literal["user", "function"] = "function"
 
-        # tool task will always be run. It is assumed that if this function is called, tool generation is required
-        tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
-        tasks.append(tool_task)
+        if self.support_concurrency:
+            # tool task will always be run. It is assumed that if this function is called, tool generation is required
+            tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
+            tasks.append(tool_task)
 
-        # if mode is auto, run the tool usage decision generation
-        if query.tool_choice == "auto":
-            tool_decision_task = asyncio.create_task(self.generate(**tool_decision.generate_kwargs))
-            tasks.append(tool_decision_task)
+            # if mode is auto, run the tool usage decision generation
+            if query.tool_choice == "auto":
+                tool_decision_task = asyncio.create_task(self.generate(**tool_decision.generate_kwargs))
+                tasks.append(tool_decision_task)
 
-            no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
-            tasks.append(no_tool_task)
+                no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
+                tasks.append(no_tool_task)
 
-            tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+                tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
 
 
-        if tool_decision_check_fn(tool_decision_outcome):
-            logger.info("Tool auto decision: function")
+            if tool_decision_check_fn(tool_decision_outcome):
+                logger.info("Tool auto decision: function")
 
-            _has_tool = True
+                _has_tool = True
 
-            # check first if tool managed to generate
-            if tool_call.gen_dynamic_queue[0].qsize() < 3:
-                await asyncio.sleep(0.5)    # wait for 0.5 more second
-
+                # check first if tool managed to generate
                 if tool_call.gen_dynamic_queue[0].qsize() < 3:
-                    _has_tool = False
+                    await asyncio.sleep(0.3)    # wait for 0.3 more second
 
-            if _has_tool:
-                if no_tool:
-                    no_tool.stop_event.set()
+                    if tool_call.gen_dynamic_queue[0].qsize() < 3:
+                        _has_tool = False
 
-                # swap queue for output to function calling
-                gen_queue.swap(tool_call.gen_dynamic_queue[0])
+                if _has_tool:
+                    if no_tool:
+                        no_tool.stop_event.set()
+
+                    # swap queue for output to function calling
+                    gen_queue.swap(tool_call.gen_dynamic_queue[0])
+                else:
+                    # tool not managed to generate, fall back to standard reply
+                    tool_call.stop_event.set()
+
+                    # swap queue non function calling
+                    gen_queue.swap(no_tool.gen_dynamic_queue[0])
+
             else:
-                # tool not managed to generate, fall back to standard reply
-                tool_call.stop_event.set()
+                logger.info("Tool auto decision: user")
+                if tool_call:
+                    tool_call.stop_event.set()
 
                 # swap queue non function calling
                 gen_queue.swap(no_tool.gen_dynamic_queue[0])
 
-        else:
-            logger.info("Tool auto decision: user")
-            if tool_call:
-                tool_call.stop_event.set()
+            # Wait for the remaining tasks to complete (if needed)
+            try:
+                await asyncio.gather(*tasks)
+            except Exception as e:
+                logger.error(f"Error in one of the tasks: {e}")
 
-            # swap queue non function calling
-            gen_queue.swap(no_tool.gen_dynamic_queue[0])
+        else:   # non concurrency backend
+            # first generate what is the decision regarding whether use tool or not
+            tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
+            tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+
+            # handle tool/ non tool generation
+            if tool_decision_check_fn(tool_decision_outcome):
+                logger.info("Tool auto decision: function")
+                tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
+
+                # swap queue for output to function calling
+                gen_queue.swap(tool_call.gen_dynamic_queue[0])
+            else:
+                logger.info("Tool auto decision: user")
+                no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
+
+                # swap queue non function calling
+                gen_queue.swap(no_tool.gen_dynamic_queue[0])
 
 
-        # Wait for the remaining tasks to complete (if needed)
-        try:
-            await asyncio.gather(*tasks)
-        except Exception as e:
-            logger.error(f"Error in one of the tasks: {e}")
+
 

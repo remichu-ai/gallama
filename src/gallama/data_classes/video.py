@@ -176,3 +176,24 @@ class VideoFrameCollection:
             base64_frames.append(data_uri)
 
         return base64_frames
+
+    @classmethod
+    def sample_frames_time_based(cls, frames: List[VideoFrame], interval: int) -> List[VideoFrame]:
+        """
+        Retain one frame every `interval` seconds and always include the last frame.
+        Assumes frames are in chronological order.
+        """
+        if not frames:
+            return []
+        selected = []
+        # Start with the first frame
+        last_selected_time = frames[0].timestamp
+        selected.append(frames[0])
+        for frame in frames[1:]:
+            if frame.timestamp - last_selected_time >= interval:
+                selected.append(frame)
+                last_selected_time = frame.timestamp
+        # Always include the last frame if not already selected
+        if frames[-1] not in selected:
+            selected.append(frames[-1])
+        return selected

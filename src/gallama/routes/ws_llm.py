@@ -84,10 +84,10 @@ class WebSocketSession:
         await dependency_update_session_config(self.session_config)
 
     def convert_conversation_to_chatml(
-            self,
-            session_config: SessionConfig,
-            video_start_time: float = None,
-            video_end_time: float = None,
+        self,
+        session_config: SessionConfig,
+        video_start_time: float = None,
+        video_end_time: float = None,
     ) -> ChatMLQuery:
         """Convert conversation history to ChatML format"""
         messages = []
@@ -112,7 +112,8 @@ class WebSocketSession:
                             text=content.text or content.transcript
                         ))
                     elif content.type == "input_image":
-                        logger.info("-----------------------------------------append images-------------------------------")
+                        logger.info(
+                            "-----------------------------------------append images-------------------------------")
                         logger.info(content.image[:50])
                         message_content.append(MultiModalImageContent(
                             type="image_url",
@@ -167,7 +168,7 @@ class WebSocketSession:
                 ) for tool in session_config.tools
             ]
 
-        # Handling video
+        # Handling video using the updated video settings
         video_for_llm = None
         if session_config.video.video_stream:
             video_collection = get_video_collection()
@@ -179,21 +180,36 @@ class WebSocketSession:
 
             logger.info(f"Number of video frames used for LLM: {len(video_for_llm)}")
 
-            # Add special token to the messages if there is video
             if len(video_for_llm) > 0:
+                # Insert a special token indicating that video is available.
                 messages.append(BaseMessage(
                     role="user",
                     content="{{VIDEO-PlaceHolderTokenHere}}"
                 ))
 
-                # Get retained video frames
-                retained_video_frames = VideoFrameCollection.get_retained_frames_from_list(
-                    frames=video_for_llm,
-                    retained_video_frames_per_message=session_config.retained_video_frames_per_message,
-                    return_base64=True
-                )
+                # Determine which video retention mode to use.
+                retained_video_frames = []
+                if session_config.video.retain_video == "disable":
+                    retained_video_frames = []
+                elif session_config.video.retain_video == "message_based":
+                    retained_video_frames = VideoFrameCollection.get_retained_frames_from_list(
+                        frames=video_for_llm,
+                        retained_video_frames_per_message=session_config.video.max_message_with_retained_video,
+                        return_base64=True
+                    )
+                elif session_config.video.retain_video == "time_based":
+                    # New mode: use second_per_retain interval sampling.
+                    sampled_frames = VideoFrameCollection.sample_frames_time_based(video_for_llm, session_config.video.second_per_retain)
+                    # Convert sampled frames to base64-encoded PNG Data URIs.
+                    for frame in sampled_frames:
+                        buffered = BytesIO()
+                        frame.get_image().save(buffered, format="PNG")
+                        img_bytes = buffered.getvalue()
+                        b64_encoded = base64.b64encode(img_bytes).decode("utf-8")
+                        data_uri = f"data:image/png;base64,{b64_encoded}"
+                        retained_video_frames.append(data_uri)
 
-                # Update the last conversation item with the retained frames if possible
+                # Update the last conversation item with the retained video frames if possible.
                 if retained_video_frames:
                     last_item = next(reversed(self.conversation_history.values()), None)
                     if last_item is not None and last_item.type == "message" and last_item.content:
@@ -214,7 +230,7 @@ class WebSocketSession:
             max_tokens=max_token_to_use,
             artifact="No",
             tools=tools if tools else None,
-            # tool extra settings
+            # Tool extra settings:
             tool_call_thinking=session_config.tool_call_thinking,
             tool_call_thinking_token=session_config.tool_call_thinking_token,
             tool_instruction_position=session_config.tool_instruction_position,

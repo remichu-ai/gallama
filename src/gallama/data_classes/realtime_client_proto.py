@@ -77,6 +77,13 @@ class VideoStreamSetting(BaseModel):
     video_stream: Optional[bool] = True
     # if video_max_resolution is None, there wont be any rescaling of image
     video_max_resolution: Literal["240p", "360p", "480p", "540p", "720p", "900p", "1080p", None] = "720p"
+    retain_video: Optional[Literal["disable","message_based", "time_based"]] = Field(description="whether to retain images for past message", default="per_second")
+    retain_per_message: int = Field(
+        description="number of frame retained per message for old messages", default=1)
+    second_per_retain: int = Field(
+        description="one frame will be retained per this number of seconds", default=3)
+    max_message_with_retained_video: int = Field(
+        description="number of User messages that will have video frame retained", default=10)
 
 
 class SessionConfig(BaseModel):
@@ -112,10 +119,6 @@ class SessionConfig(BaseModel):
 
     # extra argument for gallama video
     video: VideoStreamSetting = Field(default_factory=VideoStreamSetting)
-    retained_video_frames_per_message: int = Field(
-        description="number of frame retained per message for old messages", default=2)
-    number_of_message_with_retained_frame: int = Field(
-        description="number of Human messagesthat will have video frame retained", default=10)
 
 
     class Config:
