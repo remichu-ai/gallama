@@ -1,3 +1,5 @@
+cmake
+samplerate
 packaging
 ninja
 torch>=2.2.0
@@ -33,42 +35,56 @@ qwen_vl_utils
 websockets>=14.1
 scipy
 datamodel-code-generator
+python-multipart
 
 # stt
 silero-vad
 faster-whisper
 
-# gpt_sovits
+#tts
 librosa
 soundfile
 ffmpeg-python
-pytorch-lightning
-gradio  # TODO to remove
-cn2an
-pypinyin
-jieba-fast
-wordsegment
-g2p-en
-matplotlib
+fuzzywuzzy
 LangSegment
-numpy==1.26.4
-ffmpeg-python
-nltk
-opencc
-pyopenjtalk>=0.3.4
-jamo
-ko_pron
-g2pk
-g2pk2
+numpy
+
+kokoro
+misaki
+misaki[en]
+misaki[ja]
+misaki[ko]
+misaki[zh]
+
+
+#livekit for video
+livekit >= 0.20.2
+livekit-protocol
+livekit-agents>=0.12.15
+
+# gpt_sovits
+#pytorch-lightning
+#gradio  # TODO to remove
+#cn2an
+#pypinyin
+#jieba-fast
+#wordsegment
+#g2p-en
+#matplotlib
+#numpy==1.26.4
+#nltk
+#opencc
+#pyopenjtalk>=0.3.4
+#jamo
+#ko_pron
+#g2pk
+#g2pk2
+
 # nltk.download('averaged_perceptron_tagger_eng')
 # sudo apt install ffmpeg
 # cuBLAS
 # https://developer.nvidia.com/cudnn
 # sudo apt-get install portaudio19-dev
 
-#tts
-samplerate
-fuzzywuzzy
 
-# misaki
-# misaki[zh]
+

@@ -41,7 +41,15 @@ from ..data_classes.video import VideoFrameCollection
 import json
 import asyncio
 
-from ..dependencies import get_model_manager, get_video_collection, get_session_config, dependency_update_session_config
+from ..dependencies import (
+    get_model_manager,
+    get_video_collection,
+    get_session_config,
+    dependency_update_session_config,
+    get_record_start_time,
+    get_clear_history_flag,
+    set_clear_history_flag
+)
 
 
 router = APIRouter(prefix="", tags=["llm"])
@@ -73,8 +81,22 @@ class WebSocketSession:
         # job cancelling
         self.stop_event = asyncio.Event()
 
+        # Start background task to monitor the clear history flag.
+        self.monitor_task = asyncio.create_task(self.monitor_clear_history_flag())
+
     def reset(self):
         self.conversation_history = OrderedDict()
+
+    async def monitor_clear_history_flag(self):
+        """Continuously check if clear history flag is set.
+        If it is, reset the conversation history and clear the flag.
+        """
+        while True:
+            await asyncio.sleep(1)  # check every second
+            if get_clear_history_flag():
+                logger.info("Clear history flag detected. Resetting conversation history.")
+                self.reset()
+                set_clear_history_flag(False)
 
     async def update_session_config(self, new_session_config: SessionConfig):
         """Update session config"""
@@ -196,11 +218,14 @@ class WebSocketSession:
         # Handling video using the updated video settings
         video_for_llm = None
         if session_config.video.video_stream:
+            record_start_time = get_record_start_time()
+            logger.info("recording start time: %s", record_start_time)
+
             video_collection = get_video_collection()
             if video_start_time and video_end_time:
                 video_for_llm = video_collection.get_frames_between_timestamps(video_start_time, video_end_time)
             else:
-                video_for_llm = video_collection.get_all_frames()
+                video_for_llm = video_collection.get_all_frames(start_time=record_start_time)
                 video_collection.clear()
 
             if number_of_retained_frames >0:

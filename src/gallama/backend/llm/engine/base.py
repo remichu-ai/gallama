@@ -201,8 +201,8 @@ class ModelInterface(ABC):
         # If no messages, nothing to do
         # If already support video, nothing to do
         if not query.video or not query.messages or self.support_video:
-            # add in video token if need to
-            if self.video_token_by_backend:
+            # add in video token if there is video
+            if query.video and self.video_token_by_backend:
                 last_message = query.messages[-1]
 
                 if isinstance(last_message.content, str):

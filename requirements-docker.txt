@@ -1,0 +1,57 @@
+# this requirements file is meant for the docker image
+packaging
+ninja
+torch==2.6.0
+torchvision
+accelerate
+pydantic
+pillow>=10.0.0
+pytest
+httpx
+uvicorn
+sentence-transformers
+lm-format-enforcer
+huggingface-hub
+chardet
+sse_starlette
+fastapi
+lxml
+infinity-emb[all]
+colorama
+pyyaml
+rich
+pyzmq
+pygments
+httpx
+psutil
+formatron>=0.4.4
+referencing
+qwen_vl_utils
+websockets>=14.1
+scipy
+datamodel-code-generator
+python-multipart
+
+# stt
+silero-vad
+faster-whisper
+
+#tts
+librosa
+soundfile
+ffmpeg-python
+fuzzywuzzy
+LangSegment
+numpy
+
+kokoro
+misaki
+misaki[en]
+misaki[ja]
+misaki[ko]
+misaki[zh]
+
+#livekit for video
+livekit >= 0.20.2
+livekit-protocol
+livekit-agents>=0.12.15

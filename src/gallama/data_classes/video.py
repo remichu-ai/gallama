@@ -75,6 +75,7 @@ class VideoFrameCollection:
     def __init__(self, max_frames: int = 1000):
         self.max_frames = max_frames
         self.frames: Deque[VideoFrame] = deque(maxlen=max_frames)
+        self.last_extraction_time: float = 0
 
     def add_frame(self, frame: VideoFrame, video_max_resolution: Optional[str] = None):
         """
@@ -116,12 +117,42 @@ class VideoFrameCollection:
         self.frames.append(frame)
 
     def get_frames_between_timestamps(self, start_time: float, end_time: float) -> List[VideoFrame]:
-        """Retrieve frames between the specified timestamps."""
-        return [frame for frame in self.frames if start_time <= frame.timestamp <= end_time]
+        """
+        Retrieve frames between the specified timestamps.
+        Also update the extraction tracker to the latest extracted frame timestamp.
+        """
+        frames_in_range = [frame for frame in self.frames if start_time <= frame.timestamp <= end_time]
+        if frames_in_range:
+            # Update the tracker to the timestamp of the last extracted frame.
+            self.last_extraction_time = frames_in_range[-1].timestamp
+        return frames_in_range
 
-    def get_all_frames(self) -> List[VideoFrame]:
-        """Retrieve all frames in the collection."""
-        return list(self.frames)
+    def get_all_frames(self, start_time: float = 0, only_since_last: bool = True) -> List[VideoFrame]:
+        """
+        Retrieve all frames in the collection.
+
+        Args:
+            only_since_last (bool): If True, returns only frames with a timestamp greater
+                                    than the last extraction time. Otherwise, returns all frames.
+
+        Also updates the tracker to the timestamp of the last extracted frame.
+        """
+
+        start_time_to_use = max(
+            start_time,
+            self.last_extraction_time if only_since_last else 0
+        )
+        logger.info(f"start time is {start_time_to_use}")
+
+        if start_time_to_use:
+            frames_to_return = [frame for frame in self.frames if frame.timestamp > start_time_to_use]
+        else:
+            frames_to_return = list(self.frames)
+
+        if frames_to_return:
+            # Update the tracker to the last frame's timestamp from the returned list.
+            self.last_extraction_time = frames_to_return[-1].timestamp
+        return frames_to_return
 
     def clear(self):
         """Clear all frames from the collection."""

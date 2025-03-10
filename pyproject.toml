@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gallama"
-version = "0.0.8post1"
+version = "0.0.9"
 description = "An opinionated Llama Server engine with a focus on agentic tasks"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}

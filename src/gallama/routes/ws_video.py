@@ -3,7 +3,7 @@ from ..data_classes import VideoFrame
 from typing import Dict
 import struct
 import asyncio
-from ..dependencies import get_video_collection, get_session_config
+from ..dependencies import get_video_collection, get_session_config, set_record_start_time, set_clear_history_flag
 from ..logger import logger
 from pydantic import BaseModel
 import os
@@ -190,3 +190,21 @@ async def process_video_stream(livekit_url: str, token: str, save_frame: bool = 
         logger.error(f"Video processing failed: {e}")
         await room.disconnect()
         raise
+
+
+class RecordTiming(BaseModel):
+    start_time: float
+
+@router.post("/v1/record_start_time")
+async def record_start_time(
+    new_time: RecordTiming,
+):
+    """ set the start recording time"""
+    logger.info(f"set recording start time {new_time.start_time}")
+    set_record_start_time(new_time.start_time)
+
+@router.post("/v1/clear_history")
+async def clear_history():
+    """ set the start recording time"""
+    logger.info(f"clear conversation history")
+    set_clear_history_flag(True)

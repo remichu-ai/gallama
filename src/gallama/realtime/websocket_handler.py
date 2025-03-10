@@ -59,7 +59,8 @@ class WebSocketMessageHandler:
 
             # response
             "response.create": self._response_create,
-            "response.cancel": self._response_cancel
+            "response.cancel": self._response_cancel,
+
         }
 
     async def initialize_connection(self):
