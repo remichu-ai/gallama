@@ -39,7 +39,10 @@ def get_response_tool_uid():
     return "call_" + str(uuid.uuid4().hex)
 
 
-def get_token_length(tokenizer, text):
+def get_token_length(tokenizer, text) -> int:
+    if tokenizer is None:   # mlx_vlm currently doesnt check token length
+        return 0
+
     str_text = text
     if not isinstance(text, str):
         str_text = str(text)

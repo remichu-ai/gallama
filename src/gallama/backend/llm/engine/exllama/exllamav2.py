@@ -18,7 +18,8 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
-    GenQueueDynamic, VideoFrame
+    GenQueueDynamic,
+    VideoFrame
 )
 from gallama.utils.utils import get_image
 
@@ -80,12 +81,19 @@ except ImportError:
     create_formatter_filter = None
 
 # format enforcement with lmfe
-from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
-from lmformatenforcer.integrations.exllamav2 import (
-    ExLlamaV2TokenEnforcerFilter,
-    build_token_enforcer_tokenizer_data
-)
-from lmformatenforcer import JsonSchemaParser
+try:
+    from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+    from lmformatenforcer.integrations.exllamav2 import (
+        ExLlamaV2TokenEnforcerFilter,
+        build_token_enforcer_tokenizer_data
+    )
+    from lmformatenforcer import JsonSchemaParser
+except ImportError:
+    TokenEnforcerTokenizerData = None
+    ExLlamaV2TokenEnforcerFilter = None
+    build_token_enforcer_tokenizer_data = None
+    JsonSchemaParser = None
+
 try:
     # lm format enforcer does not work correctly without update with latest api from exllama
     # this wrapper class aim as stop gap solution and formatron is recommended instead
@@ -550,7 +558,7 @@ class ModelExllama(ModelInterface):
         gen_type: Union[str, GenStart] = "text",  # the generated result will be stored in this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        formatter: Optional[Union[FormatterBuilder, TokenEnforcerTokenizerData]] = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,

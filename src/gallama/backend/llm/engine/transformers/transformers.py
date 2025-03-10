@@ -1,4 +1,4 @@
-from gallama.backend.llm.engine.base import ModelInterface
+from ..base import ModelInterface
 from typing import Optional, Dict, List, Union
 import transformers
 import time                                 # for compute of generation time
@@ -29,7 +29,7 @@ except ImportError:
     build_transformers_prefix_allowed_tokens_fn = None
 
 
-from gallama.backend.llm.engine.transformers.model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
+from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
 
 
 from gallama.utils import is_flash_attention_installed
@@ -44,6 +44,7 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
+    GenQueueDynamic
 )
 
 class ModelTransformers(ModelInterface):
@@ -256,17 +257,26 @@ class ModelTransformers(ModelInterface):
 
         # make gen_queue to List[QueueContext] for standardize downstream handling
         gen_queue_list = None
-        if isinstance(gen_queue, QueueContext):
+        # Convert gen_queue to List[GenQueueDynamic] format to standardize downstream handling
+        gen_queue_list = []
+        if isinstance(gen_queue, GenQueueDynamic):
             gen_queue_list = [gen_queue]
         elif isinstance(gen_queue, GenQueue):
-            gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+            # Wrap the GenQueue in a GenQueueDynamic
+            gen_queue_list = [GenQueueDynamic(existing_queue=gen_queue, include_GenStats=True, include_GenEnd=True)]
         elif isinstance(gen_queue, list):
-            gen_queue_list = gen_queue
-            # TODO add validation
-            # if any(not isinstance(g_queue, QueueContext) for g_queue in gen_queue_list):
-            #     raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+            # Ensure all items in the list are GenQueueDynamic objects
+            for queue in gen_queue:
+                if isinstance(queue, GenQueueDynamic):
+                    gen_queue_list.append(queue)
+                elif isinstance(queue, GenQueue):
+                    # Wrap the GenQueue in a GenQueueDynamic
+                    gen_queue_list.append(
+                        GenQueueDynamic(existing_queue=queue, include_GenStats=True, include_GenEnd=True))
+                else:
+                    raise TypeError("gen_queue list must contain only GenQueue or GenQueueDynamic objects")
         else:
-            raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+            raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
         # vision support
         image_inputs, video_inputs = None, None
@@ -323,8 +333,6 @@ class ModelTransformers(ModelInterface):
             else:
                 prefix_allowed_tokens_fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, formatter)
 
-        start_time = time.time()
-
         # find stop conditions
         stop_word_to_return = ""
         if stop_words:
@@ -354,12 +362,13 @@ class ModelTransformers(ModelInterface):
             gen_type_str = gen_type.gen_type  # get out the generation type in str format
 
         for g_queue in gen_queue_list:
-            g_queue.get_queue().put_nowait(gen_type)
+            g_queue.put_nowait(gen_type)
 
         # Create a task to check for disconnection
         # pass
 
         # generate
+        start_time = time.time()
         generate_text = await self._run_generation(
             input_ids=input_ids,
             logits_processor=logits_processor,
@@ -374,18 +383,16 @@ class ModelTransformers(ModelInterface):
             gen_type_str=gen_type_str,
         )
 
-        start_time = time.time()
-
         duration = time.time() - start_time
 
         gen_stats = GenerationStats()
         for g_queue in gen_queue_list:
             if g_queue.include_GenStats:
-                g_queue.get_queue().put_nowait(gen_stats)
+                g_queue.put_nowait(gen_stats)
 
         # this to signal the end of generation
         for g_queue in gen_queue_list:
             if g_queue.include_GenEnd:
-                g_queue.get_queue().put_nowait(GenEnd())
+                g_queue.put_nowait(GenEnd())
 
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)

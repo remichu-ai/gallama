@@ -495,6 +495,7 @@ SUPPORTED_BACKENDS = [
     "exllama",
     "llama_cpp",
     "transformers",
+    "mlx_vlm",
     "embedding",
     "faster_whisper",
     "gpt_sovits",
@@ -584,7 +585,7 @@ class ModelSpec(BaseModel):
     def get_model_type_from_backend(cls, backend: str = None):
         if backend is None:
             return None
-        elif backend in ["exllama", "llama_cpp", "transformers"]:
+        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm"]:
             return "llm"
         elif backend in ["faster_whisper"]:
             return "stt"

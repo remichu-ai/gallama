@@ -186,6 +186,10 @@ class ModelInterface(ABC):
         return "video" in self.modalities
 
     @property
+    def support_format_enforcer(self) -> bool:
+        return True
+
+    @property
     def video_token_by_backend(self) -> str:
         return ""
 

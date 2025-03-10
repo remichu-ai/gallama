@@ -16,3 +16,8 @@ try:
     from .engine import ModelTransformers
 except ImportError:
     ModelTransformers = None
+
+# try:
+from .engine import ModelMLXVLM
+# except ImportError:
+#     ModelMLXVLM = None

@@ -1,4 +1,4 @@
-from gallama.backend.llm.engine.base import ModelInterface
+from ..base import ModelInterface
 from typing import Optional, Dict, List, Union
 from fastapi import Request                 # for type hint
 import time
@@ -42,6 +42,7 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
+    GenQueueDynamic
 )
 from gallama.logger.logger import logger
 
@@ -145,7 +146,7 @@ class ModelLlamaCpp(ModelInterface):
             for g_queue in gen_queue_list:
                 # g_queue.get_queue().put_nowait(chunk_text)
                 future = asyncio.run_coroutine_threadsafe(
-                    g_queue.get_queue().put(chunk_text),
+                    g_queue.put(chunk_text),
                     loop
                 )
                 future.result()
@@ -157,7 +158,7 @@ class ModelLlamaCpp(ModelInterface):
             for g_queue in gen_queue_list:
                 # g_queue.get_queue().put_nowait(chunk_text)
                 future = asyncio.run_coroutine_threadsafe(
-                    g_queue.get_queue().put(chunk_text),
+                    g_queue.put(chunk_text),
                     loop
                 )
                 future.result()
@@ -192,15 +193,26 @@ class ModelLlamaCpp(ModelInterface):
         #     self.pipeline = await self._get_pipeline_async()
 
         # make gen_queue to List[QueueContext] for standardize downstream handline
-        gen_queue_list = None
-        if isinstance(gen_queue, QueueContext):
+        # Convert gen_queue to List[GenQueueDynamic] format to standardize downstream handling
+        gen_queue_list = []
+        if isinstance(gen_queue, GenQueueDynamic):
             gen_queue_list = [gen_queue]
         elif isinstance(gen_queue, GenQueue):
-            gen_queue_list = [QueueContext.create(gen_queue, include_GenEnd=True, include_GenStats=True)]
+            # Wrap the GenQueue in a GenQueueDynamic
+            gen_queue_list = [GenQueueDynamic(existing_queue=gen_queue, include_GenStats=True, include_GenEnd=True)]
         elif isinstance(gen_queue, list):
-            gen_queue_list = gen_queue
+            # Ensure all items in the list are GenQueueDynamic objects
+            for queue in gen_queue:
+                if isinstance(queue, GenQueueDynamic):
+                    gen_queue_list.append(queue)
+                elif isinstance(queue, GenQueue):
+                    # Wrap the GenQueue in a GenQueueDynamic
+                    gen_queue_list.append(
+                        GenQueueDynamic(existing_queue=queue, include_GenStats=True, include_GenEnd=True))
+                else:
+                    raise TypeError("gen_queue list must contain only GenQueue or GenQueueDynamic objects")
         else:
-            raise Exception("gen_queue must be either a GenQueue, QueueContext or a list of QueueContext")
+            raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
         # convert prompt to token id
         input_ids = self.tokenizer.tokenize(prompt.encode("utf-8"), add_bos=False)
@@ -241,7 +253,6 @@ class ModelLlamaCpp(ModelInterface):
                                                      4096
                                                      )
 
-        # kickstart the generation and let down stream know gen type
         # kick-start the generation and let down stream know gen type
         if isinstance(gen_type, str):
             gen_type_str = gen_type
@@ -252,7 +263,7 @@ class ModelLlamaCpp(ModelInterface):
         for g_queue in gen_queue_list:
             # g_queue.get_queue().put_nowait(gen_type)
             future = asyncio.run_coroutine_threadsafe(
-                g_queue.get_queue().put(gen_type),
+                g_queue.put(gen_type),
                 loop
             )
             future.result()
@@ -275,7 +286,7 @@ class ModelLlamaCpp(ModelInterface):
             if g_queue.include_GenStats:
                 # g_queue.get_queue().put_nowait(gen_stats)
                 future = asyncio.run_coroutine_threadsafe(
-                    g_queue.get_queue().put(gen_stats),
+                    g_queue.put(gen_stats),
                     loop
                 )
                 future.result()
@@ -286,7 +297,7 @@ class ModelLlamaCpp(ModelInterface):
             if g_queue.include_GenEnd:
                 # g_queue.get_queue().put_nowait(GenEnd())
                 future = asyncio.run_coroutine_threadsafe(
-                    g_queue.get_queue().put(GenEnd()),
+                    g_queue.put(GenEnd()),
                     loop
                 )
                 future.result()
