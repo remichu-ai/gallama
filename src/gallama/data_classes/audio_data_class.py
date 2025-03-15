@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, Dict, Any, Tuple
 from fastapi import Query
 
 
@@ -119,8 +119,9 @@ class TranscriptionResponse(BaseModel):
     )
     duration: Optional[float] = Field(default=None, description="The duration of the audio in seconds.")
     text: str = Field(description="The transcription text.")
-    words: Optional[List[dict]] = Field(default=None, description="Word-level timestamps, if requested.")
-    segments: Optional[List[dict]] = Field(default=None, description="Segment-level timestamps, if requested.")
+    # TODO to move to use only Dict
+    words: Optional[List[Union[Dict[Any, Any], Tuple]]] = Field(default=None, description="Word-level timestamps, if requested.")
+    segments: Optional[List[Dict[Any, Any]]] = Field(default=None, description="Segment-level timestamps, if requested.")
 
 
 # class for coding

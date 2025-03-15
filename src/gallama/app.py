@@ -32,6 +32,8 @@ from gallama.routes import (
     ws_tts_router,
     ws_video_router
 )
+from tempfile import SpooledTemporaryFile
+
 # Add this after your imports to clear logging from 3rd party module
 
 #streaming example
@@ -194,33 +196,32 @@ def make_server(args):
     @app.middleware("https")
     async def log_requests(request: Request, call_next):
         try:
-            # Log request details for specific methods
-            if request.method in ("POST", "PUT", "PATCH"):
-                # Parse body and preserve it
-                body_content, is_multipart = await parse_request_body(request)
-
-                # Format content for logging
-                if is_multipart:
-                    request_content = "Multipart Form Data (File Upload)"
-                elif isinstance(body_content, dict):
-                    request_content = json.dumps(body_content, indent=2)
-                elif isinstance(body_content, str):
-                    try:
-                        parsed_content = json.loads(body_content)
-                        request_content = json.dumps(parsed_content, indent=2)
-                    except json.JSONDecodeError:
-                        request_content = body_content
-                else:
-                    request_content = str(body_content)
-
-                logger.debug(
-                    f"API Request:\n"
-                    f"Method: {request.method}\n"
-                    f"URL: {request.url}\n"
-                    f"Headers: {dict(request.headers)}\n"
-                    f"Content-Type: {request.headers.get('content-type', 'Not specified')}\n"
-                    f"Body: {request_content if request_content else 'No Body'}"
-                )
+            # if request.method in ("POST", "PUT", "PATCH"):
+            #     # Parse body and preserve it
+            #     body_content, is_multipart = await parse_request_body(request)
+            #
+            #     # Handle file uploads explicitly
+            #     if is_multipart or isinstance(body_content, SpooledTemporaryFile):
+            #         request_content = "File upload content not logged"
+            #     elif isinstance(body_content, dict):
+            #         request_content = json.dumps(body_content, indent=2)
+            #     elif isinstance(body_content, str):
+            #         try:
+            #             parsed_content = json.loads(body_content)
+            #             request_content = json.dumps(parsed_content, indent=2)
+            #         except json.JSONDecodeError:
+            #             request_content = body_content
+            #     else:
+            #         request_content = str(body_content)
+            #
+            #     logger.debug(
+            #         f"API Request:\n"
+            #         f"Method: {request.method}\n"
+            #         f"URL: {request.url}\n"
+            #         f"Headers: {dict(request.headers)}\n"
+            #         f"Content-Type: {request.headers.get('content-type', 'Not specified')}\n"
+            #         f"Body: {request_content if request_content else 'No Body'}"
+            #     )
 
             # Proceed with the request
             response = await call_next(request)

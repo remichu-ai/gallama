@@ -498,6 +498,7 @@ SUPPORTED_BACKENDS = [
     "mlx_vlm",
     "embedding",
     "faster_whisper",
+    "mlx_whisper",
     "gpt_sovits",
     "kokoro",
     None
@@ -587,7 +588,7 @@ class ModelSpec(BaseModel):
             return None
         elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm"]:
             return "llm"
-        elif backend in ["faster_whisper"]:
+        elif backend in ["faster_whisper", "mlx_whisper"]:
             return "stt"
         elif backend in ["gpt_sovits", "kokoro"]:
             return "tts"

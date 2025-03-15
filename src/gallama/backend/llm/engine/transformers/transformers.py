@@ -105,7 +105,6 @@ class ModelTransformers(ModelInterface):
 
 
         # determine the class to use for loading
-        logger.info("frog")
         logger.info(self.backend_extra_args)
         if self.backend_extra_args.get('model_class'):
             model_class = get_class(self.backend_extra_args['model_class'])

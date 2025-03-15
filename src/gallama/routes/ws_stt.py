@@ -118,6 +118,11 @@ class TranscriptionConnectionManager:
         # Reset the ASR processor state
         connection.asr_processor.reset_state()
 
+        # set transcription streaming mode
+        connection.streaming_mode = config_update.config.streaming_transcription
+
+        connection.reset_buffers()
+
         # Send confirmation back to the client
         response = WSInterSTTResponse(type="stt.config_updated")
         await websocket.send_json(response.model_dump())
@@ -402,6 +407,7 @@ async def websocket_endpoint(
 
         while True:
             data = await websocket.receive_json()
+            # standardize message
             if "stt." in data["type"]:
                 message = WSInterSTT.model_validate(data)
             elif "common.config_update" in data["type"]:
@@ -409,6 +415,7 @@ async def websocket_endpoint(
             elif "common.cleanup" in data["type"]:
                 message = WSInterCleanup.model_validate(data)
 
+            # handling message
             if message.type == "stt.add_sound_chunk" and message.sound:
                 audio_bytes = base64.b64decode(message.sound)
                 await manager.process_audio_chunk(websocket, audio_bytes, is_final=False)

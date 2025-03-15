@@ -153,6 +153,20 @@ class ModelManager:
                 model_object=stt
             )
 
+        elif model_spec.backend == "mlx_whisper":  # embedding model
+            from gallama.backend.stt import ASRProcessor, ASRMLXWhisper
+
+            stt_base = ASRMLXWhisper(model_spec=model_spec)
+
+            stt = ASRProcessor(asr=stt_base)
+
+            # update dict
+            self._update_model(
+                model_name=model_name,
+                model_spec=model_spec,
+                model_object=stt
+            )
+
         elif model_spec.backend == "gpt_sovits":  # embedding model
             from gallama.backend.tts import TTS_GPT_SoVITS
             tts = TTS_GPT_SoVITS(model_spec=model_spec)

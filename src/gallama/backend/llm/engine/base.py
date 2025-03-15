@@ -146,6 +146,13 @@ class ModelInterface(ABC):
         """
         return False
 
+    @property
+    def support_tool(self) -> bool:
+        """
+        whether this backend/ model support format enforcement for tool
+        """
+        return True
+
     @abstractmethod
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
@@ -269,10 +276,17 @@ class ModelInterface(ABC):
 
         query = self.validate_video_support(query)
 
-        if query.tools or query.tool_choice != "none":
-            chat_method = self.chat_with_tool_v2    # TODO
+        # set the suitable method for tool calling
+        if (query.tools or query.tool_choice != "none") and self.support_tool:
+            chat_method = self.chat_with_tool_v2
         else:
+            # enforce tool_choice to none if it is backend issue
+            if not self.support_tool:
+                logger.info("Tool not supported for this backend")
+                query.tool_choice = "none"
+
             chat_method = self.chat_no_tool
+
         try:
             await chat_method(
                 query=query,
@@ -312,7 +326,7 @@ class ModelInterface(ABC):
             stop_event=stop_event,
         )
 
-    def validate_token_length(self, token_length):
+    def validate_token_length(self, token_length: int):
         """
         validate that token_length is within max sequence length
         """

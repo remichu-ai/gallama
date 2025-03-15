@@ -43,18 +43,28 @@ class ModelMLXVLM(ModelInterface):
 
         self.model, self.tokenizer, self.processor = self.load_model()
 
+    @property
+    def support_tool(self) -> bool:
+        """
+        Currently no format enforcement
+        """
+        return False
 
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
 
         model, processor = load(path_or_hf_repo=self.model_id)
+        config = load_config(model_path=self.model_id)
+
+        # set max_seq_len
+        self.max_seq_len = config.get('max_position_embeddings')
 
         # load draft model
         if self.draft_model_id is not None:
             raise "Draft model currently not supported for mlx vllm backend"
 
         self.eos_token_ids = self.generate_eos_tokens_id()
-        return model, None, processor
+        return model, processor.tokenizer, processor
 
 
     def generate_eos_tokens_id(self) -> List[int]:
@@ -92,7 +102,7 @@ class ModelMLXVLM(ModelInterface):
                 'max_tokens': max_tokens,
                 'temperature': temperature,
                 'top_p': top_p,
-                'repetition_penalty': 1.05,
+                'repetition_penalty': 1.1,
             }
         )
 
@@ -211,7 +221,8 @@ class ModelMLXVLM(ModelInterface):
         #         return_tensors="pt",
         #     )
 
-        # self.validate_token_length(len(input_ids))
+        input_ids = self.tokenizer.encode(prompt)
+        self.validate_token_length(len(input_ids))
 
         # # format enforcer
         # logits_processor = None
@@ -240,11 +251,9 @@ class ModelMLXVLM(ModelInterface):
         # else:
         #     stop_conditions = self.eos_token_str
 
-        # max_tokens_to_use = min(
-        #     self.max_seq_len - len(input_ids),
-        #     max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids), 4096)
-        max_tokens_to_use = max_tokens or 4096
-
+        max_tokens_to_use = min(
+            self.max_seq_len - len(input_ids),
+            max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids), 4096)
 
         # kickstart the generation and let down stream know gen type
         if isinstance(gen_type, str):

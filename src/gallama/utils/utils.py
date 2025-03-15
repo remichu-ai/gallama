@@ -40,8 +40,6 @@ def get_response_tool_uid():
 
 
 def get_token_length(tokenizer, text) -> int:
-    if tokenizer is None:   # mlx_vlm currently doesnt check token length
-        return 0
 
     str_text = text
     if not isinstance(text, str):

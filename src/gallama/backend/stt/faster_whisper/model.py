@@ -1,7 +1,6 @@
 from ..base import ASRBase
-from ....data_classes import TimeStampedWord
 from ....logger import logger
-from ....data_classes import ModelSpec, TranscriptionResponse, LanguageType
+from ....data_classes import ModelSpec, TranscriptionResponse, LanguageType, TimeStampedWord
 
 import dataclasses
 from typing import Literal, List, Union, BinaryIO, Tuple
@@ -199,7 +198,7 @@ class ASRFasterWhisper(ASRBase):
             )
 
 
-    def segment_to_timestamped_words(self, segments: List[Segment]) -> List[TimeStampedWord]:
+    def segment_to_timestamped_words(self, segments: List[Segment]) -> List[Tuple]:
         """
         Converts a list of segments into a list of word-level timestamps.
 

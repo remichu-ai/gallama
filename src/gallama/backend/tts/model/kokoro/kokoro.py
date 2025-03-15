@@ -144,7 +144,6 @@ class TTSKokoro(TTSBase):
                     ** kwargs
                 )
             else:
-                logger.debug("Frog FROG multiple languages")
                 # example of each item in text_segmented_by_lan:
                 # {'lang': 'zh', 'text': '我喜欢在雨天里听音乐。\n', 'score': 1.0}
                 for _lang, _text, _score in text_segmented_by_lan:
@@ -160,7 +159,7 @@ class TTSKokoro(TTSBase):
                         sample_rate = None
 
                         for segment in text_segmented_by_lan:
-                            lang = segment['lang'] if segement['score'] > 0.5 else "en"
+                            lang = segment['lang'] if segment['score'] > 0.5 else "en"
                             seg_text = segment['text']
                             if not seg_text.strip():
                                 continue
