@@ -11,7 +11,7 @@ from ...data_classes import TranscriptionResponse, LanguageType
 from ...data_classes.realtime_client_proto import TurnDetectionConfig
 from .audio_buffer import AudioBufferWithTiming
 from .vad import VADProcessor
-from ...logger import logger
+from gallama.logger import logger
 
 
 class ASRProcessor:
@@ -227,8 +227,10 @@ class ASRProcessor:
             if self.vad_audio_buffer is None:
                 self.vad_audio_buffer = AudioBufferWithTiming(sample_rate=self.SAMPLING_RATE)
             self.initialize_vad(self.vad_config)
+            self.vad_enable = True
         else:
             self.vad = None
+            self.vad_enable = False
 
         # Reset VAD state tracking
         self.vad_speech_active = False

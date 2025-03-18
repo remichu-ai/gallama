@@ -168,6 +168,29 @@ Gemma2:
   leading_prompt_token: '<start_of_turn>model\n'
   eos_token_list: ["<bos>", "<eos>", "<start_of_turn>", "<end_of_turn>"]
 
+
+Gemma3:
+  system_msg_enabled: false
+  tool_enabled: false
+  conversation_start: '<bos>'
+  conversation_end: ''
+  system_start: ''
+  system_end: ''
+  user_start: '<start_of_turn>user\n'
+  user_end: '<end_of_turn>\n'
+  assistant_start: '<start_of_turn>model\n'
+  assistant_end: '<end_of_turn>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  vision_start: '<start_of_image>'
+  vision_end: '<end_of_image>'
+  image_pad: '<image_soft_token>'
+  video_pad: ''
+  leading_prompt_token: '<start_of_turn>model\n'
+  eos_token_list: ["<bos>", "<eos>", "<start_of_turn>", "<end_of_turn>"]
+
 Phi3:
   system_msg_enabled: false
   tool_enabled: false

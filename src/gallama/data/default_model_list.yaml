@@ -243,6 +243,26 @@ gemma-2-27B:
       branch: ['3.0bpw', '3.5bpw', '4.0bpw', '4.5bpw', '5.0bpw', '6.0bpw', '8.0bpw']
       quant: [3.0, 3.5, 4.0, 4.5, 5.0, 6.0, 8.0]
       backend: exllama
+gemma-3-27B:
+  remark: "v2"
+  default_quant: 5.0
+  default_cache_quant: Q6
+  prompt_template: Gemma2
+  repo:
+    - repo: "turboderp/gemma-3-27b-it-exl2"
+      branch: ['3.0bpw', '4.0bpw', '5.0bpw', '6.0bpw']
+      quant: [3.0, 4.0, 5.0, 6.0]
+      backend: exllama
+gemma-3-27B:
+  remark: "v2"
+  default_quant: 5.0
+  default_cache_quant: Q6
+  prompt_template: Gemma2
+  repo:
+    - repo: "turboderp/gemma-3-27b-it-exl2"
+      branch: ['3.0bpw', '4.0bpw', '5.0bpw', '6.0bpw']
+      quant: [3.0, 4.0, 5.0, 6.0]
+      backend: exllama
 qwen-2-1.5B:
   remark: "v2"
   default_quant: 4.0

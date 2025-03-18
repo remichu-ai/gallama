@@ -96,18 +96,21 @@ class ASRFasterWhisper(ASRBase):
         words=None,
         temperature=0.0)
         """
+        if language:
+            logger.info(f"language is set to {language}")
 
         # using default parameters mostly
         language = language if language else self.original_language
-        if language == "auto":
-            language = None
-
         if isinstance(language, list) and len(language) == 1:
             language = language[0]
+
+        if language == "auto":
+            language = None
 
         # transcription for multilinguage with restrictred set of lanaguage
         if isinstance(language, list) and len(language) > 1:
             _language, _language_probability, all_language_probs = self.model.detect_language(audio=audio)
+            logger.info("allowed language list: %s", language)
             if _language in language:
                 most_probable_language = _language
             else:
@@ -171,8 +174,6 @@ class ASRFasterWhisper(ASRBase):
         """
         similar to transcribe_to_segment, however, will concat all the words into the full text
         """
-        if language:
-            logger.info(f"language is set to {language}")
 
         # using default parameters mostly
         segments = self.transcribe_to_segment(

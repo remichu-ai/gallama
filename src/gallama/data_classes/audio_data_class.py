@@ -4,6 +4,7 @@ from fastapi import Query
 
 
 _LANGUAGE_CODES = [
+    "auto",
     "af",
     "am",
     "ar",

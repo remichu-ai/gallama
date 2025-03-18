@@ -243,13 +243,15 @@ class ModelExllama(ModelInterface):
             except:
                 processor = None
 
-        # check if image is supported
-        if processor and processor.preprocess_func:
+        # if processor is not None, meaning at least image is supported
+        if processor:
             self.modalities.add("image")
 
         # check if video is supported
         if processor and processor.video_preprocess_func:
             self.modalities.add("video")
+
+        logger.info(f"Supported Modalities: {self.modalities}")
 
         return model, tokenizer, cache, processor
 
