@@ -13,6 +13,7 @@ class TTSBase:
     def __init__(self, model_spec: ModelSpec):
         self.model_name = model_spec.model_name
         self.model = None
+        self.model_path = model_spec.model_id or None
 
         self.voice_list: List[str] = None
         self.default_voice: Dict = None

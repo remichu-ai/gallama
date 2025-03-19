@@ -920,3 +920,13 @@ gpt-sovits:
         cnhuhbert_base_path: <<HOME_DIR>>/chinese-hubert-base
         t2s_weights_path: <<HOME_DIR>>/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt
         vits_weights_path: <<HOME_DIR>>/gsv-v2final-pretrained/s2G2333k.pth
+
+
+kokoro:
+  default_quant: 16
+  default_cache_quant: FP16
+  repo:
+    - repo: "hexgrad/Kokoro-82M"
+      branch: [ 'main' ]
+      quant: [ 16.0 ]
+      backend: kokoro

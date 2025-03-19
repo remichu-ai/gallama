@@ -1,5 +1,9 @@
 from ...base import TTSBase
+import os
 from kokoro import KPipeline
+from kokoro.pipeline import LANG_CODES
+from kokoro.model import KModel
+import torch
 from gallama.data_classes import ModelSpec
 from gallama.logger import logger
 import asyncio
@@ -8,6 +12,50 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import time
 import LangSegment
+from huggingface_hub import hf_hub_download
+
+
+class KPipelineModified(KPipeline):
+    """
+    KPipeline class with modify method that not use another path that can work offline
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.voice_path = kwargs.pop("model_path", None)    # extra argument for path of the voices pt
+        super().__init__(*args, **kwargs)
+
+
+    def load_single_voice(self, voice: str):
+        if voice in self.voices:
+            return self.voices[voice]
+        if voice.endswith('.pt'):
+            f = voice
+        else:
+
+            # modification from here
+            use_local_voice = False
+            try:
+                if self.voice_path and os.path.exists(f"{self.voice_path}/voices/{voice}.pt"):
+                    f = f"{self.voice_path}/voices/{voice}.pt"
+                    use_local_voice = True
+                else:
+                    raise FileNotFoundError
+            except Exception as e:
+                logger.info(f"Error when loading voice {voice} from local: {e}. Fall back to download from huggingface")
+
+            # fall back to download from hugging face
+            if not use_local_voice:
+                f = hf_hub_download(repo_id=KModel.REPO_ID, filename=f'voices/{voice}.pt')
+
+            if not voice.startswith(self.lang_code):
+                v = LANG_CODES.get(voice, voice)
+                p = LANG_CODES.get(self.lang_code, self.lang_code)
+                logger.warning(f'Language mismatch, loading {v} voice into {p} pipeline.')
+
+
+        pack = torch.load(f, weights_only=True)
+        self.voices[voice] = pack
+        return pack
 
 
 class TTSKokoro(TTSBase):
@@ -51,10 +99,10 @@ class TTSKokoro(TTSBase):
         for lang_code in self.languages:
             kokoro_lang_code = self.convert_language_code(lang_code)
             if model_object is None:
-                pipeline = KPipeline(lang_code=kokoro_lang_code)
+                pipeline = KPipelineModified(lang_code=kokoro_lang_code)
                 model_object = pipeline.model
             else:
-                pipeline = KPipeline(lang_code=kokoro_lang_code, model=model_object)
+                pipeline = KPipelineModified(lang_code=kokoro_lang_code, model=model_object)
 
             self.model[lang_code] = pipeline
 
