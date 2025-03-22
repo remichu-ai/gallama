@@ -46,7 +46,7 @@ librosa
 soundfile
 ffmpeg-python
 fuzzywuzzy
-LangSegment
+split-lang
 numpy
 
 kokoro

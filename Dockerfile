@@ -59,7 +59,6 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 RUN python3 -m pip install --upgrade pip cmake scikit-build samplerate
 RUN CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
 
-ADD requirements.txt /app
 RUN python3 -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 RUN python3 -m pip install ninja
 RUN python3 -m pip install packaging
@@ -82,6 +81,12 @@ RUN python3 -m pip install -U transformers
 #git clone https://github.com/PanQiWei/AutoGPTQ.git && cd AutoGPTQ
 #INSTALL_KERNELS=1 pip install git+https://github.com/casper-hansen/AutoAWQ.git
 #pip install -vvv --no-build-isolation -e .
+
+# initialize split-lang to download model
+RUN python - <<EOF
+from split_lang import LangSplitter
+_ = LangSplitter()
+EOF
 
 # install gallama from source and clean up files for smaller container size
 RUN python3 -m pip install . \

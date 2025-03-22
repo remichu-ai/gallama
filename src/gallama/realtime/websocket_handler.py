@@ -175,6 +175,22 @@ class WebSocketMessageHandler:
     async def _response_create(self, websocket: WebSocket, session: WebSocketSession, message: dict):
         # add a Conversation Item into unprocess queue
         # once the processing reach this model, it will trigger llm -> tts
+
+        if message.get("response"):
+            # combine the config with existing
+            # else it will use the existing
+            if message["response"].get("conversation"):
+                message["response"].pop("conversation")     # currently not supported
+
+            if message["response"]:     # if there are other field, combine with existing setting
+                message["response"] = {
+                    **session.config.model_dump(),
+                    **message["response"]
+                }
+            elif message["response"] == {}:
+                message.pop("response")
+
+
         item = ResponseCreate(**message)
         await session.queues.unprocessed.put(item)
 

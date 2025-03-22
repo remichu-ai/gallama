@@ -7,11 +7,13 @@ import torch
 from gallama.data_classes import ModelSpec
 from gallama.logger import logger
 import asyncio
-from typing import Dict, Any, AsyncGenerator, Tuple, AsyncIterator
+from typing import Dict, Any, AsyncGenerator, Tuple, AsyncIterator, List
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import time
-import LangSegment
+from split_lang import LangSplitter
+from split_lang.model import SubString
+
 from huggingface_hub import hf_hub_download
 
 
@@ -35,6 +37,7 @@ class KPipelineModified(KPipeline):
             # modification from here
             use_local_voice = False
             try:
+                logger.info(f"Attempt to use voice from: {self.voice_path}/voices/{voice}.pt")
                 if self.voice_path and os.path.exists(f"{self.voice_path}/voices/{voice}.pt"):
                     f = f"{self.voice_path}/voices/{voice}.pt"
                     use_local_voice = True
@@ -99,10 +102,10 @@ class TTSKokoro(TTSBase):
         for lang_code in self.languages:
             kokoro_lang_code = self.convert_language_code(lang_code)
             if model_object is None:
-                pipeline = KPipelineModified(lang_code=kokoro_lang_code)
+                pipeline = KPipelineModified(lang_code=kokoro_lang_code, model_path=model_spec.model_id)
                 model_object = pipeline.model
             else:
-                pipeline = KPipelineModified(lang_code=kokoro_lang_code, model=model_object)
+                pipeline = KPipelineModified(lang_code=kokoro_lang_code, model=model_object, model_path=model_spec.model_id)
 
             self.model[lang_code] = pipeline
 
@@ -157,6 +160,29 @@ class TTSKokoro(TTSBase):
 
         loop.run_in_executor(self.executor, run_tts)
 
+    def check_language(self, text_list: List[SubString]):
+        supported_languages = self.languages
+
+        for text in text_list:
+            if text.lang not in supported_languages:
+                text.lang = "en"
+
+        if not text_list:
+            return text_list
+
+        grouped_list = [text_list[0]]
+        for current in text_list[1:]:
+            last = grouped_list[-1]
+            # If current and last have the same language, merge them.
+            if last.lang == current.lang:
+                last.text += current.text
+                last.length += current.length
+            else:
+                grouped_list.append(current)
+
+        return grouped_list
+
+
     async def text_to_speech(
         self,
         text: str,
@@ -173,15 +199,21 @@ class TTSKokoro(TTSBase):
 
 
         if language == "auto":
-            LangSegment.setfilters(["zh", "en", "ja", "ko", "fr", "hi", "it", "pt"])
-            text_segmented_by_lan = LangSegment.getTexts(text)
+            DEFAULT_LANG = "en"
+            lang_splitter = LangSplitter(
+                merge_across_punctuation=True
+            )
+
+            text_segmented_by_lan = self.check_language(
+                lang_splitter.split_by_lang(text)
+            )
 
 
             if len(text_segmented_by_lan) == 1:
-                logger.debug(f"single language: {text_segmented_by_lan[0]["lang"]}")
+                logger.debug(f"single language: {text_segmented_by_lan[0].lang}")
                 return await self.text_to_speech_single_language(
                     text,
-                    text_segmented_by_lan[0]["lang"],   # the detected language
+                    text_segmented_by_lan[0].lang,   # the detected language
                     stream,
                     batching,
                     batch_size,
@@ -194,9 +226,12 @@ class TTSKokoro(TTSBase):
             else:
                 # example of each item in text_segmented_by_lan:
                 # {'lang': 'zh', 'text': '我喜欢在雨天里听音乐。\n', 'score': 1.0}
-                for _lang, _text, _score in text_segmented_by_lan:
+                logger.info(f"Processing multi-language text with {len(text_segmented_by_lan)} segments")
+
+                for text_chunk in text_segmented_by_lan:
+                    _lang = text_chunk.lang
+                    _text = text_chunk.text
                     # Multiple languages case
-                    logger.info(f"Processing multi-language text with {len(text_segmented_by_lan)} segments")
 
                     if stream and not queue:
                         raise ValueError("For streaming mode, a queue must be provided")
@@ -207,8 +242,8 @@ class TTSKokoro(TTSBase):
                         sample_rate = None
 
                         for segment in text_segmented_by_lan:
-                            lang = segment['lang'] if segment['score'] > 0.5 else "en"
-                            seg_text = segment['text']
+                            lang = segment.lang
+                            seg_text = segment.text
                             if not seg_text.strip():
                                 continue
 
@@ -240,8 +275,8 @@ class TTSKokoro(TTSBase):
                     else:
                         # Stream: Process segments sequentially using shared queue
                         for segment in text_segmented_by_lan:
-                            lang = segment['lang']
-                            seg_text = segment['text']
+                            lang = segment.lang
+                            seg_text = segment.text
                             if not seg_text.strip():
                                 continue
 

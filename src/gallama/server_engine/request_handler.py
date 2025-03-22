@@ -47,11 +47,11 @@ async def stream_response(method: str, url: str, headers: dict, body: Union[str,
 
         async with httpx.AsyncClient() as client:
             async with client.stream(
-                    method,
-                    url,
-                    headers=headers,
-                    content=content,
-                    timeout=None
+                method,
+                url,
+                headers=headers,
+                content=content,
+                timeout=None
             ) as response:
                 # Log response details
                 logger.debug(f"Response status: {response.status_code}")
