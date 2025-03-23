@@ -83,10 +83,7 @@ RUN python3 -m pip install -U transformers
 #pip install -vvv --no-build-isolation -e .
 
 # initialize split-lang to download model
-RUN python - <<EOF
-from split_lang import LangSplitter
-_ = LangSplitter()
-EOF
+RUN python3 /app/docker_initializer.py
 
 # install gallama from source and clean up files for smaller container size
 RUN python3 -m pip install . \
