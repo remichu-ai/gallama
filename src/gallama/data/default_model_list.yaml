@@ -757,6 +757,18 @@ qwen-2.5-VL-7B:
       quant: [4.0, 5.0, 6.0, 8.0]
       backend: exllama
 
+qwen-2.5-VL-72B:
+  default_quant: 5.5
+  default_cache_quant: Q8
+  prompt_template: Qwen2-VL
+  modalities:
+    - video
+  repo:
+    - repo: "remichu/Qwen2.5-VL-72B-Instruct-exl2"
+      branch: ['5.5bpw']
+      quant: [5.5]
+      backend: exllama
+
 # qwen 2.5 Coder
 qwen-2.5-Coder-32B:
   default_quant: 4.25
