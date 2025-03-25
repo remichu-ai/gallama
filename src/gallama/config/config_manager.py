@@ -19,6 +19,9 @@ class ConfigManager:
             logger.info("~/gallama/model_config.yaml is empty file")
         self.default_model_list = self.load_default_model_list()
 
+    def __str__(self):
+        return str(self.configs)
+
     @property
     def get_library_path(self):
         return Path(__file__).parent.parent

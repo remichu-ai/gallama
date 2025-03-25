@@ -8,7 +8,10 @@ from huggingface_hub import snapshot_download, hf_hub_download
 from pathlib import Path
 from typing import Dict
 from gallama.data_classes import ModelInfo, ModelDownloadSpec
-
+import httpx
+import zipfile
+import io
+import shutil
 
 def represent_list(self, data):
     """ Custom representation for lists for writing to yaml file"""
@@ -25,6 +28,16 @@ def represent_list(self, data):
 yaml.SafeDumper.add_representer(list, represent_list)
 
 
+def replace_home_dir_with_model_path(backend_extra_args: Dict, model_path: str) -> Dict:
+    """Replace <<HOME_DIR>> in backend_extra_args with the actual model_path."""
+    updated_args = {}
+    for key, value in backend_extra_args.items():
+        if isinstance(value, str):
+            updated_args[key] = value.replace("<<HOME_DIR>>", model_path)
+        else:
+            updated_args[key] = value
+    return updated_args
+
 def update_model_yaml(
     model_name: str,
     model_path: str,
@@ -32,7 +45,7 @@ def update_model_yaml(
     prompt_template: str,
     quant: str,
     cache_quant: str = None,
-    transformers_args: Dict = None,     # additional argument for transformers loading
+    backend_extra_args: Dict = None,     # additional argument for transformers loading
     config_manager: ConfigManager = ConfigManager()
 ):
     config = config_manager.configs      # the default list of model
@@ -46,8 +59,8 @@ def update_model_yaml(
         'quant': quant,
     }
 
-    if transformers_args:
-        config[model_name]["transformers_args"] = transformers_args
+    if backend_extra_args:
+        config[model_name]["backend_extra_args"] = backend_extra_args
 
     # Optional update cache quant
     if cache_quant is not None:
@@ -78,6 +91,23 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
         if quant is None:
             raise HTTPException(status_code=400, detail=f"Error: No default quantization specified for model '{model_name}'.")
 
+    # get the list of backend available in the yaml for download
+    available_backends_for_this_model = [repo['backend'] for repo in model_config["repo"] if quant in repo['quant']]
+
+    # if there is only 1 backend available, set to that backend
+    if len(available_backends_for_this_model) == 1:
+        backend_to_download = available_backends_for_this_model[0]
+    elif len(available_backends_for_this_model) > 1:
+        # default to exllama if it is available as one of the backend
+        if "exllama" in available_backends_for_this_model:
+            backend_to_download = "exllama"
+        else:   # just pick any
+            backend_to_download = available_backends_for_this_model[0]
+    else:
+        raise HTTPException(status_code=400, detail=f"Error: No backend available for model '{model_name}'.")
+
+    backend = backend_to_download
+
     # Filter repo_info based on both quant and backend
     repo_info = next((repo for repo in model_config['repo'] if quant in repo['quant'] and repo['backend'] == backend), None)
 
@@ -88,6 +118,10 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
     branch = next(branch for branch, q in zip(repo_info['branch'], repo_info['quant']) if q == quant)
 
     download_dir = str(Path.home() / "gallama" / "models" / f"{model_name}-{quant}bpw-{backend}")
+
+    backend_extra_args = repo_info.get('backend_extra_args', None)
+    if backend_extra_args:
+        backend_extra_args = replace_home_dir_with_model_path(backend_extra_args, download_dir)
 
     os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
 
@@ -109,8 +143,59 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
                 model_path=f"{str(download_dir)}/{filename}",
                 backend=backend,
                 prompt_template=model_config.get('prompt_template', None),
+                backend_extra_args=backend_extra_args,
                 quant=quant,
-                cache_quant=model_config.get('default_cache_quant', "Q4"),
+                cache_quant=model_config.get('default_cache_quant', None),
+                config_manager=config_manager,
+            )
+        elif backend == "gpt_sovits":
+            # Full repository download
+            snapshot_download(
+                repo_id=repo_id,
+                revision=branch,
+                local_dir=download_dir,
+            )
+
+            # Fetch the China voice URL from the extra_url field in the config
+            if 'extra_url' in repo_info and 'china_voice_url' in repo_info['extra_url']:
+                china_voice_url = repo_info['extra_url']['china_voice_url']
+                logger.info(f"Downloading China voice model from {china_voice_url}...")
+
+                # Download China voice model using httpx
+                with httpx.Client() as client:
+                    response = client.get(china_voice_url)
+                    response.raise_for_status()  # Ensure the download was successful
+
+                    # Unzip the file
+                    with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+                        zip_ref.extractall(download_dir)
+
+                    # Locate the G2PWModel_1.1 folder
+                    g2pw_folder = os.path.join(download_dir, "G2PWModel_1.1")
+                    if os.path.exists(g2pw_folder):
+                        # Rename the folder to G2PWModel
+                        new_g2pw_folder = os.path.join(download_dir, "G2PWModel")
+                        os.rename(g2pw_folder, new_g2pw_folder)
+
+                        # Move the renamed folder to the /text folder
+                        text_folder = os.path.join(download_dir, "text")
+                        os.makedirs(text_folder, exist_ok=True)
+                        shutil.move(new_g2pw_folder, text_folder)
+
+                logger.info(f"China voice model downloaded and extracted to {text_folder}.")
+            else:
+                logger.warning("No 'china_voice_url' found in 'extra_url' field. Skipping China voice model download.")
+
+            logger.info(f"Download complete. Model saved in {download_dir}")
+
+            update_model_yaml(
+                model_name=model_name,
+                model_path=str(download_dir),
+                backend=backend,
+                prompt_template=model_config.get('prompt_template', None),
+                backend_extra_args=backend_extra_args,
+                quant=quant,
+                cache_quant=model_config.get('default_cache_quant', None),
                 config_manager=config_manager,
             )
         else:
@@ -121,18 +206,15 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
                 local_dir=download_dir,
             )
             logger.info(f"Download complete. Model saved in {download_dir}")
-
-            # for transformer model, we might need to keep the transformers_args if any
             if backend == "transformers":
-                transformers_args = repo_info.get('transformers_args', None)
                 update_model_yaml(
                     model_name=f"{model_name}_transformers",
                     model_path=str(download_dir),
                     backend=backend,
                     prompt_template=model_config.get('prompt_template', None),
-                    transformers_args=transformers_args,
+                    backend_extra_args=backend_extra_args,
                     quant=quant,
-                    cache_quant=model_config.get('default_cache_quant', "Q4"),
+                    cache_quant=model_config.get('default_cache_quant', None),
                     config_manager=config_manager,
                 )
 
@@ -142,8 +224,9 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
                     model_path=str(download_dir),
                     backend=backend,
                     prompt_template=model_config.get('prompt_template', None),
+                    backend_extra_args=backend_extra_args,
                     quant=quant,
-                    cache_quant=model_config.get('default_cache_quant', "Q4"),
+                    cache_quant=model_config.get('default_cache_quant', None),
                     config_manager=config_manager,
                 )
 

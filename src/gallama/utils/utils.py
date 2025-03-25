@@ -8,6 +8,10 @@ from PIL import Image
 import requests
 import os
 from io import BytesIO
+from fastapi import Request
+import json
+from typing import Union, Optional, Tuple
+from gallama.logger import logger
 
 # Lazy import for Exllama
 try:
@@ -35,7 +39,8 @@ def get_response_tool_uid():
     return "call_" + str(uuid.uuid4().hex)
 
 
-def get_token_length(tokenizer, text):
+def get_token_length(tokenizer, text) -> int:
+
     str_text = text
     if not isinstance(text, str):
         str_text = str(text)
@@ -150,3 +155,82 @@ def get_image(
         else:
             # Assume url is a regular URL and fetch it as a stream
             return Image.open(requests.get(url, stream=True).raw)
+
+
+def is_flash_attention_installed() -> (bool, str):
+    try:
+        import flash_attn
+        return True, flash_attn.__version__
+    except ImportError:
+        return False, None
+
+
+async def parse_request_body(
+    request: Request,
+) -> Tuple[Optional[Union[dict, str, bytes]], bool]:
+    """
+    Parse the request body while preserving it for future use.
+    """
+    try:
+        # Ensure we have the raw body
+        if not hasattr(request, '_body'):
+            request._body = await request.body()
+            async def get_body():
+                return request._body
+            request.body = get_body
+
+        content_type = request.headers.get("Content-Type", "").lower()
+        body = request._body
+
+        if not body:
+            return {}, False
+
+        # Handle multipart form data
+        if "multipart/form-data" in content_type:
+            return body, True
+
+        # Handle JSON content
+        if "application/json" in content_type:
+            try:
+                return json.loads(body.decode("utf-8")), False
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error: {e}")
+                return body, False
+
+        # Handle text content
+        elif "text/" in content_type:
+            return body.decode("utf-8"), False
+
+        # For other content types, return raw bytes
+        return body, False
+
+    except Exception as e:
+        logger.error(f"Error parsing request body: {e}", exc_info=True)
+        return {}, False
+
+async def get_model_from_body(request: Request) -> str:
+    """
+    Extract model information from request body, handling different request types.
+
+    Args:
+        request (Request): The incoming HTTP request.
+
+    Returns:
+        str: The model name if found, empty string otherwise.
+    """
+    try:
+        body, is_multipart = await parse_request_body(request)
+
+        # For multipart requests (like audio), return default or configured model
+        if is_multipart:
+            return "whisper"  # Or any default model for audio
+
+        # For regular JSON requests, extract model from body
+        if isinstance(body, dict):
+            return body.get("model", "")
+
+        return ""
+
+    except Exception as e:
+        logger.error(f"Error while getting model from request: {e}")
+        return ""

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint
 from typing import Optional, Literal, List, Dict, Union, Any, Type
 import asyncio
 import os
@@ -7,6 +7,7 @@ import time
 import torch
 import re
 import base64
+from .video import VideoFrame
 
 
 class TextTag(BaseModel):
@@ -27,11 +28,11 @@ class Query(BaseModel):
     stream: Optional[bool] = False
 
 
-class ToolCall(BaseModel):
-    class FunctionCall(BaseModel):
-        arguments: str
-        name: str
+class FunctionCall(BaseModel):
+    arguments: str
+    name: str
 
+class ToolCall(BaseModel):
     id: str
     function: FunctionCall
     type: str = "function"
@@ -104,6 +105,7 @@ class MultiModalImageContent(BaseModel):
     image_url: ImageDetail
 
 
+
 class BaseMessage(BaseModel):
     role: Literal['system', 'user', 'assistant', 'tool']
     content: Optional[Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]] = ""
@@ -134,6 +136,7 @@ class FunctionSpec(BaseModel):
     name: str
     description: Optional[str] = None
     parameters: ParameterSpec = None
+    strict: bool = True     # not making any difference at the moment
 
 
 class ToolSpec(BaseModel):
@@ -177,7 +180,7 @@ class ChatMLQuery(BaseModel):
     class StreamOption(BaseModel):
         include_usage: bool = False
 
-    model: Optional[str] = "Mixtral-8x7B"
+    model: Optional[str] = ""
     messages: List[BaseMessage]
     temperature: Optional[float] = 0.01
     top_p: float = 0.85
@@ -187,13 +190,26 @@ class ChatMLQuery(BaseModel):
     tool_call_id: Optional[str] = None
     max_tokens: Optional[int] = None
 
+    # for video, currently for websocket
+    video: Optional[List[Any]] = None    # TODO to have handling for list of base64 video frame
+
     # not part of openai api
-    leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the generated response")
+    leading_prompt: Optional[str] = Field(default="", description="The string to append to the end of the prompt, this will not be part of the  generated response")
     prefix_strings: Optional[Union[str, List[str]]] = Field(default=None, description="String or list of strings to start the generation with. Can not be used together with regex_prefix_pattern")
     regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
     thinking_template: Optional[str] = None
+
+    # tool call
+    tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
+    tool_call_thinking_token: int = Field(default= 200, description="Maximum token for tool thinking generation. If it exceed this threshold, no tool thinking is returned")
+    tool_instruction_position: Literal["prefix", "postfix"] = (
+        Field(default="prefix", description="Position of the general instruction to use tool. prefix for best kv caching"))
+    tool_schema_position: Literal["prefix", "postfix"] = (
+        Field(default="postfix", description="Position of the schema of individual tools. If tool_schema is unchanged through out, "
+                                            "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
+
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,
@@ -223,6 +239,13 @@ class ChatMLQuery(BaseModel):
                 re.compile(v)
             except re.error as e:
                 raise ValueError(f'Invalid regex pattern: {e}')
+        return v
+
+    @validator('tool_call_thinking_token')
+    def validate_tool_call_thinking_token(cls, v):
+        """ Validate that tool_call_thinking_token is greater than or equal to 0 """
+        if v < 0:
+            raise ValueError('tool_call_thinking_token must be greater than or equal to 0')
         return v
 
 
@@ -316,10 +339,30 @@ class Choice(BaseModel):
         return cls(message=message, finish_reason=finish_reason)
 
 
+class ChoiceDeltaToolCallFunction(BaseModel):
+    arguments: Optional[str] = None
+    name: Optional[str] = None
+
+
+class ChoiceDeltaToolCall(BaseModel):
+    index: Optional[int] = None
+    id: Optional[str] = None
+    function: Optional[ChoiceDeltaToolCallFunction] = None
+    type: Optional[str] = None
+
+
+class ChoiceDelta(BaseModel):
+    content: Optional[str] = None
+    function_call: Optional[str] = None
+    refusal: Optional[str] = None
+    role: Optional[str] = None
+    tool_calls: Optional[List[ChoiceDeltaToolCall]] = None
+
+
 class StreamChoice(BaseModel):
     index: int
-    delta: ChatMessage = None
-    finish_reason: Optional[Literal["stop", "length", "function_call", "tool_calls"]] = None
+    delta: ChoiceDelta
+    finish_reason: Optional[Literal["stop", "length", "tool_calls"]] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -390,29 +433,29 @@ class GenerateQuery(BaseModel):
     max_tokens: Optional[int] = Field(description='max number of tokens', default=None)
 
 
-class GenerationStats(BaseModel):
-    input_tokens_count: int = Field(description='input tokens count', default=0)
-    output_tokens_count: int = Field(description='output tokens count', default=0)
-    time_to_first_token: float = Field(description='time to first token', default=0)
-    time_generate: float = Field(description='time to generate tokens', default=0)
-
-    @property
-    def generation_speed(self) -> float:
-        if self.time_generate > 0:
-            return round(self.output_tokens_count / self.time_generate, ndigits=1)
-        else:
-            return 0
-
-    @property
-    def total_time(self) -> float:
-        return round(self.time_to_first_token + self.time_generate, ndigits=1)
-
-    @property
-    def prefill_speed(self) -> float:
-        if self.time_to_first_token > 0:
-            return round(self.input_tokens_count / self.time_to_first_token, ndigits=1)
-        else:
-            return 0
+# class GenerationStats(BaseModel):
+#     input_tokens_count: int = Field(description='input tokens count', default=0)
+#     output_tokens_count: int = Field(description='output tokens count', default=0)
+#     time_to_first_token: float = Field(description='time to first token', default=0)
+#     time_generate: float = Field(description='time to generate tokens', default=0)
+#
+#     @property
+#     def generation_speed(self) -> float:
+#         if self.time_generate > 0:
+#             return round(self.output_tokens_count / self.time_generate, ndigits=1)
+#         else:
+#             return 0
+#
+#     @property
+#     def total_time(self) -> float:
+#         return round(self.time_to_first_token + self.time_generate, ndigits=1)
+#
+#     @property
+#     def prefill_speed(self) -> float:
+#         if self.time_to_first_token > 0:
+#             return round(self.input_tokens_count / self.time_to_first_token, ndigits=1)
+#         else:
+#             return 0
 
     @property
     def total_tokens_count(self) -> float:
@@ -430,88 +473,82 @@ class ModelObjectResponse(BaseModel):
     object: str = Field(description='object type', default="list")
     data: List[ModelObject] = []
 
-class GenStart(BaseModel):
-    """ this item signal start of generation"""
-    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-
-    gen_type: Literal["text", "tool", "thinking"]  = Field(description='True to signal end of generation', default="text")
-
-class GenEnd(BaseModel):
-    """ this item signal end of generation"""
-    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-
-    generation_end: bool = Field(description='True to signal end of generation', default=True)
-
-
-class GenText(BaseModel):
-    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
-
-    text_type: Literal["text", "thinking", "tool"] = "text"
-    content: str = Field(description='text or thinking')
-    @classmethod
-    def __instancecheck__(cls, instance):
-        return isinstance(instance, cls)
-
-
-class GenQueue(asyncio.Queue):
-    def __init__(self, maxsize=0, allowed_types: List[str] = [GenText, GenerationStats, GenStart, GenEnd]):
-        super().__init__(maxsize)
-        self.allowed_types = allowed_types
-
-    def _check_item(self, item):
-        if self.allowed_types:
-            if not any(isinstance(item, allowed_type) for allowed_type in self.allowed_types):
-                raise TypeError(f"Item {item} is not an instance of any allowed types: {self.allowed_types}")
-        return item
-
-    def _raise_type_error(self):
-        raise TypeError(f"Items must be instances of: {', '.join(self.allowed_types)}")
-
-    async def put(self, item):
-        self._check_item(item)
-        await super().put(item)
-
-    def put_nowait(self, item):
-        self._check_item(item)
-        super().put_nowait(item)
-
 
 class Thinking(BaseModel):
     xml: str = Field(description='xml string')
     regex: str = Field(description='regex string to enforce any value', default=None)
 
 
+class VoiceConfig(BaseModel):
+    """Configuration for a single voice sample"""
+    ref_audio_path: str = Field(description='path to the sound sample')
+    ref_audio_transcription: str = Field(description='text of the voice sample')
+    language: str = Field(description='language of the voice sample')
+    speed_factor: Optional[float] = Field(description='speed factor of the voice sample', default=1.0)
 
-class ModelParser(BaseModel):
-    model_id: str = Field(description='id of the model from the yml file')
-    model_name: Optional[str] = Field(description='name of the model', default=None)
-    gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+    model_config = ConfigDict(extra="forbid")
+
+
+
+# list of supported backend. None meaning it the api will take backend set from yaml config file
+SUPPORTED_BACKENDS = [
+    "exllama",
+    "llama_cpp",
+    "transformers",
+    "mlx_vlm",
+    "embedding",
+    "faster_whisper",
+    "mlx_whisper",
+    "gpt_sovits",
+    "kokoro",
+    None
+]
+
+class ModelSpec(BaseModel):
+    model_id: Optional[str] = Field(description='id of the model which should be the path to the model', default=None)
+    model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
+    model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
+    gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
-    backend: Optional[Union[Literal["exllama", "llama_cpp", "transformers", "embedding"], None]] = Field(description="model engine backend", default=None)
+    backend: Optional[Union[Literal[tuple(SUPPORTED_BACKENDS)], None]] = Field(description="model engine backend", default=None)
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
+    prompt_template: Optional[str] = Field(description="prompt template", default=None)
+    eos_token_list: List[str] = Field(description="eos tokens, can customize token here", default_factory=list)
+
+    quant: Optional[float] = Field(description="quantization if the model support quantization on the fly", default=None)
+
+    # number of concurrent request this model can handle
+    max_concurrent_requests: int = Field(description="number of concurrent request this model can handle", default=1)
+
+    # extra argument for specific backend or model
+    backend_extra_args: Optional[Dict[Any, Any]] = Field(description="extra args to pass to the backend", default_factory=dict)
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
     draft_model_name: Optional[str] = Field(description='name of the draft model', default=None)
-    draft_gpus: Optional[List[float]] = Field(description='VRam usage for each GPU', default=None)
+    draft_gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
     draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
 
-    # transformers specific
-    transformers_args: Optional[Dict] = None
 
+    # whether require api call to match model name or not
+    strict: bool = Field(description="whether require api call to match model name or not", default=False)
+
+    # argument for different voice sample
+    voice: Optional[Dict[str, VoiceConfig]] = Field(
+        default=None,
+        description="Voice configurations mapping voice names to their settings"
+    )
+
+    # audio related setting
+    language: Optional[str] = Field(description="language of the audio", default="auto")
 
     # dont allow non recognizable option
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    @validator('model_name', pre=True, always=True)
-    def set_model_name(cls, v, values):
-        if v is None and 'model_id' in values:
-            return values['model_id'].split('/')[-1]
-        return v
 
     @validator('gpus', pre=True, always=True)
     def validate_gpus(cls, v):
@@ -542,7 +579,21 @@ class ModelParser(BaseModel):
     #                 raise ValueError(
     #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
-        return gpus
+        # return gpus
+
+
+    @classmethod
+    def get_model_type_from_backend(cls, backend: str = None):
+        if backend is None:
+            return None
+        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm"]:
+            return "llm"
+        elif backend in ["faster_whisper", "mlx_whisper"]:
+            return "stt"
+        elif backend in ["gpt_sovits", "kokoro"]:
+            return "tts"
+        elif backend in ["embedding"]:
+            return "embedding"
 
     @classmethod
     def from_dict(cls, input_data: Union[str, Dict[str, Any]]):
@@ -560,7 +611,7 @@ class ModelParser(BaseModel):
         model_id = input_dict.get('model_id')
         if model_id:
             model_id = input_dict.get('model_id').strip("'")  # Remove single quotes if present
-        #model_name = input_dict.get('model_name')
+        model_name = input_dict.get('model_name')
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         cache_size = input_dict.get('cache_size')
@@ -574,86 +625,58 @@ class ModelParser(BaseModel):
             backend = None
         cache_quant = input_dict.get('cache_quant', None)
 
-        if gpus:
+        if gpus and isinstance(gpus, str) and gpus.lower() != "auto":
             gpus = [float(x) for x in gpus.split(',')]
 
         if cache_size:
             cache_size = int(cache_size)
 
+        if cache_size:
+            cache_size = int(cache_size)
+
+        strict = input_dict.get('strict', False)
+        voice = input_dict.get('voice', {})
+
+        model_type = input_dict.get('model_type', None)
+        if model_type is None:
+            model_type = cls.get_model_type_from_backend(backend)
+
+        prompt_template = input_dict.get('prompt_template', None)
+
+        # concurrent request
+        allowed_concurrency = 50 if backend in ["exllama", "embedding"] else 1  # TODO to look into optimal number for each backend
+        max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
+
+        backend_extra_args = input_dict.get('backend_extra_args', {})
+
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
         if draft_model_id:
             draft_model_id = draft_model_id.strip("'")  # Remove single quotes if present
-        draft_model_name = input_dict.get('draft_model_name')
-        if not draft_model_name and draft_model_id:
-            draft_model_name = draft_model_id.split('/')[-1]
-        else:
-            draft_model_name = None
+
+        draft_model_name = input_dict.get('draft_model_name', None)
 
         draft_gpus = input_dict.get('draft_gpus')
         draft_cache_size = input_dict.get('draft_cache_size')
         draft_cache_quant = input_dict.get('draft_cache_quant', None)
 
-        if draft_gpus:
+        if draft_gpus and isinstance(draft_gpus, str) and draft_gpus.lower() != "auto":
             draft_gpus = [float(x) for x in draft_gpus.split(',')]
 
         if draft_cache_size:
             draft_cache_size = int(draft_cache_size)
 
-        # Note: We don't need to set model_name here, as the validator will handle it
-        return cls(model_id=model_id, gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+        return cls(model_id=model_id, model_name=model_name, model_type=model_type,
+                   gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+                   strict=strict,
+                   voice=voice,
+                   prompt_template=prompt_template,
+                   backend_extra_args=backend_extra_args,
+                   max_concurrent_requests=max_concurrent_requests,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
-
-    def to_arg_string(self) -> str:
-        """
-        Generate a command-line argument string based on the instance's attributes.
-
-        Returns:
-            str: A string representation of the command-line arguments.
-        """
-        args = [f"model_id={self.model_id}"]
-
-        if self.model_name != self.model_id.split('/')[-1]:
-            args.append(f"model_name={self.model_name}")
-
-        if self.gpus is not None:
-            args.append(f"gpus={','.join(str(vram) for vram in self.gpus)}")
-
-        if self.max_seq_len is not None:
-            args.append(f"max_seq_len={self.max_seq_len}")
-
-        if self.cache_size is not None:
-            args.append(f"cache_size={self.cache_size}")
-
-        if self.cache_quant is not None:
-            args.append(f"cache_quant={self.cache_quant}")
-
-        if self.backend != "exllama":  # Only include if it's not the default value
-            args.append(f"backend={self.backend}")
-
-        if self.tensor_parallel:
-            args.append(f"tp={self.tensor_parallel}")
-
-        # Add draft model parameters
-        if self.draft_model_id is not None:
-            args.append(f"draft_model_id={self.draft_model_id}")
-
-        if self.draft_model_name is not None and self.draft_model_name != self.draft_model_id.split('/')[-1]:
-            args.append(f"draft_model_name={self.draft_model_name}")
-
-        if self.draft_gpus is not None:
-            args.append(f"draft_gpus={','.join(str(vram) for vram in self.draft_gpus)}")
-
-        if self.draft_cache_size is not None:
-            args.append(f"draft_cache_size={self.draft_cache_size}")
-
-        if self.draft_cache_quant is not None:
-            args.append(f"draft_cache_quant={self.draft_cache_quant}")
-
-        return " ".join(args)
 
     def get_visible_gpu_indices(self) -> str:
         """
@@ -664,7 +687,7 @@ class ModelParser(BaseModel):
             str: A comma-separated string of GPU indices with allocated VRAM,
                  or all available GPU indices if none are specified.
         """
-        if self.gpus is None:
+        if self.gpus is None or self.gpus == "auto":
             import torch
             return ','.join(str(i) for i in range(torch.cuda.device_count()))
 
@@ -674,12 +697,76 @@ class ModelParser(BaseModel):
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
 
+    @staticmethod
+    def deep_merge_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Recursively merge two dictionaries, handling nested dictionaries.
+        Values from dict2 take precedence over dict1 except for nested dictionaries,
+        which are merged recursively.
+
+        Args:
+            dict1 (Dict[str, Any]): First dictionary
+            dict2 (Dict[str, Any]): Second dictionary (takes precedence for non-dict values)
+
+        Returns:
+            Dict[str, Any]: Merged dictionary
+        """
+        merged = dict1.copy()
+
+        for key, value in dict2.items():
+            if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+                # If both values are dictionaries, merge them recursively
+                merged[key] = ModelSpec.deep_merge_dicts(merged[key], value)
+            else:
+                # For non-dict values or when key doesn't exist in dict1,
+                # take the value from dict2
+                merged[key] = value
+
+        return merged
+
+    def merge_with_config(self, model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Merges the current ModelSpec instance with a model configuration dictionary.
+        Values from the current ModelSpec take precedence over the model_config.
+        Handles nested dictionaries by merging them recursively.
+
+        Args:
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        # Convert current ModelSpec to dict, excluding None values
+        spec_dict = self.model_dump(exclude_none=True)
+
+        # Merge configurations recursively
+        merged_config = ModelSpec.deep_merge_dicts(model_config, spec_dict)
+
+        # Create new ModelSpec instance with merged configuration
+        return ModelSpec(**merged_config)
+
+    @classmethod
+    def from_merged_config(cls, model_spec: 'ModelSpec', model_config: Dict[str, Any]) -> 'ModelSpec':
+        """
+        Class method to create a new ModelSpec instance by merging an existing ModelSpec
+        with a model configuration dictionary.
+
+        Args:
+            model_spec (ModelSpec): Existing ModelSpec instance
+            model_config (Dict[str, Any]): Configuration dictionary from config manager
+
+        Returns:
+            ModelSpec: A new ModelSpec instance with merged configurations
+        """
+        return model_spec.merge_with_config(model_config)
+
+
 
 class ModelDownloadSpec(BaseModel):
     """ dataclass for model download"""
     model_name: str
     quant: Optional[float] = None
-    backend: Literal["exllama", "llama_cpp", "embedding", "transformers"] = "exllama"
+    backend: Literal[tuple(SUPPORTED_BACKENDS)] = None
 
     # disable protected_namespaces due to it field use model_ in the name
     model_config = ConfigDict(extra="forbid", protected_namespaces=())

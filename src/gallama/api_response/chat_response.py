@@ -1,5 +1,5 @@
 from fastapi import Request
-from gallama.data_classes.data_class import (
+from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
     Choice,
@@ -8,18 +8,25 @@ from gallama.data_classes.data_class import (
     OneTool,
     ToolCallResponse,
     StreamChoice,
+    CompletionResponse,
+    CompletionStreamResponse,
+    CompletionChoice,
+    ChoiceDelta,
+    ChoiceDeltaToolCall,
+    ChoiceDeltaToolCallFunction,
+    TextTag,
+)
+from ..data_classes.generation_data_class import (
     GenerationStats,
     GenQueue,
     GenText,
     GenEnd,
     GenStart,
-    CompletionResponse,
-    CompletionStreamResponse,
-    CompletionChoice,
-    TextTag,
+    GenQueueDynamic
 )
+
 from .stream_parser import StreamParser
-from typing import AsyncIterator
+from typing import AsyncIterator, List
 from gallama.utils.utils import get_response_uid, get_response_tool_uid
 from gallama.logger.logger import logger
 from pydantic.json import pydantic_encoder
@@ -29,40 +36,38 @@ import asyncio
 
 
 async def get_response_from_queue(
-    gen_queue: GenQueue,
+    gen_queue: GenQueue | GenQueueDynamic | List[GenQueue|GenQueueDynamic],
     request: Request = None,
 ):
     """ function to get the text generated in queue to be used for other part of the library"""
     response = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
+
+    # if it is a list, assume it is the first element
+    gen_queue_to_use = gen_queue
+    if isinstance(gen_queue, list):
+        gen_queue_to_use = gen_queue[0]
 
     eos = False
-    genStats = None
+    gen_stats = None
     while not eos:
         try:
-            # if request is not None:
-            #     if await request.is_disconnected():
-            #         logger.info("Request disconnected, stopping queue processing")
-            #         break
-
-            result = gen_queue.get_nowait()
+            result = gen_queue_to_use.get_nowait()
 
             if isinstance(result, GenText):
                 response += result.content
             elif isinstance(result, GenerationStats):
-                genStats = result
+                gen_stats = result
             elif isinstance(result, GenStart):
                 pass
             elif isinstance(result, GenEnd):
                 eos = True
-                gen_queue.task_done()
+                gen_queue_to_use.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response.strip())
 
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
+            await asyncio.sleep(0.01)    # short sleep before trying again
 
-    return response, genStats
+    return response, gen_stats
 
 
 async def chat_completion_response_stream(
@@ -78,36 +83,24 @@ async def chat_completion_response_stream(
     gen_type = "text"  # Default generation type
     gen_stats = None
 
-    # last_log_time = time.time()
-    # log_interval = 1  # Log every 5 seconds
+    # no streaming of tool use at the moment
+    accumulated_tool_text = ""
 
     while not eos:
-        # Logging to troubleshoot if queue build up
-        # current_time = time.time()
-        #
-        # # Log queue size every 5 seconds
-        # if current_time - last_log_time >= log_interval:
-        #     queue_size = gen_queue.qsize()
-        #     logger.info(f"Queue size: {queue_size}")
-        #     last_log_time = current_time
-
-        # if await request.is_disconnected():
-        #     logger.info("Request disconnected, stopping queue processing")
-        #     break
-
         accumulated_text = ""
         accumulated_thinking = ""
 
+
         try:
-            # Collect all available items from the queue
             while True:
                 item = gen_queue.get_nowait()
-                if isinstance(item, GenText) and (item.text_type=="text"):
-                    accumulated_text += item.content
-                elif isinstance(item, GenText) and (item.text_type=="tool"):
-                    accumulated_text += item.content
-                elif isinstance(item, GenText) and item.text_type=="thinking":
-                    accumulated_thinking += item.content
+                if isinstance(item, GenText):
+                    if item.text_type == "tool":
+                        accumulated_tool_text += item.content
+                    elif item.text_type == "thinking":
+                        accumulated_thinking += item.content
+                    else:  # text type
+                        accumulated_text += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
                     break
@@ -115,25 +108,21 @@ async def chat_completion_response_stream(
                     gen_type = item.gen_type
                 elif isinstance(item, GenerationStats):
                     gen_stats = item
+
         except asyncio.QueueEmpty:
-            pass
+            await asyncio.sleep(0.01)  # Sleep for 100ms (adjust as needed)
+
 
         if accumulated_text or accumulated_thinking:
             full_response += accumulated_thinking + accumulated_text
 
-            # TODO current naive implementation with assumption that thinking will always come first instead of the actual order that text stream in
-
             if gen_type == "text" or gen_type == "thinking":
-
-                # if the output is returned together, then concat into one text
                 if query.return_thinking is True and accumulated_thinking:
                     if accumulated_text:
                         accumulated_text = "\n" + accumulated_text
-                    # assumption: thinking come first
                     accumulated_text = accumulated_thinking + accumulated_text
 
-                # yield thinking response first
-                if accumulated_thinking and query.return_thinking=="separate":
+                if accumulated_thinking and query.return_thinking == "separate":
                     chunk_data = ChatCompletionResponse(
                         unique_id=unique_id,
                         model=model_name,
@@ -142,17 +131,14 @@ async def chat_completion_response_stream(
                         choices=[
                             StreamChoice(
                                 index=0,
-                                delta=ChatMessage(
-                                    role="assistant",
-                                    content="",
+                                delta=ChoiceDelta(
                                     thinking=accumulated_thinking,
-                                ),
+                                )
                             )
-                        ],
+                        ]
                     )
                     yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
 
-                # yield text response
                 if accumulated_text:
                     chunk_data = ChatCompletionResponse(
                         unique_id=unique_id,
@@ -162,21 +148,24 @@ async def chat_completion_response_stream(
                         choices=[
                             StreamChoice(
                                 index=0,
-                                delta=ChatMessage(
-                                    role="assistant",
+                                delta=ChoiceDelta(
                                     content=accumulated_text,
-                                ),
+                                )
                             )
-                        ],
+                        ]
                     )
                     yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
-            elif gen_type == "tool":
-                # Accumulate tool usage data
-                # Note: This assumes that tool data is complete in a single chunk
-                # If tool data can span multiple chunks, you'll need to implement a more sophisticated accumulation strategy
-                tool_response = json.loads(accumulated_text)
-                tools_list = []
-                for index, tool in enumerate(tool_response.get('functions_calling', [])):
+
+        # currently not support partial streaming of tool use
+        if eos and accumulated_tool_text:
+            # We'll try to parse it as JSON but if it fails, we'll just stream it as is
+            try:
+                # If this is the start of a tool call (containing the function name)
+                response_dict = json.loads(accumulated_tool_text)
+
+                # successfully parse JSON, convert the tool used into response format
+                tools_list = []  # the list of tool to call
+                for index, tool in enumerate(response_dict['functions_calling']):
                     tool_id = get_response_tool_uid()
                     tools_list.append(
                         ToolCallResponse(
@@ -188,6 +177,36 @@ async def chat_completion_response_stream(
                             )
                         )
                     )
+
+                    chunk_data = ChatCompletionResponse(
+                        unique_id=unique_id,
+                        model=model_name,
+                        object="chat.completion.chunk",
+                        created=created,
+                        choices=[
+                            StreamChoice(
+                                index=0,
+                                delta=ChoiceDelta(
+                                    tool_calls=[
+                                        ChoiceDeltaToolCall(
+                                            index=index,
+                                            id=get_response_tool_uid(),
+                                            function=ChoiceDeltaToolCallFunction(
+                                                name=tool.get("name"),
+                                                arguments=json.dumps(tool.get("arguments",""))
+                                            ),
+                                            type="function"
+                                        )
+                                    ]
+                                )
+                            )
+                        ]
+                    )
+
+                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+
+            except json.JSONDecodeError:
+                # If parsing fails, just stream the raw text
                 chunk_data = ChatCompletionResponse(
                     unique_id=unique_id,
                     model=model_name,
@@ -196,24 +215,23 @@ async def chat_completion_response_stream(
                     choices=[
                         StreamChoice(
                             index=0,
-                            delta=ChatMessage(
-                                role="assistant",
-                                tool_calls=tools_list,
-                            ),
-                            finish_reason="tool_calls",
+                            delta=ChoiceDelta(
+                                tool_calls=[
+                                    ChoiceDeltaToolCall(
+                                        function=ChoiceDeltaToolCallFunction(
+                                            arguments=accumulated_tool_text
+                                        )
+                                    )
+                                ]
+                            )
                         )
-                    ],
+                    ]
                 )
-                yield {
-                    "event": "message",
-                    "data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)
-                }
+                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
 
         if eos:
-            # Log the full response at the end
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
 
-            # Include generation stats if available and requested
             if gen_stats and query.stream_options and query.stream_options.include_usage:
                 usage_data = ChatCompletionResponse(
                     unique_id=unique_id,
@@ -231,10 +249,24 @@ async def chat_completion_response_stream(
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
-            # Send the ending DONE message
+            # Send final chunk with finish_reason
+            chunk_data = ChatCompletionResponse(
+                unique_id=unique_id,
+                model=model_name,
+                object="chat.completion.chunk",
+                created=created,
+                choices=[
+                    StreamChoice(
+                        index=0,
+                        delta=ChoiceDelta(),
+                        finish_reason="tool_calls" if accumulated_tool_text else "stop"
+                    )
+                ]
+            )
+            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
             yield {"data": "[DONE]"}
         else:
-            await asyncio.sleep(0.1)  # Short sleep before next iteration if not at end of stream
+            await asyncio.sleep(0.1)
 
 
 async def chat_completion_response(
@@ -279,7 +311,7 @@ async def chat_completion_response(
                 logger.info("----------------------LLM Response---------------\n" + response_all.strip())
 
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)    # short sleep before trying again
+            await asyncio.sleep(0.01)    # short sleep before trying again
 
 
     unique_id = get_response_uid()
@@ -685,7 +717,7 @@ async def chat_completion_response_artifact(
                 gen_queue.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response_all.strip())
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
 
     unique_id = get_response_uid()
     response = response.strip()

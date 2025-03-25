@@ -11,11 +11,12 @@ class ModelRequest(BaseModel):
 
 
 class ModelInstanceInfo(BaseModel):
-    model_id: str
+    model_name: str
     port: int
     pid: int  # Changed from process to pid
     status: str
-    embedding: bool = False
+    model_type: Literal["stt", "llm", "tts", "embedding"]
+    strict: bool = Field(description="whether require api call to match model name or not", default=False)
 
     class Config:
         # Override protected namespaces to suppress warning

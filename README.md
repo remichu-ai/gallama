@@ -2,17 +2,29 @@
 
 __gallama__ is an opinionated Python library that provides a LLM inference API service backend optimized for local agentic tasks.
 
-It tries to close the gap between pure inference engine (such as ExLlamaV2 and Llama.cpp) and additional needs for agentic work (e.g., function calling, formatting constraints).
-
-It provides some experimental features such as Artifact (like Claude's) and Thinking template (to guide chain of though).
-
-As there is no standard approach for these experimental feature current, the library does implement it via some boilerplate code (you will find some fixed prompt inside the code) and thus is an opinionated API engine. 
-
-This library is marked with rolling update so please be patient hi-cup and bugs :) (feel free to open an issue if you come across any).
-
 Currently, the backend is mainly using ExllamaV2. Llama.cpp support is under experiment. 
 
 Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
+
+# New in version: 0.0.9 - OpenAI realtime websocket
+From version 0.0.9, gallama does provide a OpenAI Realtime websocket by wrapping Websocker over a TTS + LLM + TTS setup.
+While this is not true Sound to Sound set up, it does provide a mock-up of OpenAI realtime websocket for testing.
+The setup also provide integration with Video from Livekit for video voice chat app.
+
+The Realtime Websocket API is tested working with follow:
+- https://github.com/livekit-examples/realtime-playground.git
+- https://github.com/openai/openai-realtime-console/tree/websockets
+
+API Spec:
+- https://platform.openai.com/docs/guides/realtime
+
+To Use Video Chat feature
+Please refer to the PAI app here:
+- https://github.com/remichu-ai/pai.git
+- https://github.com/remichu-ai/pai-agent.git
+
+Do note that there are some package at Linux level that you will need to install. Refer to installation portion below.
+While it does mimic openai realtime, there could be bug due to it not using native audio to audio model
 
 # Quick Start
    Head down to the installation guide at the bottom of this page.
@@ -134,8 +146,10 @@ gallama list available
 | Model         | Backend      | Available Quantizations (bpw)                          |
 |---------------|--------------|--------------------------------------------------------|
 | qwen-2-VL-2B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
-| qwen-2-VL-7B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`                                          |
-| qwen-2-VL-72B | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`                                        |
+| qwen-2-VL-7B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
+| qwen-2-VL-72B | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
+| qwen-2.5-VL-7B | exllama | `4.0bpw`, `5.0bpw`, `6.0bpw`, `8.0bpw`                 |
+| qwen-2.5-VL-72B | exllama | `5.5bpw`                                               |
 | pixtral               | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
 
 
@@ -433,6 +447,17 @@ gallama requires certain components to be installed and functioning.
 Ensure that you have either ExllamaV2 (recommended) or Llama CPP Python (in development) installed. You can have both installed and use both with gallama as well,
 If you already have either ExLlamaV2 (and optionally Flash Attention) running, you can install gallama by:
 
+OS level package required as followed:
+For Speech to Text, You will need to install the dependency as required by faster whisper
+Most notably is CuDNN
+https://developer.nvidia.com/cudnn
+
+For Text to Speech, install the following package:
+```shell
+apt-get install portaudio19-dev ffmpeg
+```
+
+Now to install gallama from pip
 ```shell
 pip install gallama
 ```
