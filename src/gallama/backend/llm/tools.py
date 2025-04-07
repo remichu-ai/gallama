@@ -7,6 +7,7 @@ from ...data_classes import ToolSpec
 import json
 from datamodel_code_generator import generate, InputFileType, DataModelType
 from ...logger.logger import logger
+import inspect
 
 
 class Tools:
@@ -25,6 +26,8 @@ class Tools:
         self.tool_def_as_code: str = self.create_tool_def_as_code()
         logger.debug(f"tool_def_as_code: {self.tool_def_as_code}")
 
+        logger.info(f"FROG FROG: {self.tools_in_python_function_signatures()}")
+
     def create_tool_def_as_code(self):
         _temp_tool_list = [
             self.generate_pydantic_model_from_json_schema(tool.model_json_schema())
@@ -36,6 +39,84 @@ class Tools:
     def tool_name_list(self):
         return ", ".join(f'"{name}"' for name in self.tool_dict.keys())
 
+    def tools_in_python_function_signatures(self, func_name: str | list[str] = None,
+                                            return_as_dict: bool = False) -> str | dict:
+        """Generates Python function signature strings for all tools.
+
+        Args:
+            func_name (str or list[str], optional): If provided, only generate signatures for these function(s).
+            return_as_dict (bool, optional): If True, returns a dictionary mapping function names to their signatures.
+                                             Otherwise, returns a single string with all signatures concatenated.
+
+        Returns:
+            str | dict: A string containing Python function definitions for each tool, or a dictionary mapping
+                        function names to their respective signature strings.
+        """
+        # Prepare the function name(s) for filtering
+        if func_name is not None:
+            if isinstance(func_name, str):
+                func_names = [func_name]
+            elif isinstance(func_name, list):
+                func_names = func_name
+            else:
+                raise ValueError("func_name must be a string or a list of strings")
+        else:
+            func_names = None
+
+        # Use a dictionary if return_as_dict is True; otherwise, use a list.
+        signatures = {} if return_as_dict else []
+
+        for tool in self.tools:
+            # Filter tools by function name if provided
+            if func_names is not None and tool.name not in func_names:
+                continue
+
+            func_spec = tool.function
+            name = func_spec.name
+            description = func_spec.description or ""
+            parameters = func_spec.parameters.properties if func_spec.parameters else {}
+            required = set(func_spec.parameters.required) if func_spec.parameters else set()
+
+            params = []
+            for param_name, param_info in parameters.items():
+                param_type = self.type_from_json_schema(param_info)
+
+                # Handle type string formatting
+                if inspect.isclass(param_type):
+                    type_str = param_type.__name__
+                else:
+                    type_str = str(param_type).replace('typing.', '')
+
+                # Check if the parameter is required
+                if param_name in required:
+                    param_str = f"{param_name}: {type_str}"
+                else:
+                    param_str = f"{param_name}: {type_str} = None"
+                params.append(param_str)
+
+            params_str = ", ".join(params)
+
+            # Build the function signature string
+            signature = f"def {name}({params_str}):\n"
+            docstring = f'    """{description}'
+
+            # Add parameter descriptions to the docstring
+            if parameters:
+                docstring += "\n\n    Args:"
+                for param_name, param_info in parameters.items():
+                    desc = param_info.get('description', '')
+                    docstring += f"\n      {param_name}: {desc}"
+            docstring += '\n    """'
+
+            signature += docstring
+
+            # Store the signature in the appropriate container
+            if return_as_dict:
+                signatures[name] = signature
+            else:
+                signatures.append(signature)
+
+        return signatures if return_as_dict else ("'''python\n" + "\n\n".join(signatures) + "\n'''")
 
     @staticmethod
     def type_from_json_schema(schema: dict):

@@ -1,7 +1,15 @@
 import json
 import yaml
 from typing import List, Dict, Union, Literal
-from gallama.data_classes.data_class import BaseMessage, ChatMLQuery, ToolCall, MultiModalTextContent, MultiModalImageContent
+from gallama.data_classes.data_class import (
+    BaseMessage,
+    ChatMLQuery,
+    ToolCall,
+    MultiModalTextContent,
+    MultiModalImageContent,
+    MultiModalImageHFContent,
+    MultiModalAudioContent
+)
 from pydantic import BaseModel
 from copy import deepcopy
 from gallama.utils.utils import parse_xml_to_dict
@@ -86,6 +94,18 @@ class PromptEngine:
     def get_image_pad_token(self):
         return self.model_prompt.get("image_pad", "")
 
+    def get_audio_start_token(self):
+        return self.model_prompt.get("audio_start", "")
+
+    def get_audio_end_token(self):
+        return self.model_prompt.get("audio_end", "")
+
+    def get_audio_pad_token(self):
+        return self.model_prompt.get("audio_pad", "")
+
+    def get_video_pad_token(self):
+        return self.model_prompt.get("video_pad", "")
+
     def _get_role_token(self, role, token_type: Literal["start", "end"]):
         if token_type == "start":
             if role == "system":
@@ -139,17 +159,17 @@ class PromptEngine:
 
         func_name = tool_call.function.name
         args_str = tool_call.function.arguments.replace('"', '')
-        return f"{func_name}({args_str})"
+        return f"{func_name}(**{args_str})"
 
     def _format_tool_result(self, msg: BaseMessage) -> str:
         content = msg.content if msg.content else ""
 
         try:
-            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
+            content = self._get_role_token(role="tool_result",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
         except:
-            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
+            content = self._get_role_token(role="tool_result",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
 
-        return content + self._get_role_token(role="user",token_type="end")
+        return content + self._get_role_token(role="tool_result",token_type="end")
 
     def _format_tool_result_msg(self, msg: BaseMessage) -> str:
         """one msg might have multiple tool calls"""
@@ -287,15 +307,17 @@ class PromptEngine:
         for chunk in content:
             if isinstance(chunk, MultiModalTextContent):
                 content_str += chunk.text
-            elif isinstance(chunk, MultiModalImageContent):
+            elif isinstance(chunk, MultiModalImageContent) or isinstance(chunk, MultiModalImageHFContent):
                 if not exllama_vision_token:
                     content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
                 else:
                     # use a standard token as place holder, TODO - refractor
                     # content_str += "{{IMG-" + f"{uuid.uuid4().hex}" + "}}"
                     content_str += "{{IMG-PlaceHolderTokenHere}}"   #TODO use a constant instead
+            elif isinstance(chunk, MultiModalAudioContent):
+                content_str += self.get_audio_start_token() + self.get_audio_pad_token() + self.get_audio_end_token()
             else:
-                raise ValueError("Unexpected content type ")
+                raise ValueError(f"Unexpected content type {type(chunk)}")
 
         return content_str
 

@@ -6,7 +6,6 @@ from fastapi import Request                 # for type hint
 from importlib.metadata import version      # for checking of exllama version
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
-import traceback
 
 from gallama.logger.logger import logger
 from gallama.data_classes import (
@@ -25,52 +24,27 @@ from gallama.utils.utils import get_image
 
 
 try:
-    from exllamav2 import (
-        ExLlamaV2,
-        ExLlamaV2Tokenizer,
-        ExLlamaV2Cache,
-        ExLlamaV2Cache_Q4,
-        ExLlamaV2Cache_Q6,
-        ExLlamaV2Cache_Q8,
-        ExLlamaV2Config,
-    )
-    from exllamav2.generator import (
-        ExLlamaV2Sampler,
-        ExLlamaV2DynamicGeneratorAsync,
-        ExLlamaV2DynamicJobAsync,
+    from exllamav3 import (
+        Model,
+        Config,
+        Cache,
+        Tokenizer,
+        AsyncGenerator,
+        AsyncJob,
+        DefaultSampler
     )
 
-    from exllamav2.generator.filters import ExLlamaV2PrefixFilter
+    # from exllamav2.generator.filters import ExLlamaV2PrefixFilter
 
-    if version('exllamav2') == '0.2.1' or version('exllamav2') == '0.2.2':
-        raise "Please use version 0.2.3 onwards. There is some bug with v0.2.1 and 0.2.2 related with format enforcement"
 
 except ImportError:
-    ExLlamaV2 = None
-    ExLlamaV2Tokenizer = None
-    ExLlamaV2Cache = None
-    ExLlamaV2Cache_Q4 = None
-    ExLlamaV2Cache_Q6 = None
-    ExLlamaV2Cache_Q8 = None
-    ExLlamaV2Config = None
-    ExLlamaV2Sampler = None
-    ExLlamaV2DynamicGeneratorAsync = None
-    ExLlamaV2DynamicJobAsync = None
-    ExLlamaV2PrefixFilter = None
+    Model = None
+    Config = None
+    Cache = None
+    Tokenizer = None
+    AsyncGenerator = None
+    Job = None
 
-
-# tensor parallel from v0.1.9 onward
-try:
-    from exllamav2 import ExLlamaV2Cache_TP
-except ImportError:
-    # optional dependency
-    ExLlamaV2Cache_TP = None
-
-# vision support from v0.2.4 onward
-try:
-    from exllamav2 import ExLlamaV2VisionTower
-except ImportError:
-    ExLlamaV2VisionTower = None
 
 # format enforcement with formatron
 try:
@@ -106,7 +80,7 @@ except ImportError:
     JsonSchemaParser = None
 
 
-class ModelExllama(ModelInterface):
+class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
         self.model, self.tokenizer, self.cache, self.processor = self.load_model()
@@ -132,20 +106,20 @@ class ModelExllama(ModelInterface):
             tensor_parallel=self.tensor_parallel,
         )
 
-        # load draft model
-        if self.draft_model_id:
-            # tokenizer and processor already set above
-            self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
-                model_id=self.draft_model_id,
-                backend=self.backend,
-                max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
-                cache_size=self.draft_cache_size,
-                cache_quant=self.draft_cache_quant,
-                gpus=self.draft_gpus,
-                reserve_vram=self._reserve_vram,
-            )
+        # # load draft model
+        # if self.draft_model_id:
+        #     # tokenizer and processor already set above
+        #     self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
+        #         model_id=self.draft_model_id,
+        #         backend=self.backend,
+        #         max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
+        #         cache_size=self.draft_cache_size,
+        #         cache_quant=self.draft_cache_quant,
+        #         gpus=self.draft_gpus,
+        #         reserve_vram=self._reserve_vram,
+        #     )
 
-        self.eos_token_ids = self.generate_eos_tokens_id()
+        self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)
 
         return model, tokenizer, cache, processor
 
@@ -173,85 +147,88 @@ class ModelExllama(ModelInterface):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
 
-        # initialize
-        cache = None
-        tokenizer = None
+        config = Config.from_directory(model_id)
+        model = Model.from_config(config)
+        tokenizer = Tokenizer.from_config(config)
+        processor = None    # placeholder for visual processing tower
 
-        config = ExLlamaV2Config(model_id)
+
+        # find the max sequence length
         if max_seq_len is not None:
-            config.max_seq_len = max_seq_len
+            self.max_seq_len = max_seq_len
         else:
             # set the self.max_seq_len using model config file as it is None at the moment
-            max_seq_len = config.max_seq_len
-            self.max_seq_len = config.max_seq_len
+            self.max_seq_len = config.config_dict.get("max_position_embeddings", 16384)
 
-        model = ExLlamaV2(config)
-        tokenizer = ExLlamaV2Tokenizer(config)
+        cache = Cache(model, max_num_tokens=self.max_seq_len)
 
-        # a simple dict to help map cache quant
-        cache_quant_dict = {
-            "FP16": ExLlamaV2Cache,
-            "Q4": ExLlamaV2Cache_Q4,
-            "Q6": ExLlamaV2Cache_Q6,
-            "Q8": ExLlamaV2Cache_Q8,
-        }
+        # load model
+        model.load(progressbar = True)
 
-        # cache size need to minimally max_seq_len size
-        cache_size_to_use = cache_size if cache_size else config.max_seq_len
-        cache_size_to_use = (cache_size_to_use//256) * 256      # round to multiplier of 256 for paged attention
-        # ensure cache_size is minimally max_seq_len
-        cache_size_to_use = max(cache_size_to_use, max_seq_len)
-
-        # get the cache quantization to use
-        cache_quant_to_use = cache_quant_dict[cache_quant]
-
-        logger.info("max_seq_len: " + str(self.max_seq_len))
-        logger.info("cache_size: " + str(cache_size_to_use))
-        logger.info("Cache Quantization: " + str(cache_quant))
-
-        assert cache_quant_to_use is not None
-        assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
-            "Device map should be either 'auto', 'gpu' split"
-
-        if not tensor_parallel:
-            if isinstance(gpus, str) and gpus == "auto":
-                cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
-                model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
-            elif isinstance(gpus, list):      # user specify the gpus split
-                logger.info("Custom GPU Allocation in GB: " + str(gpus))
-                model.load(gpu_split=gpus, progress=True)
-                cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
-        else:
-            # tensor parallel mode
-            logger.info("ExllamaV2 Tensor Parallel enabled")
-            if ExLlamaV2Cache_TP:       # ensure that tensor parallel is available
-                model.load_tp(progress=True, gpu_split = gpus if isinstance(gpus, list) else None)
-                cache = ExLlamaV2Cache_TP(
-                    model,
-                    max_seq_len = cache_size_to_use,
-                    base = cache_quant_to_use,
-                )
-            else:
-                raise ValueError("ExllamaV2 was not installed with tensor parallel")
-
-        # load vision processor
-        processor = None
-        if ExLlamaV2VisionTower:
-            try:
-                processor = ExLlamaV2VisionTower(config)
-                processor.load(progress=True)
-            except:
-                processor = None
-
-        # if processor is not None, meaning at least image is supported
-        if processor:
-            self.modalities.add("image")
-
-        # check if video is supported
-        if processor and processor.video_preprocess_func:
-            self.modalities.add("video")
-
-        logger.info(f"Supported Modalities: {self.modalities}")
+        # # a simple dict to help map cache quant
+        # cache_quant_dict = {
+        #     "FP16": ExLlamaV2Cache,
+        #     "Q4": ExLlamaV2Cache_Q4,
+        #     "Q6": ExLlamaV2Cache_Q6,
+        #     "Q8": ExLlamaV2Cache_Q8,
+        # }
+        #
+        # # cache size need to minimally max_seq_len size
+        # cache_size_to_use = cache_size if cache_size else config.max_seq_len
+        # cache_size_to_use = (cache_size_to_use//256) * 256      # round to multiplier of 256 for paged attention
+        # # ensure cache_size is minimally max_seq_len
+        # cache_size_to_use = max(cache_size_to_use, max_seq_len)
+        #
+        # # get the cache quantization to use
+        # cache_quant_to_use = cache_quant_dict[cache_quant]
+        #
+        # logger.info("max_seq_len: " + str(self.max_seq_len))
+        # logger.info("cache_size: " + str(cache_size_to_use))
+        # logger.info("Cache Quantization: " + str(cache_quant))
+        #
+        # assert cache_quant_to_use is not None
+        # assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
+        #     "Device map should be either 'auto', 'gpu' split"
+        #
+        # if not tensor_parallel:
+        #     if isinstance(gpus, str) and gpus == "auto":
+        #         cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
+        #         model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
+        #     elif isinstance(gpus, list):      # user specify the gpus split
+        #         logger.info("Custom GPU Allocation in GB: " + str(gpus))
+        #         model.load(gpu_split=gpus, progress=True)
+        #         cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
+        # else:
+        #     # tensor parallel mode
+        #     logger.info("ExllamaV2 Tensor Parallel enabled")
+        #     if ExLlamaV2Cache_TP:       # ensure that tensor parallel is available
+        #         model.load_tp(progress=True, gpu_split = gpus if isinstance(gpus, list) else None)
+        #         cache = ExLlamaV2Cache_TP(
+        #             model,
+        #             max_seq_len = cache_size_to_use,
+        #             base = cache_quant_to_use,
+        #         )
+        #     else:
+        #         raise ValueError("ExllamaV2 was not installed with tensor parallel")
+        #
+        # # load vision processor
+        # processor = None
+        # if ExLlamaV2VisionTower:
+        #     try:
+        #         processor = ExLlamaV2VisionTower(config)
+        #         processor.load(progress=True)
+        #     except:
+        #         processor = None
+        #
+        # # if processor is not None, meaning at least image is supported
+        # if processor:
+        #     self.modalities.add("image")
+        #
+        # # check if video is supported
+        # if processor and processor.video_preprocess_func:
+        #     self.modalities.add("video")
+        #
+        # logger.info(f"Supported Modalities: {self.modalities}")
 
         return model, tokenizer, cache, processor
 
@@ -262,7 +239,7 @@ class ModelExllama(ModelInterface):
         return "{{VIDEO-PlaceHolderTokenHere}}"
 
 
-    def generate_eos_tokens_id(self, tokenizer: ExLlamaV2Tokenizer = None) -> List[int]:
+    def generate_eos_tokens_id(self, tokenizer: Tokenizer = None) -> List[int]:
         """Generate the end-of-sequence token IDs."""
         if self.eos_token_str:
             # exllama
@@ -281,7 +258,7 @@ class ModelExllama(ModelInterface):
     @staticmethod
     async def check_disconnection(
         request: Request,
-        job: ExLlamaV2DynamicJobAsync,
+        job: AsyncJob,
         gen_queue_list: Union[GenQueue, QueueContext, List[QueueContext]],
         stop_event: asyncio.Event = None,
     ):
@@ -328,8 +305,8 @@ class ModelExllama(ModelInterface):
 
         def __init__(
             self,
-            cache: Union[ExLlamaV2Cache, ExLlamaV2Cache_Q4],
-            generator: ExLlamaV2DynamicGeneratorAsync,
+            cache: Cache,
+            generator: AsyncGenerator,
             lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
         ):
             self.cache = cache
@@ -343,22 +320,28 @@ class ModelExllama(ModelInterface):
         this will be run in the first text generation to ensure that generator is initialized
         """
 
-        lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
+        # lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
 
-        generator = ExLlamaV2DynamicGeneratorAsync(
+        # generator = ExLlamaV2DynamicGeneratorAsync(
+        #     model=self.model,
+        #     cache=self.cache,
+        #     tokenizer=self.tokenizer,
+        #     max_seq_len=self.max_seq_len,
+        #     draft_model=self.draft_model,
+        #     draft_cache=self.draft_cache,
+        #     num_draft_tokens=5,
+        # )
+
+        generator = AsyncGenerator(
             model=self.model,
             cache=self.cache,
             tokenizer=self.tokenizer,
-            max_seq_len=self.max_seq_len,
-            draft_model=self.draft_model,
-            draft_cache=self.draft_cache,
-            num_draft_tokens=5,
         )
 
         return self.ExllamaV2Pipeline(
             cache=self.cache,
             generator=generator,
-            lm_enforcer_tokenizer_data=lm_enforcer_tokenizer_data,
+            lm_enforcer_tokenizer_data=None,
         )
 
     @staticmethod
@@ -368,17 +351,19 @@ class ModelExllama(ModelInterface):
         **kwargs,
     ):
         # settings
-        settings = ExLlamaV2Sampler.Settings()
-        settings.temperature = temperature
-        settings.min_temp = 0.15
-        settings.top_k = 50
-        settings.top_p = top_p
-        settings.min_p = 0.05
-        settings.token_repetition_penalty = 1.1
-        settings.token_frequency_penalty = 0.05
-        settings.token_repetition_range = 1024
-        # settings.token_repetition_decay: int = 0.98
-        settings.temperature_last = False
+        settings = DefaultSampler()
+
+        # settings = ExLlamaV2Sampler.Settings()
+        # settings.temperature = temperature
+        # settings.min_temp = 0.15
+        # settings.top_k = 50
+        # settings.top_p = top_p
+        # settings.min_p = 0.05
+        # settings.token_repetition_penalty = 1.1
+        # settings.token_frequency_penalty = 0.05
+        # settings.token_repetition_range = 1024
+        # # settings.token_repetition_decay: int = 0.98
+        # settings.temperature_last = False
 
         return settings
 
@@ -529,15 +514,15 @@ class ModelExllama(ModelInterface):
         """Create filters for token generation"""
         filters = []
 
-        # Format enforcer filters
-        if formatter:
-            filters.extend(self._get_format_enforcer_filter(formatter))
-
-        # Prefix filters
-        if prefix_strings:
-            filters.append(
-                ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_strings)
-            )
+        # # Format enforcer filters
+        # if formatter:
+        #     filters.extend(self._get_format_enforcer_filter(formatter))
+        #
+        # # Prefix filters
+        # if prefix_strings:
+        #     filters.append(
+        #         ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_strings)
+        #     )
 
         return filters
 
@@ -594,18 +579,21 @@ class ModelExllama(ModelInterface):
 
             # Convert prompt to token IDs
             if image_embeddings:
-                input_ids = self.tokenizer.encode(
-                    prompt,
-                    encode_special_tokens=True,
-                    embeddings=image_embeddings,
-                )
+                # input_ids = self.tokenizer.encode(
+                #     prompt,
+                #     encode_special_tokens=True,
+                #     embeddings=image_embeddings,
+                # )
+
+                # TODO support image
+                input_ids = self.tokenizer.encode(prompt)
             else:
                 input_ids = self.tokenizer.encode(prompt)
 
             self.validate_token_length(len(input_ids[0]))
 
             # Create filters for format enforcement
-            filters = self._create_generation_filters(formatter, prefix_strings)
+            # filters = self._create_generation_filters(formatter, prefix_strings)
 
             # Find stop conditions
             if stop_words:
@@ -636,11 +624,11 @@ class ModelExllama(ModelInterface):
                 "generator": self.pipeline.generator,
                 "input_ids": input_ids,
                 "max_new_tokens": max_tokens_to_use,
-                "gen_settings": settings,
+                "sampler": settings,
                 "stop_conditions": stop_conditions,
                 "banned_strings": banned_strings,
                 "decode_special_tokens": True,
-                "filters": filters,
+                # "filters": filters,
                 "token_healing": True,
                 "identifier": job_id,
             }
@@ -650,7 +638,7 @@ class ModelExllama(ModelInterface):
                 argument_list["embeddings"] = image_embeddings
 
             # Create the job
-            job = ExLlamaV2DynamicJobAsync(**argument_list)
+            job = AsyncJob(**argument_list)
 
             generate_text = ""
             gen_stats = None
@@ -710,6 +698,8 @@ class ModelExllama(ModelInterface):
                             output_tokens_count=result["new_tokens"],
                             time_to_first_token=result["time_prefill"],
                             time_generate=result["time_generate"],
+                            cached_pages=result["cached_pages"],
+                            cached_tokens=result["cached_tokens"]
                         )
 
                         for g_queue in gen_queue_list:

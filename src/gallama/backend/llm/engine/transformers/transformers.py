@@ -6,9 +6,17 @@ import asyncio
 from fastapi import Request                 # for type hint
 from threading import Thread
 from importlib import import_module
+import os
+from huggingface_hub.utils.tqdm import enable_progress_bars
+import huggingface_hub.constants
 
-# custom model support
-from qwen_vl_utils import process_vision_info
+
+def overwrite_are_progress_bars_disabled():
+    return False
+
+
+huggingface_hub.utils.tqdm.are_progress_bars_disabled = overwrite_are_progress_bars_disabled
+
 
 # format enforcement with formatron
 try:
@@ -28,6 +36,11 @@ except ImportError:
     TokenEnforcerTokenizerData = None
     build_transformers_prefix_allowed_tokens_fn = None
 
+try:
+    from qwen_omni_utils import process_mm_info
+except ImportError:
+    process_mm_info = None
+
 
 from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStreamer
 
@@ -37,6 +50,7 @@ from gallama.logger.logger import logger
 
 # custom data classes
 from gallama.data_classes import (
+    BaseMessage,
     ModelSpec,
     GenStart,
     GenEnd,
@@ -44,7 +58,8 @@ from gallama.data_classes import (
     GenText,
     GenerationStats,
     QueueContext,
-    GenQueueDynamic
+    GenQueueDynamic,
+    VideoFrame
 )
 
 class ModelTransformers(ModelInterface):
@@ -52,6 +67,12 @@ class ModelTransformers(ModelInterface):
         super().__init__(model_spec)
         self.model, self.tokenizer, self.processor = self.load_model()
 
+    @property
+    def video_token_by_backend(self) -> str:
+        # TODO to use more generalized method than hardcoding Qwen Omni token
+        video_token = "<|vision_bos|><|IMAGE|><|vision_eos|>"
+
+        return video_token
 
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
@@ -76,6 +97,13 @@ class ModelTransformers(ModelInterface):
     ):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
+
+        # infinity emb set this to 1 and cause some bug with current version of Huggingface
+        # to remove this env for tqdm to work
+        huggingface_hub.constants.HF_HUB_DISABLE_PROGRESS_BARS = False
+        os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+        enable_progress_bars()
+
 
         cache = None  # in case not a backend with separate cache like llama cpp
         tokenizer = None
@@ -115,6 +143,8 @@ class ModelTransformers(ModelInterface):
         else:
             model_class = transformers.AutoModelForCausalLM
 
+
+
         if self.backend_extra_args.get('tokenizer_class'):
             tokenizer_class = get_class(self.backend_extra_args['tokenizer_class'])
         else:
@@ -144,7 +174,8 @@ class ModelTransformers(ModelInterface):
             self.max_seq_len = model.config.max_position_embeddings
         except:
             # for llama 3.2
-            self.max_seq_len = model.config.text_config.max_position_embeddings
+            # self.max_seq_len = model.config.text_config.max_position_embeddings
+            self.max_seq_len = 32768
 
         return model, tokenizer, processor
 
@@ -213,7 +244,7 @@ class ModelTransformers(ModelInterface):
                 chunk_text = GenText(content=chunk, text_type=gen_type_str)
                 generate_text += chunk
                 for g_queue in gen_queue_list:
-                    await g_queue.get_queue().put(chunk_text)
+                    await g_queue.put(chunk_text)
 
                 # Yield control back to the event loop
                 await asyncio.sleep(0)
@@ -226,7 +257,7 @@ class ModelTransformers(ModelInterface):
             chunk_text = GenText(content=stop_word_to_return, text_type=gen_type_str)
             generate_text += chunk_text.content
             for g_queue in gen_queue_list:
-                await g_queue.get_queue().put(chunk_text)
+                await g_queue.put(chunk_text)
 
         return generate_text
 
@@ -245,7 +276,9 @@ class ModelTransformers(ModelInterface):
         banned_strings: list[str] | None = None,
         max_tokens: int = None,
         quiet=False,
-        messages: List = None,  # query.message for multimodal
+        messages: List[BaseMessage] = None,  # query.message for multimodal
+        video: List[VideoFrame] = None,
+        #stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
 
@@ -278,9 +311,9 @@ class ModelTransformers(ModelInterface):
             raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
         # vision support
-        image_inputs, video_inputs = None, None
+        audios_input, image_inputs, video_inputs = None, None, None
         if messages:
-            messages_as_dicts = [message.dict() for message in messages]
+            messages_as_dicts = [message.model_dump() for message in messages]
 
             # convert OpenAI to qwen format -> TODO find more generalized method
             # OpenAI format for image_url:
@@ -305,18 +338,28 @@ class ModelTransformers(ModelInterface):
                             message["image"] = message["image_url"]["url"]
                             message.pop("image_url", None)
 
+            # add in the message for video
+            if video:
+                messages_as_dicts.append({
+                    "type": "video",
+                    "video": [ frame.get_image() for frame in video],
+                })
 
-            image_inputs, video_inputs = process_vision_info(messages_as_dicts)
+            audios_input, image_inputs, video_inputs = process_mm_info(messages_as_dicts)
 
         # convert prompt to token id
         if image_inputs is None and video_inputs is None:
-            input_ids = self.tokenizer(prompt, return_tensors="pt")
+            input_ids = self.tokenizer(
+                prompt,
+                return_tensors="pt"
+            )
         else:   # multimodal
             input_ids = self.processor(
                 text=[prompt],
+                audios=audios_input,
                 images=image_inputs,
-                #videos=video_inputs,       # TODO currently Llama doesnt support videos, comment out for now.
-                #padding=True,
+                videos=video_inputs,       # TODO currently Llama doesnt support videos, comment out for now.
+                padding=True,
                 add_special_tokens=False,
                 return_tensors="pt",
             )

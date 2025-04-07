@@ -7,6 +7,7 @@ import time
 import torch
 import re
 import base64
+from PIL import Image
 from .video import VideoFrame
 
 
@@ -43,6 +44,9 @@ class MultiModalTextContent(BaseModel):
     type: Literal["text"]
     text: str = ""
 
+class MultiModalAudioContent(BaseModel):
+    type: Literal["audio"]
+    audio: str = ""     # base64 audio
 
 class MultiModalImageContent(BaseModel):
     class ImageDetail(BaseModel):
@@ -102,13 +106,41 @@ class MultiModalImageContent(BaseModel):
             return v
 
     type: Literal["image_url"]
-    image_url: ImageDetail
+    image_url: Union[
+        ImageDetail,        # openai spec
+        str,                # huggingface
+    ]
+
+class MultiModalImageHFContent(BaseModel):
+    type: Literal["image"]
+    image_url: Union[
+        str,                # huggingface - base64 string
+        Image.Image,        # qwen, internal usage where the image object alrd obtained
+    ]
+
+    @validator('image_url')
+    def validate_image(cls, value):
+        if not isinstance(value, str) or not isinstance(value, Image.Image):
+            raise ValueError("Not a valid PIL Image")
+        return value
+
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 
 class BaseMessage(BaseModel):
     role: Literal['system', 'user', 'assistant', 'tool']
-    content: Optional[Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]] = ""
+    content: Optional[Union[
+        str,
+        List[Union[
+            MultiModalTextContent,
+            MultiModalImageContent,
+            MultiModalAudioContent,
+            MultiModalImageHFContent
+        ]
+    ]]] = ""
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
 
@@ -247,6 +279,9 @@ class ChatMLQuery(BaseModel):
         if v < 0:
             raise ValueError('tool_call_thinking_token must be greater than or equal to 0')
         return v
+
+
+
 
 
 
@@ -493,9 +528,11 @@ class VoiceConfig(BaseModel):
 # list of supported backend. None meaning it the api will take backend set from yaml config file
 SUPPORTED_BACKENDS = [
     "exllama",
+    "exllamav3",
     "llama_cpp",
     "transformers",
     "mlx_vlm",
+    "sglang",
     "embedding",
     "faster_whisper",
     "mlx_whisper",
@@ -586,7 +623,7 @@ class ModelSpec(BaseModel):
     def get_model_type_from_backend(cls, backend: str = None):
         if backend is None:
             return None
-        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm"]:
+        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3"]:
             return "llm"
         elif backend in ["faster_whisper", "mlx_whisper"]:
             return "stt"

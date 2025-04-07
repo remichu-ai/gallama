@@ -22,6 +22,8 @@ from gallama.backend.llm.tools import Tools, create_function_models_v2, create_f
 
 from gallama.utils.utils import get_token_length
 from gallama.api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
+from ..format_enforcer import SGLangFormatter
+
 from gallama.data_classes import (
     ModelSpec,
     ChatMLQuery,
@@ -172,7 +174,7 @@ class ModelInterface(ABC):
         gen_type: Union[str, GenStart] = "text", # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -334,6 +336,20 @@ class ModelInterface(ABC):
         if self.max_seq_len and token_length > self.max_seq_len:
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
+
+    @staticmethod
+    def get_stop_word(text, stop_words) -> Union[str, None]:
+        """ this function will match the stop word used given the text that llm ended generation with and a list of stop_words."""
+
+        # sort the list by length to find the longest first
+        sorted_stop_words = sorted(stop_words, key=len, reverse=True)
+
+        text = text.lstrip()  # Remove trailing whitespace
+        for stop_word in stop_words:
+            if stop_word in text:
+                return stop_word
+
+        return None
 
     async def chat_no_tool(
         self,
@@ -1012,6 +1028,7 @@ End of Function Calling Instruction
 ---
 """
 
+        # handling the "auto scenario"
 
         tool_call = await self._tool_calling_task(
             prompt_eng=prompt_eng,
@@ -1021,20 +1038,27 @@ End of Function Calling Instruction
             tool_as_code_prompt=tool_as_code_prompt
         )
 
-        tool_decision, tool_decision_check_fn = await self._tool_decision_task(
-            prompt_eng=prompt_eng,
-            query=query,
-            request=request,
-            tool_handler=tool_handler,
-            tool_as_code_prompt=tool_as_code_prompt
-        )
+        if query.tool_choice == "auto":
+            tool_decision, tool_decision_check_fn = await self._tool_decision_task(
+                prompt_eng=prompt_eng,
+                query=query,
+                request=request,
+                tool_handler=tool_handler,
+                tool_as_code_prompt=tool_as_code_prompt
+            )
 
+            no_tool = await self._no_tool_task(
+                prompt_eng=prompt_eng,
+                query=query,
+                request=request
+            )
+        else:
+            # tool usage is enforced
+            tool_decision = "function"
+            tool_decision_check_fn = None
 
-        no_tool = await self._no_tool_task(
-            prompt_eng=prompt_eng,
-            query=query,
-            request=request
-        )
+            no_tool = None
+
 
         tasks = []  # to track the task running
 
@@ -1062,17 +1086,27 @@ End of Function Calling Instruction
                 tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
 
 
-            if tool_decision_check_fn(tool_decision_outcome):
+            if tool_decision == "function" or tool_decision_check_fn(tool_decision_outcome):
                 logger.info("Tool auto decision: function")
 
                 _has_tool = True
 
                 # check first if tool managed to generate
                 if tool_call.gen_dynamic_queue[0].qsize() < 3:
-                    await asyncio.sleep(0.3)    # wait for 0.3 more second
+                    max_wait_time = 3
+                    interval = 0.1
+                    elapsed = 0.0
+
+                    while elapsed < max_wait_time:
+                        await asyncio.sleep(interval)
+                        if tool_call.gen_dynamic_queue[0].qsize() >= 3:
+                            logger.debug(f"Time required to start function calling: {elapsed}")
+                            break
+                        elapsed += interval
 
                     if tool_call.gen_dynamic_queue[0].qsize() < 3:
                         _has_tool = False
+
 
                 if _has_tool:
                     if no_tool:

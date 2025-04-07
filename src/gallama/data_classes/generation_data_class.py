@@ -10,6 +10,8 @@ class GenerationStats(BaseModel):
     output_tokens_count: int = Field(description='output tokens count', default=0)
     time_to_first_token: float = Field(description='time to first token', default=0)
     time_generate: float = Field(description='time to generate tokens', default=0)
+    cached_pages: int = Field(description='number of cached pages', default=0)
+    cached_tokens: int = Field(description='number of cached tokens', default=0)
 
     @property
     def total_tokens_count(self) -> int:
