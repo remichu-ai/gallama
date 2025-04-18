@@ -1,3 +1,5 @@
+import exllamav3
+
 from gallama.backend.llm.engine.base import ModelInterface
 from typing import Optional, Dict, List, Union
 import torch
@@ -31,12 +33,9 @@ try:
         Tokenizer,
         AsyncGenerator,
         AsyncJob,
-        DefaultSampler
     )
 
     # from exllamav2.generator.filters import ExLlamaV2PrefixFilter
-
-
 except ImportError:
     Model = None
     Config = None
@@ -44,6 +43,35 @@ except ImportError:
     Tokenizer = None
     AsyncGenerator = None
     Job = None
+
+# import exllama v3 sampler
+try:
+     from exllamav3.generator.sampler import (
+         CustomSampler,
+         SS_Base,
+         SS_Argmax,
+         SS_Sample,
+         SS_Temperature,
+         SS_Normalize,
+         SS_Sort,
+         SS_TopK,
+         SS_TopP,
+         SS_NoOp,
+     )
+except ImportError:
+    CustomSampler = None
+    SS_Base = None
+    SS_Argmax = None
+    SS_Sample = None
+    SS_Temperature = None
+    SS_Normalize = None
+    SS_Sort = None
+    SS_TopK = None
+    SS_TopP = None
+    SS_NoOp = None
+
+
+
 
 
 # format enforcement with formatron
@@ -351,7 +379,11 @@ class ModelExllamaV3(ModelInterface):
         **kwargs,
     ):
         # settings
-        settings = DefaultSampler()
+        settings = CustomSampler([
+            SS_Temperature(temperature),
+            SS_TopP(top_p),
+            SS_Sample()
+        ])
 
         # settings = ExLlamaV2Sampler.Settings()
         # settings.temperature = temperature
