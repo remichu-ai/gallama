@@ -341,13 +341,14 @@ class ModelInterface(ABC):
     def get_stop_word(text, stop_words) -> Union[str, None]:
         """ this function will match the stop word used given the text that llm ended generation with and a list of stop_words."""
 
-        # sort the list by length to find the longest first
-        sorted_stop_words = sorted(stop_words, key=len, reverse=True)
+        if stop_words:      # sgl return stop word stop reason for matched eos
+            # sort the list by length to find the longest first
+            sorted_stop_words = sorted(stop_words, key=len, reverse=True)
 
-        text = text.lstrip()  # Remove trailing whitespace
-        for stop_word in stop_words:
-            if stop_word in text:
-                return stop_word
+            text = text.lstrip()  # Remove trailing whitespace
+            for stop_word in stop_words:
+                if stop_word in text:
+                    return stop_word
 
         return None
 
@@ -1054,9 +1055,9 @@ End of Function Calling Instruction
             )
         else:
             # tool usage is enforced
-            tool_decision = "function"
-            tool_decision_check_fn = None
-
+            tool_decision = None
+            tool_decision_outcome = "function"
+            tool_decision_check_fn = lambda *args, **kwargs: True
             no_tool = None
 
 
@@ -1136,9 +1137,11 @@ End of Function Calling Instruction
                 logger.error(f"Error in one of the tasks: {e}")
 
         else:   # non concurrency backend
+            # if on auto mode
             # first generate what is the decision regarding whether use tool or not
-            tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
-            tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+            if tool_decision:     # not decided yet
+                tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
+                tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
 
             # handle tool/ non tool generation
             if tool_decision_check_fn(tool_decision_outcome):

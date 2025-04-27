@@ -9,7 +9,7 @@ from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterCo
 from gallama.logger.logger import logger
 import base64
 import asyncio
-import samplerate
+import librosa
 
 router = APIRouter(prefix="", tags=["audio"])
 
@@ -195,12 +195,9 @@ class TranscriptionConnectionManager:
             ) as sf_file:
                 audio = sf_file.read(dtype=np.float32)  # Read audio as float32
 
-            # Calculate the resampling ratio
+            # Resample the audio using
             target_sample_rate = asr_processor.SAMPLING_RATE
-            ratio = target_sample_rate / sample_rate
-
-            # Resample the audio using samplerate
-            resampled_audio = samplerate.resample(audio, ratio, converter_type='sinc_best')
+            resampled_audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sample_rate)
 
             return resampled_audio
 

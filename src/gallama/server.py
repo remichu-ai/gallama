@@ -370,6 +370,7 @@ async def run_model(model_spec: ModelSpec):
 
                 # Set CUDA_VISIBLE_DEVICES
                 env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
+                env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")

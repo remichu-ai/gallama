@@ -529,6 +529,7 @@ class VoiceConfig(BaseModel):
 SUPPORTED_BACKENDS = [
     "exllama",
     "exllamav3",
+    "vllm",
     "llama_cpp",
     "transformers",
     "mlx_vlm",
@@ -623,7 +624,7 @@ class ModelSpec(BaseModel):
     def get_model_type_from_backend(cls, backend: str = None):
         if backend is None:
             return None
-        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3"]:
+        elif backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:
             return "llm"
         elif backend in ["faster_whisper", "mlx_whisper"]:
             return "stt"

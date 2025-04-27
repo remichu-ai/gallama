@@ -1,5 +1,4 @@
 cmake
-samplerate
 packaging
 ninja
 torch>=2.2.0

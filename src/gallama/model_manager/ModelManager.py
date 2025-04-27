@@ -99,7 +99,7 @@ class ModelManager:
 
 
         # load the model with config from the model_spec and yml. model_spec comes from cli
-        if model_spec.backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3"]:  # llm loading
+        if model_spec.backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
             if model_spec.backend == "exllama":
                 from gallama.backend.llm import ModelExllama as ModelClass
             elif model_spec.backend == "llama_cpp":
@@ -112,6 +112,8 @@ class ModelManager:
                 from gallama.backend.llm import ModelSGLang as ModelClass
             elif model_spec.backend == "exllamav3":
                 from gallama.backend.llm import ModelExllamaV3 as ModelClass
+            elif model_spec.backend == "vllm":
+                from gallama.backend.llm import ModelVLLM as ModelClass
             else:
                 raise Exception(f"Unknown backend: {model_spec.backend}")
 

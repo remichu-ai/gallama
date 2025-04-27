@@ -5,7 +5,6 @@ from .format_enforcer import SGLangFormatter
 try:
     from .engine import ModelExllama
 except ImportError:
-
     ModelExllama = None
 
 try:
@@ -28,7 +27,12 @@ try:
 except ImportError:
     ModelMLXVLM = None
 
-# try:
-from .engine import ModelSGLang
-# except ImportError:
-#     ModelSGLang = None
+try:
+    from .engine import ModelSGLang
+except ImportError:
+    ModelSGLang = None
+
+try:
+    from .engine import ModelVLLM
+except ImportError:
+    ModelVLLM = None

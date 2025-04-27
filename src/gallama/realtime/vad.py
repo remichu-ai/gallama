@@ -5,7 +5,7 @@ import numpy as np
 from typing import Tuple, Optional, Dict, Literal
 import torch
 from dataclasses import dataclass
-import samplerate
+import librosa
 from collections import deque
 from .audio_preprocessor import AudioPreprocessor
 import os
@@ -15,7 +15,6 @@ from datetime import datetime
 from ..dependencies_server import get_server_logger
 
 logger = get_server_logger()
-
 
 
 @dataclass
@@ -61,8 +60,6 @@ class VADProcessor:
         self.min_audio_chunk_sample = int(self.input_sample_rate / 10)
 
         self.vad_sample_rate = 16000
-        self.resampler = samplerate.Resampler('sinc_best', channels=1)
-        self.resample_ratio = self.vad_sample_rate / self.input_sample_rate
 
         # Debug settings
         self.debug = debug
@@ -97,7 +94,11 @@ class VADProcessor:
         """Resample audio from input sample rate to VAD sample rate"""
         if audio.size == 0:
             return np.array([], dtype=np.float32)
-        return self.resampler.process(audio, self.resample_ratio)
+        return librosa.resample(
+                audio,
+                orig_sr=self.input_sample_rate,
+                target_sr=self.vad_sample_rate
+            )
 
     def _save_debug_audio(self, audio_data: np.ndarray):
         """Save debug audio to file"""

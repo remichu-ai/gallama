@@ -1,16 +1,20 @@
 from ..base import ModelInterface
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any
 import time                                 # for compute of generation time
 import asyncio
 from fastapi import Request                 # for type hint
 import transformers
+from gallama.utils.utils import get_image
+from functools import lru_cache
 
 try:
-    import sglang as sgl
-    from sglang.utils import trim_overlap
+    from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.inputs import TextPrompt
+    from vllm.multimodal.inputs import ImageItem, VideoItem, AudioItem
 except ImportError:
-    sgl = None
-    trim_overlap = None
+    AsyncLLMEngine, AsyncEngineArgs, SamplingParams, GuidedDecodingParams = None, None, None, None
+    TextPrompt, ImageItem, VideoItem, AudioItem = None, None, None, None
 
 # format enforcement with formatron
 try:
@@ -60,76 +64,40 @@ from .....data_classes import (
     VideoFrame
 )
 
-# class SGLEncodeSafe(sgl.Engine):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#
-#     def encode_safe(
-#         self,
-#         prompt: Union[str, List[str], List[Dict], List[List[Dict]]],
-#         image_data: Optional[Union[List[str], str]] = None,
-#     ) -> Dict:
-#         """
-#         The arguments of this function are the same as in
-#         `sglang/srt/managers/io_struct.py::EmbeddingReqInput`.
-#         """
-#         obj = EmbeddingReqInput(text=prompt, image_data=image_data)
-#         generator = self.tokenizer_manager.generate_request(obj, None)
-#
-#         try:
-#             # Try to get the currently running event loop.
-#             current_loop = asyncio.get_running_loop()
-#             if current_loop.is_running():
-#                 # A loop is already running, so create a new one for this call.
-#                 new_loop = asyncio.new_event_loop()
-#                 ret = new_loop.run_until_complete(generator.__anext__())
-#                 new_loop.close()
-#             else:
-#                 ret = current_loop.run_until_complete(generator.__anext__())
-#         except RuntimeError:
-#             # No running loop was found, so get the default one.
-#             loop = asyncio.get_event_loop()
-#             ret = loop.run_until_complete(generator.__anext__())
-#
-#         return ret
 
-
-class ModelSGLang(ModelInterface):
+class ModelVLLM(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
         self.model, self.tokenizer, self.processor = self.load_model()
 
     @property
-    def video_token_by_backend(self) -> str:
-        # TODO to use more generalized method than hardcoding Qwen Omni token
-        video_token = "<|vision_bos|><|IMAGE|><|vision_eos|>"
-
-        return video_token
+    def support_concurrency(self) -> bool:
+        """
+        whether this backend/ model support concurrent request
+        """
+        return True
 
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
         # processor is for multimodal
-        model, tokenizer, processor = self.load_model_sglang(
+        model, tokenizer, processor = self.load_model_vllm(
             model_id=self.model_id,
-            gpus=self.gpus,
         )
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for llama cpp backend"
+            raise "Draft model currently not supported for vllm backend"
 
         self.eos_token_ids = self.generate_eos_tokens_id()
 
         return model, tokenizer, processor
 
-    def load_model_sglang(
+    def load_model_vllm(
         self,
         model_id,
-        gpus,
     ):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
-
 
         cache = None  # in case not a backend with separate cache like llama cpp
         tokenizer = None
@@ -138,8 +106,7 @@ class ModelSGLang(ModelInterface):
 
         # arguments for model loading
         model_kargs = {
-            'model_path': self.model_id,
-            "grammar_backend": "xgrammar"
+            'model': self.model_id,
         }
 
 
@@ -151,10 +118,11 @@ class ModelSGLang(ModelInterface):
                 model_kargs.update(model_extra_kwargs)      # update any extra argument
 
         # set max_seq_len based on model    TODO: To find more reliable method
-        self.max_seq_len = self.backend_extra_args.get('max_seq_len') or 32768
+        self.max_seq_len = self.backend_extra_args.get('max_model_len') or 32768
 
         logger.info(model_kargs)
-        model = sgl.Engine(**model_kargs)
+        engine_args = AsyncEngineArgs(**model_kargs)
+        model = AsyncLLMEngine.from_engine_args(engine_args)
 
         # wrapped_tokenizer = AsyncEncodeWrapper(model)
         # fall back to transformers implementation for tokenizer
@@ -173,6 +141,59 @@ class ModelSGLang(ModelInterface):
 
 
     # *************** generation method from here
+    # helper function for job disconnection. Currently only exllama support this
+    @staticmethod
+    async def check_disconnection(
+        model,
+        request: Request,
+        job_id: str,
+        gen_queue_list: Union[GenQueueDynamic, GenQueue, QueueContext, List[QueueContext]],
+        stop_event: asyncio.Event = None,
+    ):
+        """
+        Helper function that handle stopping generation mid-stream
+        """
+        try:
+            while True:
+                if await request.is_disconnected():
+                    logger.info("User disconnected")
+                    await model.abort(job_id)
+
+                    # add GenEnd to signal the end of generation
+                    chunk = GenEnd()
+                    for g_queue in gen_queue_list:
+                        try:
+                            if g_queue.include_GenEnd:
+                                g_queue.put_nowait(chunk)
+                        except Exception as e:
+                            logger.error(f"Error putting GenEnd into queue: {str(e)}")
+
+                    # break the while loop
+                    break
+
+                # Use asyncio.wait_for to implement a timeout
+                try:
+                    await asyncio.wait_for(asyncio.sleep(1), timeout=1.1)
+                except asyncio.TimeoutError:
+                    # This allows us to check for cancellation more frequently
+                    pass
+
+        except asyncio.CancelledError:
+            logger.debug("Disconnection check was cancelled")
+        except Exception as e:
+            raise
+        finally:
+            logger.debug("Exiting check_disconnection")
+
+    @staticmethod
+    @lru_cache(1024)  # TODO set this dynamically
+    def get_image_cached(url):
+        """
+        function to return PIL.Image object
+        with cache
+        """
+        img = get_image(url=url)
+        return img
 
     async def generate(
         self,
@@ -182,7 +203,8 @@ class ModelSGLang(ModelInterface):
         gen_type: Union[str, GenStart] = "text",    # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
+        # TODO simplify the func argument for formatter
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter | GuidedDecodingParams= None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -228,62 +250,34 @@ class ModelSGLang(ModelInterface):
 
         video_frame = []
         if video:
-            video_frame = [ frame.get_image() for frame in video]
+            video_frame = [frame.get_image() for frame in video]
 
+        image_list = []
+        if messages:
+            messages_as_dicts = [message.model_dump() for message in messages]
 
-        # if messages:
-        #     messages_as_dicts = [message.model_dump() for message in messages]
-        #
-        #     # convert OpenAI to qwen format -> TODO find more generalized method
-        #     # OpenAI format for image_url:
-        #     # {
-        #     #     "type": "image",
-        #     #     "image": {
-        #     #         "image_url": {
-        #     #             "url": "url here"
-        #     #         }
-        #     #     }
-        #     # }
-        #     # convert to qwen2 VL format:
-        #     # {
-        #     #     "type": "image_url",
-        #     #     "image_url": "url here"
-        #     # }
-        #     for one_message in messages_as_dicts:
-        #         if isinstance(one_message["content"], list):
-        #             for message in one_message["content"]:
-        #                 if message.get("type") == "image_url":
-        #                     message["type"] = "image"
-        #                     message["image"] = message["image_url"]["url"]
-        #                     message.pop("image_url", None)
-        #
-        #     # add in the message for video
-        #     if video:
-        #         messages_as_dicts.append({
-        #             "type": "video",
-        #             "video": video_frame,
-        #             "use_audio_in_video": True if video_frame else False,
-        #         })
-        #
-        #     audios_input, image_inputs, video_inputs = process_mm_info(messages_as_dicts)
+            # find all the image
+            for one_message in messages_as_dicts:
+                if isinstance(one_message["content"], list):
+                    for message in one_message["content"]:
+                        if message.get("type") == "image_url":
+                            # get the image into PIL.Image object
+                            image_list.append(self.get_image_cached(message["image_url"]["url"]))
 
-        # convert prompt to token id
-        # if image_inputs is None and video_inputs is None:
-        #     input_ids = self.tokenizer(
-        #         prompt,
-        #     )
-        # else:   # multimodal
-        #     input_ids = self.processor(
-        #         text=[prompt],
-        #         audios=audios_input,
-        #         images=image_inputs,
-        #         videos=video_inputs,       # TODO currently Llama doesnt support videos, comment out for now.
-        #         padding=True,
-        #         add_special_tokens=False,
-        #         return_tensors="pt",
-        #     )
 
         input_ids = []
+
+        # prefix is not an option in vllm and wont work well with format enforcer
+
+        prefix_to_return = ""
+        if not formatter and prefix_strings:
+            if isinstance(prefix_strings, str):
+                prefix_to_return = prefix_strings
+            elif isinstance(prefix_strings, list):
+                prefix_to_return = prefix_strings[0]
+
+            prompt += prefix_to_return
+
 
         # self.validate_token_length(len(input_ids))
 
@@ -296,44 +290,47 @@ class ModelSGLang(ModelInterface):
         #     else:
         #         prefix_allowed_tokens_fn = build_transformers_prefix_allowed_tokens_fn(self.tokenizer, formatter)
 
+        # construct multimodal prompt
+        multi_modal_data: Dict[str, Any] = {}
+        if video and video_frame:
+            multi_modal_data["video"] = video_frame
 
+        if image_list:
+            multi_modal_data["image"] = image_list
+
+        multimodal_prompt = TextPrompt(
+            prompt=prompt,
+            multi_modal_data=multi_modal_data if multi_modal_data else None,
+        )
 
         # find stop conditions
-        stop_word_to_return = ""
         if stop_words:
             if isinstance(stop_words, str):
-                stop_word_to_return = stop_words
                 stop_words = [stop_words]
-
-            elif isinstance(stop_words, list):
-                stop_word_to_return = stop_words[0]
 
             if not self.eos_token_str:
                 raise Exception("EOS token not set in model_config")
+
             stop_conditions = self.eos_token_str + stop_words  # concat the 2 list
             logger.debug("stop_words: " + str(stop_conditions))
-        else:
-            stop_conditions = self.eos_token_str
 
         max_tokens_to_use = min(
             self.max_seq_len - len(input_ids),
             max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids), 4096)
 
-        # Create a task to check for disconnection
-        # pass
-
         # Get generation settings
-        settings = {
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_new_tokens": max_tokens_to_use,
-            "stop": stop_words,
-            # "skip_special_tokens": False,
-        }
+        settings = SamplingParams(
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens_to_use,
+            stop=stop_words,
+            bad_words=banned_strings,
+            guided_decoding = formatter if formatter else None
+        )
 
         # format enforcement
-        if formatter:
-            raise "tool not supported for SG lang yet"
+        # if formatter:
+        #     raise "tool not supported for SG lang yet"
             # settings.update(formatter.get_formatter_dict())
 
         # logger.info("FROG FROG" + str(settings))
@@ -348,24 +345,27 @@ class ModelSGLang(ModelInterface):
         for g_queue in gen_queue_list:
             g_queue.put_nowait(gen_type)
 
-        # Create a task to check for disconnection
-        # disconnect_check_task = None
-        # if request:
-        #     disconnect_check_task = asyncio.create_task(
-        #         self.check_disconnection(request, job, gen_queue_list, stop_event=stop_event))
 
-        start_time = time.time()
-        job = await self.model.async_generate(
-            prompt=prompt,
+
+        start_time = time.perf_counter()
+        job_id = str(time.monotonic())
+        job = self.model.generate(
+            prompt=multimodal_prompt,
             sampling_params=settings,
-            stream=True,
-            image_data=video_frame if video_frame else None,
+            request_id=job_id
         )
+
+        # Create a task to check for disconnection
+        disconnect_check_task = None
+        if request:
+            disconnect_check_task = asyncio.create_task(
+                self.check_disconnection(self.model, request, job_id, gen_queue_list, stop_event=stop_event))
 
         first_token_time = None
 
         # generate
         generate_text = ""
+        previous_text = ""  # track the current text as vllm return who text and not just delta
         gen_stats = None
         eos = False
 
@@ -374,20 +374,21 @@ class ModelSGLang(ModelInterface):
             async for result in job:
                 # sglang will set job object to None if eos reached, hence need to break at the end of the loop
                 if eos or stop_event.is_set():
-                    await job.cancel()
+                    await self.model.abort(job_id)
                     break
 
                 # logger.info(result)
-                chunk_text = result.get("text", "")
-
-                # sg lang will have overlap in chunk and need to trim the overlap
-                chunk_text = trim_overlap(generate_text, chunk_text)
+                previous_text = generate_text
+                chunk_text = prefix_to_return + result.outputs[0].text
+                chunk_text = chunk_text[len(previous_text):]
 
                 if chunk_text:
-                    generate_text += chunk_text
-
                     if not first_token_time:
-                        first_token_time = time.time()
+                        first_token_time = time.perf_counter()
+
+
+                    # add the chunk to overall result
+                    generate_text += chunk_text
 
                     # logger.info(f"chunk_text: {chunk_text}")
                     chunk = GenText(content=chunk_text, text_type=gen_type_str)
@@ -396,32 +397,25 @@ class ModelSGLang(ModelInterface):
                             g_queue.put_nowait(chunk)
 
                 # Handle EOS signal
-                if result.get("meta_info").get("finish_reason"):
+                if result.finished:
                     eos = True
-                    meta_info = result.get("meta_info")
-                    finished_reason = meta_info.get("finish_reason")
+                    meta_info = result.outputs[0]
 
-                    # logger.info(f"eos result {result}")
+                    logger.info(f"eos result {result}")
                     # If the stop word occurred is from the stop_words and not LLM result token -> include in result
-                    if finished_reason.get("type") == "stop":
-                        ending_string = finished_reason.get("matched")
+                    if meta_info.finish_reason == "stop":
 
-                        if ending_string:
-                            # Find the stop word that was used to end the string
-                            stop_word_used = self.get_stop_word(ending_string, stop_words)
-
-                            if stop_word_used:
-                                # If generation ended with one of the stop words
-                                # -> return that stop word as the last token
-                                chunk = GenText(content=stop_word_used, text_type=gen_type_str)
-                                for g_queue in gen_queue_list:
-                                    g_queue.put_nowait(chunk)
+                        if meta_info.stop_reason and meta_info.stop_reason!=self.eos_token_str:
+                            # vllm return the stopped word in stop_reason
+                            chunk = GenText(content=meta_info.stop_reason, text_type=gen_type_str)
+                            for g_queue in gen_queue_list:
+                                g_queue.put_nowait(chunk)
 
                     gen_stats = GenerationStats(
-                        input_tokens_count=meta_info["prompt_tokens"],
-                        output_tokens_count=meta_info["completion_tokens"],
+                        input_tokens_count=len(result.prompt_token_ids),
+                        output_tokens_count=len(meta_info.token_ids),
                         time_to_first_token=first_token_time - start_time,
-                        time_generate=meta_info["e2e_latency"],
+                        time_generate=time.perf_counter() - start_time,
                     )
 
                     for g_queue in gen_queue_list:
@@ -440,11 +434,11 @@ class ModelSGLang(ModelInterface):
             logger.error(e)
         finally:
             pass
-            # if disconnect_check_task:
-            #     disconnect_check_task.cancel()
-            #     try:
-            #         await disconnect_check_task
-            #     except:
-            #         pass
+            if disconnect_check_task:
+                disconnect_check_task.cancel()
+                try:
+                    await disconnect_check_task
+                except:
+                    pass
 
         logger.debug("----------------------LLM Raw Response---------------\n" + generate_text)

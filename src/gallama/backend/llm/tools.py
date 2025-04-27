@@ -26,7 +26,6 @@ class Tools:
         self.tool_def_as_code: str = self.create_tool_def_as_code()
         logger.debug(f"tool_def_as_code: {self.tool_def_as_code}")
 
-        logger.info(f"FROG FROG: {self.tools_in_python_function_signatures()}")
 
     def create_tool_def_as_code(self):
         _temp_tool_list = [

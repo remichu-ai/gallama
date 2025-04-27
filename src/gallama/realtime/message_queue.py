@@ -22,6 +22,7 @@ from gallama.realtime.websocket_client import WebSocketClient
 from difflib import SequenceMatcher
 import uuid
 from ..dependencies_server import get_server_logger
+import librosa
 
 logger = get_server_logger()
 
@@ -516,10 +517,13 @@ class MessageQueues:
 
             # Save another copy at 44.1kHz for comparison
             debug_path_441 = "/home/remichu/work/ML/gallama/experiment/debug_audio_44100.wav"
-            import samplerate
 
             # Resample to 44.1kHz
-            audio_441 = samplerate.resample(truncated_audio, 44100 / self.sample_rate, 'sinc_best')
+            audio_441 = librosa.resample(
+                accumulated_chunk,
+                orig_sr=self.sample_rate,
+                target_sr=44100
+            )
             sf.write(debug_path_441, audio_441, 44100, subtype='PCM_16')
             logger.info(f"Saved 44.1kHz version to: {debug_path_441}")
 
