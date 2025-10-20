@@ -582,7 +582,7 @@ class ModelExllama(ModelInterface):
                         gen_queue_list.append(
                             GenQueueDynamic(existing_queue=queue, include_GenStats=True, include_GenEnd=True))
                     else:
-                        raise TypeError("gen_queue list must contain only GenQueue or GenQueueDynamic objects")
+                        raise TypeError(f"gen_queue list must contain only GenQueue or GenQueueDynamic objects. Received type is {type(queue)}")
             else:
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 

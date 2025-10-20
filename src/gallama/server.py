@@ -308,7 +308,7 @@ async def model_loader():
         await asyncio.sleep(1)
 
 
-async def wait_for_model_ready(port, timeout=300):  # 5 minutes timeout
+async def wait_for_model_ready(port, timeout=600):  # 10 minutes timeout
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:

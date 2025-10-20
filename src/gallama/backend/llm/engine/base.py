@@ -352,6 +352,147 @@ class ModelInterface(ABC):
 
         return None
 
+    async def chat_no_tool_v3(
+        self,
+        query: ChatMLQuery,
+        prompt_eng: PromptEngine,
+        gen_queue,
+        request: Request,
+        stop_event: asyncio.Event = None
+    ):
+
+        prompt = prompt_eng.get_prompt(
+            query,
+            #thinking_template=query.thinking_template,
+            backend=self.backend
+        )
+
+        formatter_prefix_regex = self.formatter.regex(
+            query.regex_prefix_pattern,
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        ) if query.regex_prefix_pattern else None
+
+        formatter_regex = self.formatter.regex(
+            query.regex_pattern,
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        ) if query.regex_pattern else None
+
+        token_length_prompt = get_token_length(self.tokenizer, prompt)
+        self.validate_token_length(token_length_prompt)
+
+        # think template prompting
+        thinking_queue = GenQueueDynamic(include_GenEnd=True, include_GenStats=False)  # this queue is not for returning thinking
+        if query.return_thinking:
+            # return thinking to front end
+            queue_group = [
+                thinking_queue,
+                GenQueueDynamic(include_GenEnd=False, include_GenStats=False)
+            ]
+        else:
+            # not return thinking to front end
+            queue_group = [
+                thinking_queue,
+            ]
+
+        await self.generate(
+            prompt,
+            messages=query.messages,
+            gen_type="thinking",
+            gen_queue=queue_group,
+            temperature=query.temperature,
+            top_p=query.top_p,
+            prefix_strings=f"<{thinking.root_tag}>",
+            stop_words=thinking.root_key_stop_words,
+            request=request,
+            stop_event=stop_event,
+            video=query.video,
+        )
+        thinking_response, _ = await get_response_from_queue(thinking_queue)
+
+        # Get the new prompt with thinking response
+        prompt = prompt_eng.get_prompt(
+            query,
+            thinking_template=query.thinking_template,
+            thinking_response=thinking_response,
+            backend=self.backend
+        )
+
+        # 1st response if there is regex to match the regex pattern
+        first_response = ""
+
+        if query.regex_prefix_pattern:
+            prefix_queue = GenQueue()
+            queue_group = [
+                QueueContext.create(gen_queue=prefix_queue, include_GenEnd=True, include_GenStats=False),
+                QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
+            ]
+
+            await self.generate(
+                prompt,
+                messages=query.messages,
+                gen_queue=queue_group,
+                temperature=query.temperature,
+                top_p=query.top_p,
+                formatter=formatter_prefix_regex,
+                prefix_strings=query.prefix_strings,
+                request=request,
+                # stop_words=query.stop_words,
+                stop_event=stop_event,
+                video=query.video,
+            )
+
+            first_response, _ = await get_response_from_queue(prefix_queue)
+
+            # append generated content to the full prompt
+            prompt = prompt.strip() + first_response.strip()
+
+        # Final generation to return to client
+        # set prefix string
+        prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
+
+        # Handle Artifact mode: overwrite prefix_strings if in artifact mode
+        stop_words_to_use = query.stop_words
+        banned_strings = None
+        if query.artifact and query.artifact == "Fast":
+            prefix_strings = None
+            manual_prefix_string = "<answer>\n "
+            prompt += manual_prefix_string
+
+            # ban XML comment format which could mess up the parsing of output
+            banned_strings = ["<![CDATA[", "<!--"]
+
+            # add the stopword for artifact tag to the answer
+            if isinstance(stop_words_to_use, list):
+                stop_words_to_use.append("</answer>")
+            elif isinstance(stop_words_to_use, str):
+                stop_words_to_use = [stop_words_to_use, "</answer>"]
+            else:
+                stop_words_to_use = "</answer>"
+
+            # add the initial string as prefix_strings can not be used together with banned_strings
+            chunk = GenText(content=manual_prefix_string)
+            gen_queue.put_nowait(chunk)
+
+        await self.generate(
+            prompt=prompt,
+            messages=query.messages,
+            gen_queue=gen_queue,
+            **{
+                'temperature': query.temperature,
+                'top_p': query.top_p,
+                'formatter': formatter_regex,
+                'stop_words': stop_words_to_use,
+                'max_tokens': query.max_tokens,
+                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
+                'banned_strings': banned_strings,
+                'request': request,
+                'stop_event': stop_event,
+                'video': query.video,
+            }
+        )
+
     async def chat_no_tool(
         self,
         query: ChatMLQuery,

@@ -124,7 +124,7 @@ async def chat_completion_response_stream(
 
                 if accumulated_thinking and query.return_thinking == "separate":
                     chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
+                        id=unique_id,
                         model=model_name,
                         object="chat.completion.chunk",
                         created=created,
@@ -132,7 +132,7 @@ async def chat_completion_response_stream(
                             StreamChoice(
                                 index=0,
                                 delta=ChoiceDelta(
-                                    thinking=accumulated_thinking,
+                                    reasoning_content=accumulated_thinking,
                                 )
                             )
                         ]
@@ -141,7 +141,7 @@ async def chat_completion_response_stream(
 
                 if accumulated_text:
                     chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
+                        id=unique_id,
                         model=model_name,
                         object="chat.completion.chunk",
                         created=created,
@@ -179,7 +179,7 @@ async def chat_completion_response_stream(
                     )
 
                     chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
+                        id=unique_id,
                         model=model_name,
                         object="chat.completion.chunk",
                         created=created,
@@ -208,7 +208,7 @@ async def chat_completion_response_stream(
             except json.JSONDecodeError:
                 # If parsing fails, just stream the raw text
                 chunk_data = ChatCompletionResponse(
-                    unique_id=unique_id,
+                    id=unique_id,
                     model=model_name,
                     object="chat.completion.chunk",
                     created=created,
@@ -234,7 +234,7 @@ async def chat_completion_response_stream(
 
             if gen_stats and query.stream_options and query.stream_options.include_usage:
                 usage_data = ChatCompletionResponse(
-                    unique_id=unique_id,
+                    id=unique_id,
                     model=model_name,
                     object="chat.completion.chunk",
                     choices=[],
@@ -251,7 +251,7 @@ async def chat_completion_response_stream(
 
             # Send final chunk with finish_reason
             chunk_data = ChatCompletionResponse(
-                unique_id=unique_id,
+                id=unique_id,
                 model=model_name,
                 object="chat.completion.chunk",
                 created=created,
@@ -329,7 +329,7 @@ async def chat_completion_response(
             pass
 
         response_obj = ChatCompletionResponse(
-            unique_id=unique_id,
+            id=unique_id,
             model=model_name,
             choices=[
                 Choice(
@@ -354,7 +354,7 @@ async def chat_completion_response(
         except:
             # since out put is not tool, return it as text instead #TODO find better solution
             response_obj = ChatCompletionResponse(
-                unique_id=unique_id,
+                id=unique_id,
                 model=model_name,
                 choices=[
                     Choice(
@@ -567,7 +567,7 @@ async def chat_completion_response_artifact_stream(
         if accumulated_thinking and query.return_thinking is not False:
             full_response += accumulated_thinking
             chunk_data = ChatCompletionResponse(
-                unique_id=unique_id,
+                id=unique_id,
                 model=model_name,
                 object="chat.completion.chunk",
                 created=created,
@@ -577,7 +577,7 @@ async def chat_completion_response_artifact_stream(
                         delta=ChatMessage(
                             role="assistant",
                             content="",
-                            thinking=accumulated_thinking,
+                            reasoning_content=accumulated_thinking,
                         ),
                     )
                 ],
@@ -594,7 +594,7 @@ async def chat_completion_response_artifact_stream(
                 for chunk_type, chunk_content in parsed_chunks:
                     if chunk_content:
                         chunk_data = ChatCompletionResponse(
-                            unique_id=unique_id,
+                            id=unique_id,
                             model=model_name,
                             object="chat.completion.chunk",
                             created=created,
@@ -632,7 +632,7 @@ async def chat_completion_response_artifact_stream(
                         )
                     )
                 chunk_data = ChatCompletionResponse(
-                    unique_id=unique_id,
+                    id=unique_id,
                     model=model_name,
                     object="chat.completion.chunk",
                     created=created,
@@ -656,7 +656,7 @@ async def chat_completion_response_artifact_stream(
             # Include generation stats if available and requested
             if gen_stats and query.stream_options and query.stream_options.include_usage:
                 usage_data = ChatCompletionResponse(
-                    unique_id=unique_id,
+                    id=unique_id,
                     model=model_name,
                     object="chat.completion.chunk",
                     choices=[],
@@ -772,7 +772,7 @@ async def chat_completion_response_artifact(
             ]
 
         response_obj = ChatCompletionResponse(
-            unique_id=unique_id,
+            id=unique_id,
             model=model_name,
             choices=choices,
             usage=UsageResponse(
@@ -788,7 +788,7 @@ async def chat_completion_response_artifact(
         except:
             # since output is not tool, return it as text instead #TODO find better solution
             response_obj = ChatCompletionResponse(
-                unique_id=unique_id,
+                id=unique_id,
                 model=model_name,
                 choices=[
                     Choice(

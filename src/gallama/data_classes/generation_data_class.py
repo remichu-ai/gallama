@@ -92,7 +92,7 @@ class GenQueueDynamic:
         allowed_types: Optional[List[BaseModel]] = None,
         include_GenStats: bool =True,
         include_GenEnd: bool =True,
-        existing_queue: Optional[GenQueue] = None
+        existing_queue: Optional[GenQueue] = None   # an optional queue to initialize this object with
     ):
         # Initialize with a GenQueue as the active queue
         self._include_GenStats: bool = include_GenStats

@@ -243,6 +243,7 @@ class ChatMLQuery(BaseModel):
                                             "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
 
     artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
+    use_thinking: Literal[True, False, "Skip"] = Field(default=False, description="True to force thinking, False to do nothing, Skip to force skip")
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,
         description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field. If used together with artifact, True will return as separate."
@@ -388,6 +389,7 @@ class ChoiceDeltaToolCall(BaseModel):
 
 class ChoiceDelta(BaseModel):
     content: Optional[str] = None
+    reasoning_content: Optional[str] = None     # follow vllm
     function_call: Optional[str] = None
     refusal: Optional[str] = None
     role: Optional[str] = None
