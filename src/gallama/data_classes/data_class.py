@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint
-from typing import Optional, Literal, List, Dict, Union, Any, Type
+from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint, root_validator
+from typing import Optional, Literal, List, Dict, Union, Any, Type, Callable, Set
 import asyncio
 import os
 import uuid
@@ -11,7 +11,82 @@ from PIL import Image
 from .video import VideoFrame
 
 
-class TextTag(BaseModel):
+class TagEqualityMixin:
+    def __eq__(self, other):
+        # Check if the other object has a 'tag_type' attribute
+        if hasattr(other, 'tag_type'):
+            return self.tag_type == other.tag_type
+        # If not, return NotImplemented to let Python handle the mismatch
+        # (or try the other object's __eq__)
+        return NotImplemented
+
+def _default_post_processor(text:str, extra_args=None, **kwargs) -> str:
+    return text
+
+
+class TagDefinition(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    # FIX: Type must be Optional if default is None
+    start_marker: Optional[str] = None
+    end_marker: Optional[str] = None
+
+    marker_type: Literal["string", "regex"] = Field(
+        description="Type of regex pattern",
+        default="string"
+    )
+    tag_type: str = "text"
+    wait_till_complete: bool = Field(
+        description="Wait until tag complete or switch to another tag",
+        default=False
+    )
+
+    # FIX: Removed duplicate definition. Kept the detailed one.
+    post_processor: Callable[[str, Optional[Dict]], Any] = Field(
+        description="optional function to post process the input",
+        exclude=True,
+        default=_default_post_processor
+    )
+
+    api_tag: str = Field(
+        description="The tag to be used when returning to client",
+        default="content"
+    )
+    role: Literal["system", "user", "assistant", "tool"] = "assistant"
+
+    # FIX: Type must be Optional because default is None.
+    # Logic to ensure it is populated happens in the validator.
+    allowed_roles: Optional[Set[str]] = Field(
+        description="For tag that can take on different roles depending on context",
+        default=None
+    )
+
+    def __eq__(self, other):
+        if hasattr(other, 'tag_type'):
+            return self.tag_type == other.tag_type
+        return False
+
+    # FIX: Combined V1 validators into a single V2 model_validator
+    @model_validator(mode='after')
+    def validate_and_set_roles(self) -> 'TagDefinition':
+        """
+        1. Sets allowed_roles to {role} if it was not explicitly provided.
+        2. Ensures that the value of the 'role' field is contained within 'allowed_roles'.
+        """
+        # Logic 1: Set Default
+        if self.allowed_roles is None:
+            self.allowed_roles = {self.role}
+
+        # Logic 2: Validate consistency
+        if self.role not in self.allowed_roles:
+            raise ValueError(
+                f"'role' value ('{self.role}') must be present in 'allowed_roles' ({self.allowed_roles})."
+            )
+
+        return self
+
+
+class TextTag(TagEqualityMixin, BaseModel):
     tag_type: Literal["text"] = "text"
 
 
@@ -21,6 +96,9 @@ class ArtifactTag(BaseModel):
     identifier: str
     title: str
     language: Optional[str] = None
+
+class GenericTag(BaseModel):
+    tag_type: str
 
 
 class Query(BaseModel):
@@ -131,6 +209,8 @@ class MultiModalImageHFContent(BaseModel):
 
 
 class BaseMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     role: Literal['system', 'user', 'assistant', 'tool']
     content: Optional[Union[
         str,
@@ -188,20 +268,6 @@ class ToolForce(BaseModel):
         extra = "forbid"  # This will prevent extra keys in the dictionary
 
 
-# test_thinking = """
-# <plan>
-#   <task>Brief task summary</task>
-#   <structure>
-#     <c1>[text]: Acknowledge question and introduce answer</c1>
-#     <c2>[artifact]: Main content (e.g., code)</c2>
-#     <c3>[text]: Explain or elaborate on c2</c3>
-#     <c4>[artifact]: Additional content if needed</c4>
-#     <c5>[text]: Explain or elaborate on c4</c5>
-#     <!-- Add more pairs if needed -->
-#   </structure>
-# </plan>
-# """
-
 class ChatMLQuery(BaseModel):
     # Configure the model to forbid extra fields
     model_config = ConfigDict(extra="forbid")
@@ -220,7 +286,12 @@ class ChatMLQuery(BaseModel):
     tools: Optional[List[ToolSpec]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
     tool_call_id: Optional[str] = None
-    max_tokens: Optional[int] = None
+    max_tokens: Optional[int] = Field(
+        description="An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.",
+        default=16000,
+        alis="max_completion_tokens"
+    )
+    reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = "medium"
 
     # for video, currently for websocket
     video: Optional[List[Any]] = None    # TODO to have handling for list of base64 video frame
@@ -316,7 +387,9 @@ class ChatResponse(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: Literal['system', 'user', 'assistant'] = None
+    model_config = ConfigDict(extra="allow")
+
+    role: Literal['system', 'user', 'assistant', 'tool', 'developer'] = None
     tool_call_id: Optional[str] = None
     content: Optional[str] = None
     name: Optional[str] = None
@@ -388,11 +461,12 @@ class ChoiceDeltaToolCall(BaseModel):
 
 
 class ChoiceDelta(BaseModel):
+    model_config = ConfigDict(extra='allow')
+
     content: Optional[str] = None
-    reasoning_content: Optional[str] = None     # follow vllm
-    function_call: Optional[str] = None
+    #function_call: Optional[str] = None
     refusal: Optional[str] = None
-    role: Optional[str] = None
+    role: Optional[Literal[Literal['system', 'user', 'assistant', 'tool', None]]] = None
     tool_calls: Optional[List[ChoiceDeltaToolCall]] = None
 
 
@@ -550,7 +624,7 @@ class ModelSpec(BaseModel):
     model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
     gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
-    cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
+    cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default="FP16", description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
     backend: Optional[Union[Literal[tuple(SUPPORTED_BACKENDS)], None]] = Field(description="model engine backend", default=None)
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
@@ -570,7 +644,7 @@ class ModelSpec(BaseModel):
     draft_model_name: Optional[str] = Field(description='name of the draft model', default=None)
     draft_gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     draft_cache_size: Optional[int] = Field(description='The context length for cache text in int. If None, will be set to the model context length', default=None)
-    draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default=None, description='the quantization to use for cache, will use Q4 if not specified')
+    draft_cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default="FP16", description='the quantization to use for cache, will use Q4 if not specified')
     # backend is assumed to be the same as main model
 
 
@@ -667,9 +741,6 @@ class ModelSpec(BaseModel):
 
         if gpus and isinstance(gpus, str) and gpus.lower() != "auto":
             gpus = [float(x) for x in gpus.split(',')]
-
-        if cache_size:
-            cache_size = int(cache_size)
 
         if cache_size:
             cache_size = int(cache_size)

@@ -353,7 +353,7 @@ async def run_model(model_spec: ModelSpec):
             # Determine the correct Python executable
             python_exec = shutil.which("python3") or shutil.which("python")
 
-            if backend == "exllama":
+            if backend in ["exllama", "exllamav3"]:
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
@@ -370,6 +370,7 @@ async def run_model(model_spec: ModelSpec):
 
                 # Set CUDA_VISIBLE_DEVICES
                 env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
+                server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
                 env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 
                 # model_cli_args = model.to_arg_string()

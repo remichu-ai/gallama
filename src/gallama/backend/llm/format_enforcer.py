@@ -62,7 +62,7 @@ class FormatEnforcer:
         # formatron does not support llama cpp at the moment
         if backend == "llama_cpp":
             return "lm_enforcer"
-        elif backend == "exllama" or backend=="transformers":
+        elif backend in ["exllama", "transformers", "exllamav3"]:
             # use formatron if it is available if it is exllama
             if preference == "auto":
                 if FormatterBuilder:

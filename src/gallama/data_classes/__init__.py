@@ -24,7 +24,8 @@ from .data_class import (
     ChatCompletionResponse,
     UsageResponse,
     MultiModalTextContent,
-    MultiModalImageContent
+    MultiModalImageContent,
+    TagDefinition
 )
 
 from .audio_data_class import (

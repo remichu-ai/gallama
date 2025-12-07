@@ -16,7 +16,7 @@ class StreamParser:
         self.root_key = "<answer>"
         self.full_root_key = f"{self.xml_prefix}{self.root_key}"
         self.tag_pattern = re.compile(r'(<artifact\s+(?:(?:identifier|type|title|language)="[^"]*"\s*)*>)|(<text>)')
-        self.comment_pattern = re.compile(r'<!--.*?-->', re.DOTALL)
+        self.comment_pattern = re.compile(r'<!--    `.*?-->', re.DOTALL)
 
     def process_stream(self, new_data: str) -> List[Tuple[Union[TextTag, ArtifactTag], str]]:
         self.buffer += new_data

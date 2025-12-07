@@ -20,7 +20,7 @@ from gallama.data_classes import (
     GenerationStats,
     QueueContext,
     GenQueueDynamic,
-    VideoFrame
+    VideoFrame, TagDefinition
 )
 from gallama.utils.utils import get_image
 
@@ -31,6 +31,8 @@ try:
         Config,
         Cache,
         Tokenizer,
+        CacheLayer_fp16,
+        CacheLayer_quant,
         AsyncGenerator,
         AsyncJob,
     )
@@ -191,67 +193,81 @@ class ModelExllamaV3(ModelInterface):
         cache = Cache(model, max_num_tokens=self.max_seq_len)
 
         # load model
-        model.load(progressbar = True)
+        model.load(progressbar = True, tensor_p = tensor_parallel)
 
         # # a simple dict to help map cache quant
-        # cache_quant_dict = {
-        #     "FP16": ExLlamaV2Cache,
-        #     "Q4": ExLlamaV2Cache_Q4,
-        #     "Q6": ExLlamaV2Cache_Q6,
-        #     "Q8": ExLlamaV2Cache_Q8,
-        # }
-        #
-        # # cache size need to minimally max_seq_len size
-        # cache_size_to_use = cache_size if cache_size else config.max_seq_len
-        # cache_size_to_use = (cache_size_to_use//256) * 256      # round to multiplier of 256 for paged attention
-        # # ensure cache_size is minimally max_seq_len
-        # cache_size_to_use = max(cache_size_to_use, max_seq_len)
-        #
-        # # get the cache quantization to use
-        # cache_quant_to_use = cache_quant_dict[cache_quant]
-        #
-        # logger.info("max_seq_len: " + str(self.max_seq_len))
-        # logger.info("cache_size: " + str(cache_size_to_use))
-        # logger.info("Cache Quantization: " + str(cache_quant))
-        #
-        # assert cache_quant_to_use is not None
-        # assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
-        #     "Device map should be either 'auto', 'gpu' split"
-        #
-        # if not tensor_parallel:
-        #     if isinstance(gpus, str) and gpus == "auto":
-        #         cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
-        #         model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
-        #     elif isinstance(gpus, list):      # user specify the gpus split
-        #         logger.info("Custom GPU Allocation in GB: " + str(gpus))
-        #         model.load(gpu_split=gpus, progress=True)
-        #         cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
-        # else:
-        #     # tensor parallel mode
-        #     logger.info("ExllamaV2 Tensor Parallel enabled")
-        #     if ExLlamaV2Cache_TP:       # ensure that tensor parallel is available
-        #         model.load_tp(progress=True, gpu_split = gpus if isinstance(gpus, list) else None)
-        #         cache = ExLlamaV2Cache_TP(
-        #             model,
-        #             max_seq_len = cache_size_to_use,
-        #             base = cache_quant_to_use,
-        #         )
-        #     else:
-        #         raise ValueError("ExllamaV2 was not installed with tensor parallel")
-        #
-        # # load vision processor
-        # processor = None
-        # if ExLlamaV2VisionTower:
-        #     try:
-        #         processor = ExLlamaV2VisionTower(config)
-        #         processor.load(progress=True)
-        #     except:
-        #         processor = None
-        #
-        # # if processor is not None, meaning at least image is supported
-        # if processor:
-        #     self.modalities.add("image")
-        #
+        cache_quant_dict = {
+            "FP16": None,
+            "Q4": {"k_bits": 4, "v_bits": 4},
+            "Q6": {"k_bits": 6, "v_bits": 6},
+            "Q8": {"k_bits": 8, "v_bits": 8},
+        }
+
+        # cache size needed to minimally max_seq_len size
+        # Use provided cache_size or default to max_seq_len
+        base_size = cache_size or self.max_seq_len
+
+        # Align to 256, but ensure it is at least max_seq_len
+        cache_size_to_use = (max(base_size, self.max_seq_len) // 256) * 256
+
+        # get the cache quantization to use
+        cache_quant_to_use = cache_quant_dict[cache_quant]
+
+        logger.info("max_seq_len: " + str(self.max_seq_len))
+        logger.info("cache_size: " + str(cache_size_to_use))
+        logger.info("Cache Quantization: " + str(cache_quant))
+        logger.info("gpus: " + str(gpus))
+
+        assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
+            "Device map should be either 'auto', 'gpu' split"
+
+        if isinstance(gpus, str) and gpus == "auto":
+            # create the layer if cache quant is needed
+            cache_layer = None
+
+            # TODO cache quant
+            if cache_quant_to_use:
+                cache_layer = CacheLayer_quant
+
+            if cache_quant_to_use:
+                logger.info("Using cache quant")
+                cache = Cache(
+                    model,
+                    max_num_tokens=cache_size_to_use,
+                    layer_type=cache_layer,
+                    **cache_quant_to_use
+                )
+            else:
+                # FP16
+                logger.info("Not using cache quant")
+                cache = Cache(
+                    model,
+                    max_num_tokens=cache_size_to_use
+                )
+            # since exl3 only allow the reserve or use per device
+            # TODO allow user to set reserve per device
+            model.load(
+                progressbar = True,
+                use_per_device = gpus if isinstance(gpus, list) else None,
+                # tp_options={"moe_tensor_split": True},
+                tensor_p=tensor_parallel,
+                # tp_backend="nccl",
+            )
+
+        # load vision processor if there is
+        # if there is error, assume that the model doesnt have vision
+        processor = None
+        try:
+            processor = Model.from_config(config, component = "vision")
+            processor.load()
+        except AssertionError:
+            logger.info("No Vision Tower")
+            processor = None
+
+        # if processor is not None, meaning at least image is supported
+        if processor:
+            self.modalities.add("image")
+
         # # check if video is supported
         # if processor and processor.video_preprocess_func:
         #     self.modalities.add("video")
@@ -269,16 +285,15 @@ class ModelExllamaV3(ModelInterface):
 
     def generate_eos_tokens_id(self, tokenizer: Tokenizer = None) -> List[int]:
         """Generate the end-of-sequence token IDs."""
-        if self.eos_token_str:
-            # exllama
-            if tokenizer:
-                return [tokenizer.single_id(token) for token in self.eos_token_str]
-            elif self.tokenizer:
-                return [self.tokenizer.single_id(token) for token in self.eos_token_str]
-            else:
-                return []
-        else:
+        tokenizer_to_use = tokenizer or self.tokenizer
+        if not tokenizer_to_use:
             return []
+
+        if not self.eos_token_str:
+            # set eos token using variable from inside tokenizer if not manually set
+            self.eos_token_str = [tokenizer_to_use.eos_token]
+
+        return [tokenizer_to_use.single_id(token) for token in self.eos_token_str]
 
 
     # ********* from here is generation methods
@@ -563,7 +578,7 @@ class ModelExllamaV3(ModelInterface):
         prompt: str,
         gen_queue: Union[GenQueue, GenQueueDynamic, List[GenQueueDynamic]],
         request: Optional[Request] = None,  # for disconnection check
-        gen_type: Union[str, GenStart] = "text",  # the generated result will be stored in this queue
+        gen_type: Union[str, GenStart, TagDefinition] = "text",  # the generated result will be stored in this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
         formatter: Optional[Union[FormatterBuilder, TokenEnforcerTokenizerData]] = None,
@@ -680,6 +695,8 @@ class ModelExllamaV3(ModelInterface):
             if isinstance(gen_type, str):
                 gen_type_str = gen_type
                 gen_type = GenStart(gen_type=gen_type)
+            elif isinstance(gen_type, GenStart) and isinstance(gen_type.gen_type, TagDefinition):
+                gen_type_str = "text"
             else:
                 gen_type_str = gen_type.gen_type  # Get the generation type in string format
 
@@ -754,4 +771,4 @@ class ModelExllamaV3(ModelInterface):
                         pass
         except Exception as e:
             logger.error(e)
-            raise
+            raise e

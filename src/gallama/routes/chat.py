@@ -5,8 +5,6 @@ from ..api_response.chat_response import (
     chat_completion_response,
     completion_response,
     completion_response_stream,
-    chat_completion_response_artifact_stream,
-chat_completion_response_artifact
 )
 from ..dependencies import get_model_manager
 from ..logger import logger
@@ -96,21 +94,23 @@ async def chat_completion(request: Request, query: ChatMLQuery):
         # send the response to client
         if query.stream:
             # EventSourceResponse take iterator so need to handle at here
-            if query.artifact == "No":     # not using artefact
-                return EventSourceResponse(
-                    chat_completion_response_stream(
-                        query=query, gen_queue=gen_queue, model_name=llm.model_name, request=request,
-                    ))
-            else:
-                return EventSourceResponse(
-                    chat_completion_response_artifact_stream(
-                        query=query, gen_queue=gen_queue, model_name=llm.model_name, request=request,
-                    ))
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                ))
+
         else:
-            if query.artifact == "No":     # not using artefact
-                return await chat_completion_response(query=query, gen_queue=gen_queue, model_name=llm.model_name, request=request,)
-            else:
-                return await chat_completion_response_artifact(query=query, gen_queue=gen_queue, model_name=llm.model_name, request=request,)
+            return await chat_completion_response(
+                query=query,
+                gen_queue=gen_queue,
+                model_name=llm.model_name,
+                request=request,
+                tag_definitions=llm.prompt_eng.tag_definitions,
+            )
     except HTTPException as e:
         logger.error(e)
         return e

@@ -10,6 +10,7 @@ from gallama.data_classes.data_class import (
     MultiModalImageHFContent,
     MultiModalAudioContent
 )
+from gallama.logger.logger import logger
 from pydantic import BaseModel
 from copy import deepcopy
 from gallama.utils.utils import parse_xml_to_dict
@@ -19,15 +20,15 @@ from textwrap import dedent
 from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 
-class PromptEngine:
-    def __init__(self, prompt_format: str):
+
+class PromptEngineCustom:
+    def __init__(self, prompt_format: str| None = None, model_path: str = None):
+        self.model_prompt_all = self.get_prompt_token()
         self.system_msg_enabled = False
         self.tool_enabled = False
-        self.model_prompt_all = self.get_prompt_token()
-        if not self.model_prompt_all.get(prompt_format):
-            raise ValueError(f'Prompt format {prompt_format} not found in data/model_token.yaml')
-
         self.model_prompt = self.model_prompt_all.get(prompt_format)
+        if self.model_prompt is None:
+            raise ValueError(f'Prompt format {prompt_format} not found in data/model_token.yaml')
         self.system_msg_enabled = self.model_prompt.get("system_msg_enabled")
         self.tool_enabled = self.model_prompt.get("tool_enabled")
         self.eos_token_list = self.model_prompt.get("eos_token_list")
@@ -445,3 +446,6 @@ class PromptEngine:
 
         # match tool call result #TODO
 
+    @property
+    def tag_definitions(self):
+        return None

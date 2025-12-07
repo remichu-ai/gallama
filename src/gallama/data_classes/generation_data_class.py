@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
 from typing import Optional, Literal, List, Dict, Union, Any, Type, TypeVar
+from .data_class import TagDefinition
 from dataclasses import dataclass
 import asyncio
 import weakref
@@ -39,7 +40,10 @@ class GenStart(BaseModel):
     """ this item signal start of generation"""
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    gen_type: Literal["text", "tool", "thinking"]  = Field(description='True to signal end of generation', default="text")
+    gen_type: Union[TagDefinition, str]  = Field(
+        description='the tag type to start off generation',
+        default_factory=lambda: TagDefinition(tag_type="text")
+    )
 
 class GenEnd(BaseModel):
     """ this item signal end of generation"""
