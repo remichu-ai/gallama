@@ -22,7 +22,7 @@ from textwrap import dedent
 from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 from transformers import AutoTokenizer, AutoConfig
-from .model_special_tag import MODEL_SPECIAL_TAG
+from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN
 from ....api_response.stream_parser_v2 import StreamParserByTag
 
 
@@ -47,13 +47,26 @@ class PromptEngineTransformers:
         self._tag_definitions = list(self.special_tag.values()) if self.special_tag else None
         self.thinking_tag = self.special_tag.get("thinking") if self.special_tag else None
 
-        self.tag_parser = StreamParserByTag(
-            tag_definitions=self._tag_definitions,
-            default_tag_type=None
-        )
+        if self._tag_definitions:
+            self.tag_parser = StreamParserByTag(
+                tag_definitions=self._tag_definitions,
+                default_tag_type=None
+            )
+        else:
+            self.tag_parser = None
+
         self.system_msg_enabled = True  # TODO check jinja template?
         self.tool_enabled = True    # TODO check jinja template?
+
+        # set eos token
         self.eos_token_list = [self._transformer_tokenizer.special_tokens_map.get("eos_token")]
+        # check if there is custom eos token
+        if MODEL_EOS_TOKEN.get(self.model_type, None) is not None:
+            self.eos_token_list.extend(MODEL_EOS_TOKEN[self.model_type])
+
+        # make unique, transformers might return None hence need to exclude
+        self.eos_token_list = list(set([_s for _s in self.eos_token_list if _s is not None]))
+
         self.is_thinking_model = self.check_thinking_model()
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
 
@@ -126,6 +139,52 @@ class PromptEngineTransformers:
 
         return False
 
+    def convert_openai_to_hf_format(self, messages: List[Dict]) -> List[Dict]:
+        """
+        Converts OpenAI Chat Format to Hugging Face transformers format.
+
+        1. Converts {"type": "image_url"} -> {"type": "image"}
+        2. Preserves all other content types (text, etc.) exactly as is.
+        3. Preserves all top-level keys (tool_calls, tool_call_id, name, etc.)
+        """
+        hf_messages = []
+
+        for msg in messages:
+            # 1. Deep copy ensures we keep 'tool_calls', 'tool_call_id', 'role', etc.
+            #    without mutating the original input.
+            new_msg = copy.deepcopy(msg)
+
+            content = msg.get("content")
+
+            # 2. Handle List Content (Multimodal or Structured Text)
+            if isinstance(content, list):
+                new_content = []
+                for item in content:
+                    item_type = item.get("type")
+
+                    # TRANSFORM: OpenAI Image Format -> HF Image Format
+                    if item_type == "image_url":
+                        image_data = item.get("image_url", {})
+                        url = image_data.get("url")
+                        if url:
+                            new_content.append({
+                                "type": "image",
+                                "image": url
+                            })
+
+                    # PASS THROUGH: Text, standard items, or custom types
+                    else:
+                        new_content.append(item)
+
+                new_msg["content"] = new_content
+
+            # 3. Handle String Content (Standard Text or Tool Results)
+            #    We leave these exactly as is.
+
+            hf_messages.append(new_msg)
+
+        return hf_messages
+
     def get_prompt(
         self,
         query: ChatMLQuery,
@@ -141,6 +200,9 @@ class PromptEngineTransformers:
 
         # 1. Basic dump of messages
         conversation = [_m.model_dump() for _m in query.messages]
+
+        # patch image format
+        conversation = self.convert_openai_to_hf_format(conversation)
 
         # Before passing messages to tokenizer.apply_chat_template:
         # convert tool call to json string
@@ -169,6 +231,8 @@ class PromptEngineTransformers:
                         _content_str = "".join([c.get("text", "") for c in _content])
                         conversation[index]["content"] = _content_str
 
+        enable_thinking = query.reasoning_effort is not None
+
         # 4. Get prompt from transformers
         prompt = self._transformer_tokenizer.apply_chat_template(
             conversation=conversation,
@@ -176,6 +240,7 @@ class PromptEngineTransformers:
             # add_generation_prompt=conversation[-1]["role"] == "user",
             add_generation_prompt=True,
             tools=[_t.model_dump() for _t in query.tools] if query.tools else None,
+            enable_thinking=enable_thinking
         )
 
         # handling thinking

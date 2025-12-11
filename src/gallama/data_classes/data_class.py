@@ -35,6 +35,12 @@ class TagDefinition(BaseModel):
         description="Type of regex pattern",
         default="string"
     )
+
+    include_markers: bool = Field(
+        description="If True, the start and end tags (e.g. <tag>...</tag>) are included in the output string.",
+        default=False
+    )
+
     tag_type: str = "text"
     wait_till_complete: bool = Field(
         description="Wait until tag complete or switch to another tag",

@@ -11,6 +11,20 @@ import xml.etree.ElementTree as ET
 
 
 def minimax_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
+    """
+    Example of tool call format:
+    < minimax: tool_call >
+    < invoke
+    name = "tool-name-1" >
+    < parameter
+    name = "param-key-1" > param - value - 1 < / parameter >
+    < parameter
+    name = "param-key-2" > param - value - 2 < / parameter >
+    ...
+    < / invoke >
+    < / minimax: tool_call >
+    """
+
     results = []
 
     # Initialize state
@@ -78,7 +92,7 @@ minimax = {
     "tool": TagDefinition(
         start_marker="<minimax:tool_call>",
         end_marker="</minimax:tool_call>",
-        tag_type="tool_call",
+        tag_type="tool_calls",
         api_tag="tool_calls",
         role="tool",
         post_processor=minimax_tool_parser,

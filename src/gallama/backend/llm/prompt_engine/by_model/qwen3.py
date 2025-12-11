@@ -7,7 +7,7 @@ qwen3_moe = {
     "tool": TagDefinition(
         start_marker="<tool_call>",
         end_marker="</tool_call>",
-        tag_type="tool_call",
+        tag_type="tool_calls",
         api_tag="tool_calls",
         role="tool",
         post_processor=tool_parser,

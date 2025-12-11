@@ -116,7 +116,7 @@ class ModelInterface(ABC):
         # get the eos_token_str by merging the default config with anything set by user
         self.eos_token_str = list(set(model_spec.eos_token_list + self.prompt_eng.eos_token_list))
         self.eos_token_str_set = set(self.eos_token_str)    # set for some more efficient operation
-
+        logger.info(f"EOS tokens: {self.eos_token_str}")
         # load_model method in each subclass should set the following parameters:
         self.model = None
         self.tokenizer = None

@@ -251,7 +251,7 @@ class ModelExllamaV3(ModelInterface):
                 use_per_device = gpus if isinstance(gpus, list) else None,
                 # tp_options={"moe_tensor_split": True},
                 tensor_p=tensor_parallel,
-                # tp_backend="nccl",
+                tp_backend="nccl",
             )
 
         # load vision processor if there is
@@ -416,7 +416,7 @@ class ModelExllamaV3(ModelInterface):
 
     @staticmethod
     @lru_cache(1024)     # TODO set this dynamically
-    def get_image_embedding_cached(processor, model, tokenizer, url):
+    def get_image_embedding_cached(processor, tokenizer, url):
         """
         function to return image embedding for exllama
         lru_cache to cache frequently used image
@@ -424,7 +424,6 @@ class ModelExllamaV3(ModelInterface):
         img = get_image(url=url)
 
         return processor.get_image_embeddings(
-            model=model,
             tokenizer=tokenizer,
             image=img,
             text_alias=None,    # passing None will let the llm generate its own embedding
@@ -450,16 +449,17 @@ class ModelExllamaV3(ModelInterface):
         # in prompt processing step, each image was substituted with the following token
         # TODO move this token to better place
 
-        image_token = "{{IMG-PlaceHolderTokenHere}}"
+        image_token = "<|image|>"
 
         # Validate image token count matches number of images
+        logger.info(f"Prompt: {prompt}")
+        logger.info(f"Generating image embeddings for {len(image_list)} images")
         assert prompt.count(image_token) == len(image_list), "Image token mismatch"
 
         # Generate embeddings
         image_embeddings = [
             self.get_image_embedding_cached(
                 processor=self.processor,
-                model=self.model,
                 tokenizer=self.tokenizer,
                 url=url
             ) for url in image_list
@@ -626,14 +626,11 @@ class ModelExllamaV3(ModelInterface):
 
             # Convert prompt to token IDs
             if image_embeddings:
-                # input_ids = self.tokenizer.encode(
-                #     prompt,
-                #     encode_special_tokens=True,
-                #     embeddings=image_embeddings,
-                # )
-
-                # TODO support image
-                input_ids = self.tokenizer.encode(prompt)
+                input_ids = self.tokenizer.encode(
+                    prompt,
+                    encode_special_tokens=True,
+                    embeddings=image_embeddings,
+                )
             else:
                 input_ids = self.tokenizer.encode(prompt)
 
@@ -661,7 +658,7 @@ class ModelExllamaV3(ModelInterface):
                 self.max_seq_len - len(input_ids[0]),
                 max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
 
-
+            logger.info("stop_conditions: " + str(stop_conditions))
             if not quiet:
                 logger.info("----------------------Prompt---------------\n" + prompt)
                 logger.debug("----------------------temperature---------\n" + str(temperature))
