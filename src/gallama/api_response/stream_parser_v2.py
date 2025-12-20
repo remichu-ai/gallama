@@ -39,10 +39,10 @@ class DummyParser(BaseStreamParser):
 
 class StreamParserByTag(BaseStreamParser):
     def __init__(
-            self,
-            tag_definitions: List[TagDefinition],
-            default_tag_type=None,
-            use_regex: bool = True
+        self,
+        tag_definitions: List[TagDefinition],
+        default_tag_type=None,
+        use_regex: bool = True
     ) -> None:
 
         self.buffer = ""

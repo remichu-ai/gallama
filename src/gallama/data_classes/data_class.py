@@ -286,7 +286,7 @@ class ChatMLQuery(BaseModel):
 
     model: Optional[str] = ""
     messages: List[BaseMessage]
-    temperature: Optional[float] = 0.01
+    temperature: Optional[float] = 0.7
     top_p: float = 0.85
     stream: Optional[bool] = False
     tools: Optional[List[ToolSpec]] = None
