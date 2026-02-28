@@ -9,6 +9,7 @@ from .by_model import (
 MODEL_SPECIAL_TAG = {
     "qwen3_moe":  qwen3_moe,
     "minimax": minimax,
+    "minimax_m2": minimax,
     "glm4v_moe": glm4,
     "glm4_moe": glm4,
     "ministral3": ministral3,

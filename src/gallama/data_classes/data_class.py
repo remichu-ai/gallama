@@ -217,7 +217,7 @@ class MultiModalImageHFContent(BaseModel):
 class BaseMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    role: Literal['system', 'user', 'assistant', 'tool']
+    role: Literal['system', 'user', 'assistant', 'tool', 'developer']
     content: Optional[Union[
         str,
         List[Union[
@@ -295,10 +295,13 @@ class ChatMLQuery(BaseModel):
     max_tokens: Optional[int] = Field(
         description="An upper bound for the number of tokens that can be generated for a completion, including visible output tokens and reasoning tokens.",
         default=16000,
-        alis="max_completion_tokens"
+        alias="max_completion_tokens"
     )
     reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = "medium"
-
+    store: Optional[bool] = Field(
+        description="Whether or not to store the output of this chat completion request for use in model distillation or evals products.",
+        default=False,
+    )
     # for video, currently for websocket
     video: Optional[List[Any]] = None    # TODO to have handling for list of base64 video frame
 

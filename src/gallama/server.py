@@ -340,6 +340,14 @@ async def run_model(model_spec: ModelSpec):
         model_config = config_manager.configs.get(model_spec.model_name)
         backend = model_spec.backend or model_config.get('backend')
 
+        # Create a copy of the current environment
+        env = os.environ.copy()
+
+        # Set CUDA_VISIBLE_DEVICES
+        env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
+        server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
+        env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+
         try:
             # Serialize the ModelSpec to JSON and encode to base64
             model_json = model_spec.model_dump_json()
@@ -359,19 +367,12 @@ async def run_model(model_spec: ModelSpec):
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
+                    env=env,
                     # stderr=asyncio.subprocess.DEVNULL,
                 )
             else:
                 # other than exllama, we will use env setting to set visible GPUs
                 # CUDA_VISIBLE_DEVICES constraints before launching fastapi
-
-                # Create a copy of the current environment
-                env = os.environ.copy()
-
-                # Set CUDA_VISIBLE_DEVICES
-                env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
-                server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
-                env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")

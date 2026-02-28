@@ -18,82 +18,6 @@ def create_options_response(headers: dict) -> Response:
     return Response(content="", status_code=204, headers=options_headers)
 
 
-async def stream_response(method: str, url: str, headers: dict, body: Union[str, dict, bytes, None]):
-    """
-    Stream a response from the target URL while handling different body types and errors.
-
-    Args:
-        method (str): HTTP method
-        url (str): Target URL
-        headers (dict): Request headers
-        body: Request body (can be string, dict, bytes, or None)
-    """
-    try:
-        # Convert body to appropriate format if needed
-        if isinstance(body, dict):
-            content = json.dumps(body).encode('utf-8')
-        elif isinstance(body, str):
-            content = body.encode('utf-8')
-        elif isinstance(body, bytes):
-            content = body
-        else:
-            content = None
-
-        logger.debug(f"Streaming request to {url}")
-        logger.debug(f"Body type: {type(body)}")
-        logger.debug(f"Content type: {type(content)}")
-        logger.debug(f"Content length: {len(content) if content else 0}")
-        logger.debug(f"Headers: {headers}")
-
-        async with httpx.AsyncClient() as client:
-            async with client.stream(
-                method,
-                url,
-                headers=headers,
-                content=content,
-                timeout=None
-            ) as response:
-                # Log response details
-                logger.debug(f"Response status: {response.status_code}")
-                logger.debug(f"Response headers: {dict(response.headers)}")
-
-                if response.status_code >= 400:
-                    error_detail = await response.aread()
-                    try:
-                        error_json = json.loads(error_detail)
-                        error_message = json.dumps({
-                            "error": f"Server responded with status code: {response.status_code}",
-                            "detail": error_json
-                        })
-                    except json.JSONDecodeError:
-                        error_message = json.dumps({
-                            "error": f"Server responded with status code: {response.status_code}",
-                            "detail": error_detail.decode('utf-8', errors='replace')
-                        })
-                    yield error_message.encode('utf-8')
-                    return
-
-                async for chunk in response.aiter_bytes():
-                    if chunk:  # Only yield non-empty chunks
-                        logger.debug(f"Streaming chunk of size: {len(chunk)}")
-                        yield chunk
-
-    except httpx.RequestError as exc:
-        logger.error(f"Request error while streaming: {exc}", exc_info=True)
-        error_message = json.dumps({
-            "error": "Request error",
-            "detail": str(exc)
-        })
-        yield error_message.encode('utf-8')
-    except Exception as exc:
-        logger.error(f"Unexpected error while streaming: {exc}", exc_info=True)
-        error_message = json.dumps({
-            "error": "Unexpected error",
-            "detail": str(exc)
-        })
-        yield error_message.encode('utf-8')
-
-
 async def forward_request(
         request: Request,
         instance: ModelInstanceInfo,
@@ -175,10 +99,58 @@ async def forward_request(
 
         if is_streaming:
             logger.info("Handling as streaming request")
-            return StreamingResponse(
-                stream_response(request.method, url, headers, body),
-                media_type="application/json"
+
+            # 1. Prepare the client and request with NO TIMEOUT
+            client = httpx.AsyncClient(timeout=None)
+            req = client.build_request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                content=body
             )
+
+            try:
+                # 2. Send the request (this will now wait patiently for the LLM's first token)
+                response = await client.send(req, stream=True)
+            except Exception as e:
+                # Clean up the client if the server completely drops the connection
+                await client.aclose()
+                logger.error(f"Failed to connect or receive headers from target: {e}")
+                raise HTTPException(status_code=502, detail="Bad Gateway: Target server failed to respond.")
+
+            # 3. Catch errors immediately to prevent FastAPI from returning a 200 OK
+            if response.status_code >= 400:
+                await response.aread()
+                error_detail = response.text
+                await response.aclose()
+                await client.aclose()
+
+                logger.error(f"Backend returned {response.status_code}: {error_detail}")
+
+                # Raise the exact status code to the client
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Target server error: {error_detail}"
+                )
+
+            # 4. If successful, set up the generator
+            async def stream_generator():
+                try:
+                    async for chunk in response.aiter_bytes():
+                        if chunk:
+                            yield chunk
+                finally:
+                    # Ensure connections are cleanly closed when streaming ends or disconnects
+                    await response.aclose()
+                    await client.aclose()
+
+            # 5. Return StreamingResponse with the correct HTTP status code
+            return StreamingResponse(
+                stream_generator(),
+                status_code=response.status_code,
+                media_type="text/event-stream"
+            )
+
         else:
             logger.info("Handling as non-streaming request")
             async with httpx.AsyncClient() as client:
@@ -199,7 +171,9 @@ async def forward_request(
                     logger.error(f"Request error: {exc}")
                     raise HTTPException(status_code=500, detail=str(exc))
 
+    except HTTPException:
+        # Re-raise HTTPExceptions so FastAPI handles them correctly instead of wrapping them in a 500
+        raise
     except Exception as e:
         logger.error(f"Error in forward_request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-

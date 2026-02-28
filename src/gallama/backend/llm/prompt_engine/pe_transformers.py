@@ -39,7 +39,7 @@ class PromptEngineTransformers:
         # patch the template to standardized format
         self.patch_thinking_template()
 
-        self._transformer_config = AutoConfig.from_pretrained(model_path)
+        self._transformer_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         self.model_prompt = None
         self.model_type = self._transformer_config.model_type
         logger.info(f"transformer model_type: {self.model_type}")
@@ -69,6 +69,7 @@ class PromptEngineTransformers:
 
         self.is_thinking_model = self.check_thinking_model()
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
+        self.support_developer_role = self._template_supports_developer_role(self._transformer_tokenizer)
 
     @property
     def tag_definitions(self):
@@ -84,7 +85,7 @@ class PromptEngineTransformers:
             return False
 
         # Check for the standard HF field or your custom field
-        return "message.reasoning_content" in template or "message.reasoning" in template
+        return "message.reasoning_content" in template or "message.reasoning" in template or "reasoning_content" in template
 
     def patch_thinking_template(self):
         """
@@ -135,6 +136,22 @@ class PromptEngineTransformers:
 
         except Exception:
             # If the template crashes on a list input, it definitely doesn't support it.
+            return False
+
+        return False
+
+    @lru_cache(maxsize=1)
+    def _template_supports_developer_role(self, tokenizer) -> bool:
+        """
+        Probes the tokenizer's chat template to see if it supports the 'developer' role.
+        """
+        probe_msg = [{"role": "developer", "content": "PROBE_TEST_DEVELOPER"}]
+        try:
+            result = tokenizer.apply_chat_template(probe_msg, tokenize=False)
+            if "PROBE_TEST_DEVELOPER" in result:
+                return True
+        except Exception:
+            # Template throws a Jinja error or ValueError if the role is unsupported
             return False
 
         return False
@@ -200,6 +217,12 @@ class PromptEngineTransformers:
 
         # 1. Basic dump of messages
         conversation = [_m.model_dump() for _m in query.messages]
+
+        # 2. Convert 'developer' to 'system' if the template doesn't support 'developer'
+        if not self.support_developer_role:
+            for msg in conversation:
+                if msg.get("role") == "developer":
+                    msg["role"] = "system"
 
         # patch image format
         conversation = self.convert_openai_to_hf_format(conversation)

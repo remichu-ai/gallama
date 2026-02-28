@@ -22,7 +22,7 @@ from gallama.data_classes import (
     GenQueueDynamic,
     VideoFrame, TagDefinition
 )
-from gallama.utils.utils import get_image
+from gallama.utils.utils import get_image, get_free_vram_gb
 
 
 try:
@@ -192,9 +192,6 @@ class ModelExllamaV3(ModelInterface):
 
         cache = Cache(model, max_num_tokens=self.max_seq_len)
 
-        # load model
-        model.load(progressbar = True, tensor_p = tensor_parallel)
-
         # # a simple dict to help map cache quant
         cache_quant_dict = {
             "FP16": None,
@@ -211,7 +208,7 @@ class ModelExllamaV3(ModelInterface):
         cache_size_to_use = (max(base_size, self.max_seq_len) // 256) * 256
 
         # get the cache quantization to use
-        cache_quant_to_use = cache_quant_dict[cache_quant]
+        cache_quant_to_use = cache_quant_dict.get(cache_quant, None)
 
         logger.info("max_seq_len: " + str(self.max_seq_len))
         logger.info("cache_size: " + str(cache_size_to_use))
@@ -221,38 +218,45 @@ class ModelExllamaV3(ModelInterface):
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
             "Device map should be either 'auto', 'gpu' split"
 
-        if isinstance(gpus, str) and gpus == "auto":
-            # create the layer if cache quant is needed
-            cache_layer = None
+        # create the layer if cache quant is needed
+        cache_layer = None
 
-            # TODO cache quant
-            if cache_quant_to_use:
-                cache_layer = CacheLayer_quant
+        # TODO cache quant
+        if cache_quant_to_use:
+            cache_layer = CacheLayer_quant
 
-            if cache_quant_to_use:
-                logger.info("Using cache quant")
-                cache = Cache(
-                    model,
-                    max_num_tokens=cache_size_to_use,
-                    layer_type=cache_layer,
-                    **cache_quant_to_use
-                )
-            else:
-                # FP16
-                logger.info("Not using cache quant")
-                cache = Cache(
-                    model,
-                    max_num_tokens=cache_size_to_use
-                )
-            # since exl3 only allow the reserve or use per device
-            # TODO allow user to set reserve per device
-            model.load(
-                progressbar = True,
-                use_per_device = gpus if isinstance(gpus, list) else None,
-                # tp_options={"moe_tensor_split": True},
-                tensor_p=tensor_parallel,
-                tp_backend="nccl",
+        if cache_quant_to_use:
+            logger.info("Using cache quant")
+            cache = Cache(
+                model,
+                max_num_tokens=cache_size_to_use,
+                layer_type=cache_layer,
+                **cache_quant_to_use
             )
+        else:
+            # FP16
+            logger.info("Not using cache quant")
+            cache = Cache(
+                model,
+                max_num_tokens=cache_size_to_use
+            )
+        # since exl3 only allow the reserve or use per device
+        # TODO allow user to set reserve per device
+
+        # find out free vramclear
+        if gpus == "auto":
+            free_vram = get_free_vram_gb()
+            vram_reserve = 0.4
+            free_vram = [max(0, f-vram_reserve) for f in free_vram]
+            gpus = free_vram if free_vram else gpus
+
+        model.load(
+            progressbar = True,
+            use_per_device = gpus if isinstance(gpus, list) else None,
+            # tp_options={"moe_tensor_split": True},
+            tensor_p=tensor_parallel,
+            # tp_backend="nccl",
+        )
 
         # load vision processor if there is
         # if there is error, assume that the model doesnt have vision

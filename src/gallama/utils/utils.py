@@ -234,3 +234,48 @@ async def get_model_from_body(request: Request) -> str:
     except Exception as e:
         logger.error(f"Error while getting model from request: {e}")
         return ""
+
+
+def get_free_vram_gb():
+    """
+    Returns a list of available (free) VRAM in GB for Nvidia GPUs.
+    Logs a message if non-Nvidia hardware is detected.
+    """
+    import subprocess
+    import shutil
+    import platform
+
+    # 1. Check for Nvidia (Primary Target)
+    if shutil.which('nvidia-smi'):
+        try:
+            # Query memory.free from nvidia-smi
+            # Output format will be lines of numbers like: "24100\n12050"
+            result = subprocess.check_output(
+                ['nvidia-smi', '--query-gpu=memory.free', '--format=csv,nounits,noheader'],
+                encoding='utf-8'
+            )
+
+            # Parse output: Split by line, convert to int, convert MiB to GB
+            free_mib = [int(x) for x in result.strip().split('\n') if x.strip()]
+            free_gb = [round(x / 1024, 2) for x in free_mib]
+            logger.info("Free GPU VRAM: {}".format(free_gb))
+            return free_gb
+
+        except Exception as e:
+            logger.warn(f"Log: Error reading Nvidia SMI: {e}")
+            return []
+
+    # 2. Check for Mac (Apple Silicon)
+    elif platform.system() == 'Darwin' and platform.machine() == 'arm64':
+        logger.info("Log: Apple Silicon detected. Implementation skipped.")
+        return []
+
+    # 3. Check for AMD (ROCm)
+    elif shutil.which('rocm-smi'):
+        logger.info("Log: AMD GPU detected. Implementation skipped.")
+        return []
+
+    # 4. No GPU found
+    else:
+        logger.info("Log: No Nvidia GPU detected.")
+        return []

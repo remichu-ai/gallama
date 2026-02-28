@@ -51,7 +51,7 @@ The model support up to 128k token context, hence please set the context accordi
 ```shell
 # sample
 gallama download pixtral:5.0
-gallama run -id "model_id=pixtral max_seq_len=32768"
+gallama run -id "model_name=pixtral max_seq_len=32768"
 
 ```
 
