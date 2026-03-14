@@ -7,7 +7,13 @@ Gallama is predominantly tested with the Exllama V3 workflow at this point. Othe
 
 Currently, the backend is mainly using Exllama-family backends. Llama.cpp support is under experiment. 
 
-Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
+Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV3 API backend.
+
+# Key Feature:
+- Native Tool Calling
+- OpenAI chat completion API
+- Anthropic message API
+- Compatible with Claude Code
 
 ## Native Tool Calling
 Gallama supports native tool calling. Instead of forcing every model into one synthetic format, Gallama uses the model's own tool-calling format when that format is supported by a parser in [`src/gallama/backend/llm/prompt_engine/by_model`](./src/gallama/backend/llm/prompt_engine/by_model).
