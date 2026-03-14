@@ -291,7 +291,7 @@ class ResponseFormat(BaseModel):
 class JsonSchemaSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
-    schema: dict[str, Any]
+    schema_: dict[str, Any] = Field(alias="schema")
     strict: bool | None = None
 
 class ResponseFormatJSONSchema(BaseModel):

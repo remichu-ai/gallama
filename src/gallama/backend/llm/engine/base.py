@@ -291,7 +291,7 @@ class ModelInterface(ABC):
 
             # check if json schema enforced
             if query.response_format and query.response_format.type=="json_schema":
-                json_schema = query.response_format.json_schema.schema
+                json_schema = query.response_format.json_schema.schema_
 
             else:
                 # currently these mode can not be used together:
@@ -1519,5 +1519,4 @@ End of Function Calling Instruction
 
                 # swap queue non function calling
                 gen_queue.swap(no_tool.gen_dynamic_queue[0])
-
 
