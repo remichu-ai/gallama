@@ -1,7 +1,7 @@
 import exllamav3
-
+import re
 from gallama.backend.llm.engine.base import ModelInterface
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, get_args
 import torch
 import asyncio
 from fastapi import Request                 # for type hint
@@ -20,10 +20,11 @@ from gallama.data_classes import (
     GenerationStats,
     QueueContext,
     GenQueueDynamic,
-    VideoFrame, TagDefinition
+    VideoFrame,
+    TagDefinition,
+    AnthropicStopReason
 )
 from gallama.utils.utils import get_image, get_free_vram_gb
-
 
 try:
     from exllamav3 import (
@@ -35,9 +36,9 @@ try:
         CacheLayer_quant,
         AsyncGenerator,
         AsyncJob,
+        FormatronFilter
     )
 
-    # from exllamav2.generator.filters import ExLlamaV2PrefixFilter
 except ImportError:
     Model = None
     Config = None
@@ -72,43 +73,9 @@ except ImportError:
     SS_TopP = None
     SS_NoOp = None
 
-
-
-
-
 # format enforcement with formatron
-try:
-    from formatron.formatter import FormatterBuilder
-    from formatron.integrations.exllamav2 import create_formatter_filter
-except ImportError:
-    FormatterBuilder = None
-    create_formatter_filter = None
-
-# format enforcement with lmfe
-try:
-    from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
-    from lmformatenforcer.integrations.exllamav2 import (
-        ExLlamaV2TokenEnforcerFilter,
-        build_token_enforcer_tokenizer_data
-    )
-    from lmformatenforcer import JsonSchemaParser
-except ImportError:
-    TokenEnforcerTokenizerData = None
-    ExLlamaV2TokenEnforcerFilter = None
-    build_token_enforcer_tokenizer_data = None
-    JsonSchemaParser = None
-
-try:
-    # lm format enforcer does not work correctly without update with latest api from exllama
-    # this wrapper class aim as stop gap solution and formatron is recommended instead
-    from gallama.backend.llm.engine.exllama.inference_json_lmfe_wrapper import ExLlamaV2TokenEnforcerFilter as ExLlamaV2TokenEnforcerFilterTemp
-except ImportError:
-    TokenEnforcerTokenizerData = None
-    ExLlamaV2TokenEnforcerFilter = None
-    build_token_enforcer_tokenizer_data = None
-    ExLlamaV2TokenEnforcerFilterTemp = None
-    JsonSchemaParser = None
-
+from formatron.formatter import FormatterBuilder
+from formatron.schemas import json_schema
 
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
@@ -164,9 +131,9 @@ class ModelExllamaV3(ModelInterface):
 
             # GPU1 is the main GPU for my PC
             # The below is lower threshold than exllamav2 default setting
-            reserve_per_gpu = [32 for _ in range(num_devices)]
+            reserve_per_gpu = [48 for _ in range(num_devices)]
             main_gpu = 0    # TODO pass it to front end
-            reserve_per_gpu[main_gpu] = 64
+            reserve_per_gpu[main_gpu] = 96
             reserved_vram = [_reserve * reserve_block_size for _reserve in reserve_per_gpu]
             return reserved_vram
         except:
@@ -303,62 +270,42 @@ class ModelExllamaV3(ModelInterface):
     # ********* from here is generation methods
     # helper function for job disconnection. Currently only exllama support this
     @staticmethod
-    async def check_disconnection(
-        request: Request,
-        job: AsyncJob,
-        gen_queue_list: Union[GenQueue, QueueContext, List[QueueContext]],
-        stop_event: asyncio.Event = None,
-    ):
-        """
-        Helper function that handle stopping generation mid-stream
-        """
+    async def check_disconnection(request, job, gen_queue_list, stop_event=None):
         try:
             while True:
                 if await request.is_disconnected():
                     logger.info("User disconnected")
                     if job:
                         await job.cancel()
-
-                    # add GenEnd to signal the end of generation
                     chunk = GenEnd()
                     for g_queue in gen_queue_list:
                         try:
                             await g_queue.get_queue().put(chunk)
                         except Exception as e:
                             logger.error(f"Error putting GenEnd into queue: {str(e)}")
-
-                    # break the while loop
                     break
 
-                # Use asyncio.wait_for to implement a timeout
-                try:
-                    await asyncio.wait_for(asyncio.sleep(1), timeout=1.1)
-                except asyncio.TimeoutError:
-                    # This allows us to check for cancellation more frequently
-                    pass
+                await asyncio.sleep(1)  # simple sleep, no wait_for wrapper
 
         except asyncio.CancelledError:
             logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            raise
-            if not stop_event or (stop_event and not stop_event.is_set()):
-                logger.error(f"An error occurred in check_disconnection: {str(e)}", exc_info=True)
+            if not stop_event or not stop_event.is_set():
+                logger.error(f"Error in check_disconnection: {str(e)}", exc_info=True)
         finally:
             logger.debug("Exiting check_disconnection")
 
-
-    class ExllamaV2Pipeline:
+    class ExllamaV3Pipeline:
         """ class as wrapper for objects required for Exllama V2 text generation"""
 
         def __init__(
             self,
             cache: Cache,
             generator: AsyncGenerator,
-            lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
         ):
             self.cache = cache
             self.generator = generator
-            self.lm_enforcer_tokenizer_data = lm_enforcer_tokenizer_data
+
 
     async def _get_pipeline_async(self):
         """
@@ -367,17 +314,6 @@ class ModelExllamaV3(ModelInterface):
         this will be run in the first text generation to ensure that generator is initialized
         """
 
-        # lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
-
-        # generator = ExLlamaV2DynamicGeneratorAsync(
-        #     model=self.model,
-        #     cache=self.cache,
-        #     tokenizer=self.tokenizer,
-        #     max_seq_len=self.max_seq_len,
-        #     draft_model=self.draft_model,
-        #     draft_cache=self.draft_cache,
-        #     num_draft_tokens=5,
-        # )
 
         generator = AsyncGenerator(
             model=self.model,
@@ -385,10 +321,9 @@ class ModelExllamaV3(ModelInterface):
             tokenizer=self.tokenizer,
         )
 
-        return self.ExllamaV2Pipeline(
+        return self.ExllamaV3Pipeline(
             cache=self.cache,
             generator=generator,
-            lm_enforcer_tokenizer_data=None,
         )
 
     @staticmethod
@@ -434,7 +369,6 @@ class ModelExllamaV3(ModelInterface):
         )
 
     @staticmethod
-    # @lru_cache(32)     # unhashable type list
     def get_video_embedding_cached(processor, model, tokenizer, video: List[VideoFrame]):
         """
         function to return image embedding for exllama
@@ -448,17 +382,19 @@ class ModelExllamaV3(ModelInterface):
             text_alias=None,    # passing None will let the llm generate its own embedding
         )
 
-    def _generate_image_embeddings(self, prompt, image_list):
+    def _generate_image_embeddings(self, prompt, vision_token: str, image_list):
         """Generate embeddings for images and update prompt"""
         # in prompt processing step, each image was substituted with the following token
-        # TODO move this token to better place
-
-        image_token = "<|image|>"
 
         # Validate image token count matches number of images
-        logger.info(f"Prompt: {prompt}")
-        logger.info(f"Generating image embeddings for {len(image_list)} images")
-        assert prompt.count(image_token) == len(image_list), "Image token mismatch"
+        # logger.info(f"Prompt: {prompt}")
+        # logger.info(f"Generating image embeddings for {len(image_list)} images")
+
+        assert vision_token is not None, "vision token can not be None"
+
+        token_count = prompt.count(vision_token)
+        assert token_count == len(
+            image_list), f"Image token mismatch: found {token_count} tokens, but got {len(image_list)} images."
 
         # Generate embeddings
         image_embeddings = [
@@ -471,7 +407,7 @@ class ModelExllamaV3(ModelInterface):
 
         # Replace image tokens with embeddings
         for emb in image_embeddings:
-            prompt = prompt.replace(image_token, emb.text_alias, 1)
+            prompt = prompt.replace(vision_token, emb.text_alias, 1)
 
         return prompt, image_embeddings
 
@@ -499,7 +435,7 @@ class ModelExllamaV3(ModelInterface):
 
         return prompt, video_embeddings
 
-    def _process_vision_inputs(self, prompt, messages: List[BaseMessage], video: List[VideoFrame] = None):
+    def _process_vision_inputs(self, prompt, vision_token: str, messages: List[BaseMessage], video: List[VideoFrame] = None):
         """Handle image embedding and token replacement for vision inputs"""
 
         _prompt = prompt
@@ -525,7 +461,7 @@ class ModelExllamaV3(ModelInterface):
 
         # Process image embeddings if vision is required
         if vision_required and self.processor:
-            _prompt,_vision_embeddings = self._generate_image_embeddings(prompt, image_list)
+            _prompt,_vision_embeddings = self._generate_image_embeddings(prompt, vision_token, image_list)
 
         # handle video input
         if video:
@@ -535,47 +471,50 @@ class ModelExllamaV3(ModelInterface):
         return _prompt, _vision_embeddings
 
 
-    def _get_format_enforcer_filter(self, formatter):
-        """Determine appropriate format enforcer filter"""
-        if isinstance(formatter, (TokenEnforcerTokenizerData, JsonSchemaParser)):
-            # Logic for LM format enforcer
-            exllama_version = version('exllamav2')
-            return [
-                ExLlamaV2TokenEnforcerFilterTemp(
-                    model=self.model,
-                    tokenizer=self.tokenizer,
-                    character_level_parser=formatter,
-                ) if exllama_version > '0.2.0' else
-                ExLlamaV2TokenEnforcerFilter(
-                    character_level_parser=formatter,
-                    tokenizer_data=self.pipeline.lm_enforcer_tokenizer_data
-                )
-            ]
-        elif FormatterBuilder and isinstance(formatter, FormatterBuilder):
-            # Logic for Formatron
-            return [create_formatter_filter(self.model, self.tokenizer, formatter)]
-
-        raise ValueError("Unsupported formatter type")
-
     def _create_generation_filters(
         self,
-        formatter: Optional[Union[TokenEnforcerTokenizerData, FormatterBuilder]] = None,
-        prefix_strings: Optional[Union[str, List[str]]] = None
+        json_schema_dict: dict = None
     ) -> List:
         """Create filters for token generation"""
         filters = []
 
-        # # Format enforcer filters
-        # if formatter:
-        #     filters.extend(self._get_format_enforcer_filter(formatter))
-        #
-        # # Prefix filters
-        # if prefix_strings:
-        #     filters.append(
-        #         ExLlamaV2PrefixFilter(self.model, self.tokenizer, prefix_strings)
-        #     )
+        if json_schema_dict is None:
+            return []
+
+        if "$schema" not in json_schema_dict:
+            json_schema_dict["$schema"] = "http://json-schema.org/draft-07/schema#"
+
+        # 2. Add an $id key so the referencing registry can catalog it
+        if "$id" not in json_schema_dict:
+            json_schema_dict["$id"] = "http://gallama.local/chat-schema.json"
+
+        schema = json_schema.create_schema(json_schema_dict)
+        f = FormatterBuilder()
+        f.append_line(f"{f.json(schema, capture_name='json')}")
+
+        filters.append(
+            FormatronFilter(self.tokenizer, eos_after_completed=True, formatter_builder=f),
+        )
 
         return filters
+
+    # noinspection PyTypeChecker
+    @staticmethod
+    def get_stop_reason(result: dict, use_stop_words: bool) -> AnthropicStopReason:
+        exl_reason = result.get("eos_reason")
+        reason = "end_turn"
+        if use_stop_words:
+            reason = "stop_sequence"
+        elif exl_reason == "max_new_tokens":
+            reason = "max_tokens"
+        elif exl_reason in ["stop_string", "stop_token"]:
+            reason = "end_turn"
+        elif exl_reason == "end_filter":
+            reason = "stop_sequence"
+
+        assert reason in get_args(AnthropicStopReason), "Stop reason must be one of AnthropicStopReason"
+
+        return reason
 
     async def generate(
         self,
@@ -585,7 +524,7 @@ class ModelExllamaV3(ModelInterface):
         gen_type: Union[str, GenStart, TagDefinition] = "text",  # the generated result will be stored in this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: Optional[Union[FormatterBuilder, TokenEnforcerTokenizerData]] = None,
+        # formatter: Optional[FormatterBuilder] = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -594,8 +533,14 @@ class ModelExllamaV3(ModelInterface):
         messages: List[BaseMessage] = None,  # query.message for multimodal
         video: List[VideoFrame] = None,
         stop_event: asyncio.Event = None,
+        send_eos: bool = True,
+        vision_token = None,
+        json_schema = None,
+        return_stop_word: bool = True,
         **kwargs,
     ) -> (str, GenerationStats):
+        full_completion = ""
+
         try:
             # Ensure that the generator is initialized
             if self.pipeline is None:
@@ -626,7 +571,21 @@ class ModelExllamaV3(ModelInterface):
             settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
-            prompt, image_embeddings = self._process_vision_inputs(prompt, messages, video)
+            prompt, image_embeddings = self._process_vision_inputs(prompt, vision_token, messages, video)
+
+            # Create filters for format enforcement
+            # for now the filter is only for prefix string
+            filters = None
+            if json_schema:
+                filters = self._create_generation_filters(json_schema)
+
+            # add prefix string
+            elif prefix_strings:
+                if isinstance(prefix_strings, str):
+                    prompt += prefix_strings
+                elif isinstance(prefix_strings, list):
+                    prefix_strings = prefix_strings[0]
+                    prompt += prefix_strings
 
             # Convert prompt to token IDs
             if image_embeddings:
@@ -636,12 +595,13 @@ class ModelExllamaV3(ModelInterface):
                     embeddings=image_embeddings,
                 )
             else:
-                input_ids = self.tokenizer.encode(prompt)
+                input_ids = self.tokenizer.encode(
+                    prompt,
+                    encode_special_tokens=False
+                )
 
             self.validate_token_length(len(input_ids[0]))
 
-            # Create filters for format enforcement
-            # filters = self._create_generation_filters(formatter, prefix_strings)
 
             # Find stop conditions
             if stop_words:
@@ -660,7 +620,8 @@ class ModelExllamaV3(ModelInterface):
             # Calculate max tokens to use
             max_tokens_to_use = min(
                 self.max_seq_len - len(input_ids[0]),
-                max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids[0]), 4096)
+                max_tokens) \
+                if max_tokens else self.max_seq_len - len(input_ids[0])
 
             logger.info("stop_conditions: " + str(stop_conditions))
             if not quiet:
@@ -676,7 +637,7 @@ class ModelExllamaV3(ModelInterface):
                 "stop_conditions": stop_conditions,
                 "banned_strings": banned_strings,
                 "decode_special_tokens": True,
-                # "filters": filters,
+                "filters": filters,
                 "token_healing": True,
                 "identifier": job_id,
             }
@@ -710,6 +671,12 @@ class ModelExllamaV3(ModelInterface):
                 disconnect_check_task = asyncio.create_task(self.check_disconnection(request, job, gen_queue_list, stop_event=stop_event))
 
             try:
+                # send the prefix first
+                if prefix_strings:
+                    prefix_chunk = GenText(content=prefix_strings, text_type=gen_type_str)
+                    for g_queue in gen_queue_list:
+                        g_queue.put_nowait(prefix_chunk)
+
                 # Start the generation
                 async for result in job:
                     if eos or stop_event.is_set():
@@ -729,6 +696,9 @@ class ModelExllamaV3(ModelInterface):
                         eos = True
                         # logger.info(f"eos result {result}")
                         # If the stop word occurred is from the stop_words and not LLM result token -> include in result
+
+                        use_stop_words = False
+                        stop_word_used = ""
                         if stop_words and result.get("held") and result.get("held").get("text"):
                             ending_string = result["held"]["text"].rstrip()
 
@@ -736,30 +706,42 @@ class ModelExllamaV3(ModelInterface):
                                 # Find the stop word that was used to end the string
                                 stop_word_used = self.get_stop_word(ending_string, stop_words)
 
-                                if stop_word_used:
+                                if stop_word_used and return_stop_word:
                                     # If generation ended with one of the stop words
                                     # -> return that stop word as the last token
                                     chunk = GenText(content=stop_word_used, text_type=gen_type_str)
                                     for g_queue in gen_queue_list:
                                         g_queue.put_nowait(chunk)
 
-                        gen_stats = GenerationStats(
-                            input_tokens_count=result["prompt_tokens"],
-                            output_tokens_count=result["new_tokens"],
-                            time_to_first_token=result["time_prefill"],
-                            time_generate=result["time_generate"],
-                            cached_pages=result["cached_pages"],
-                            cached_tokens=result["cached_tokens"]
-                        )
+                                    use_stop_words = True
 
-                        for g_queue in gen_queue_list:
-                            if g_queue.include_GenStats:
-                                g_queue.put_nowait(gen_stats)
+                        # get stop reason
+                        stop_reason = self.get_stop_reason(result, use_stop_words)
 
-                        # Signal the end of generation
-                        for g_queue in gen_queue_list:
-                            if g_queue.include_GenEnd:
-                                g_queue.put_nowait(GenEnd())
+                        if send_eos:
+                            # refer exllama generator.py for detail
+                            gen_stats = GenerationStats(
+                                input_tokens_count=result["prompt_tokens"],
+                                output_tokens_count=result["new_tokens"],
+                                time_to_first_token=result["time_prefill"],
+                                time_generate=result["time_generate"],
+                                cached_pages=result["cached_pages"],
+                                cached_tokens=result["cached_tokens"],
+                                stop_reason=stop_reason
+                            )
+
+                            for g_queue in gen_queue_list:
+                                if g_queue.include_GenStats:
+                                    g_queue.put_nowait(gen_stats)
+
+                            # Signal the end of generation
+                            for g_queue in gen_queue_list:
+                                if g_queue.include_GenEnd:
+                                    g_queue.put_nowait(GenEnd())
+
+                        full_completion = result["full_completion"] + stop_word_used
+
+                        return full_completion
 
             except Exception as e:
                 logger.error(e)
@@ -767,8 +749,8 @@ class ModelExllamaV3(ModelInterface):
                 if disconnect_check_task:
                     disconnect_check_task.cancel()
                     try:
-                        await disconnect_check_task
-                    except:
+                        await asyncio.wait_for(disconnect_check_task, timeout=0.1)
+                    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                         pass
         except Exception as e:
             logger.error(e)

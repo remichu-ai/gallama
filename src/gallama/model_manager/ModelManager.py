@@ -99,6 +99,7 @@ class ModelManager:
 
 
         # load the model with config from the model_spec and yml. model_spec comes from cli
+        logger.info(f"model_spec.backend: {model_spec.backend}")
         if model_spec.backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
             if model_spec.backend == "exllama":
                 from gallama.backend.llm import ModelExllama as ModelClass
@@ -125,7 +126,6 @@ class ModelManager:
             else:
                 draft_model_config = {}
 
-            logger.info(f"model_spec: {model_spec}")
             llm = ModelClass(model_spec=model_spec)
 
             # update dict

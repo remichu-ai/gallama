@@ -1,10 +1,10 @@
 from fastapi import Request
 
+from .api_formatter import OpenAIFormatter, AnthropicFormatter, ParsedContentBlock
 from .stream_parser_v2 import StreamParserByTag, DummyParser
 from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
-    Choice,
     ChatMessage,
     UsageResponse,
     OneTool,
@@ -17,7 +17,11 @@ from ..data_classes.data_class import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
     TextTag,
-    TagDefinition
+    TagDefinition,
+    AnthropicMessagesResponse,
+    AnthropicTextBlock,
+    AnthropicToolUseBlock,
+    AnthropicUsage,
 )
 from ..data_classes.generation_data_class import (
     GenerationStats,
@@ -29,13 +33,14 @@ from ..data_classes.generation_data_class import (
 )
 
 from .stream_parser import StreamParser
-from typing import AsyncIterator, List, Dict
-from gallama.utils.utils import get_response_uid, get_response_tool_uid
-from gallama.logger.logger import logger
+from typing import AsyncIterator, List, Dict, Literal, Union
+from ..utils.utils import get_response_uid, get_response_tool_uid
+from ..logger import logger
 from pydantic.json import pydantic_encoder
 import time
 import json
 import asyncio
+import uuid
 
 
 async def get_response_from_queue(
@@ -75,93 +80,54 @@ async def get_response_from_queue(
 
 async def chat_completion_response_stream(
     query: ChatMLQuery,
-    gen_queue: GenQueue,
+    gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
+    provider: Literal["openai", "anthropic"],
     tag_definitions: List[TagDefinition] = None
 ) -> AsyncIterator[dict]:
-    # # TODO to delete it here later
-    # if not tag_definition:
-    #     tag_definition = default_tag_definition
 
-    # create streaming pro
-    text_tag = TagDefinition(
-        tag_type="text",
-        api_tag="content",
-    )
+    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
+    formatter = formatter_class(model_name=model_name)
+
+    text_tag = TagDefinition(tag_type="text", api_tag="content")
 
     if tag_definitions is not None:
-        stream_parser = StreamParserByTag(
-            tag_definitions=tag_definitions,
-            default_tag_type=text_tag
-        )
+        stream_parser = StreamParserByTag(tag_definitions=tag_definitions, default_tag_type=text_tag)
     else:
         stream_parser = DummyParser()
 
-    unique_id = get_response_uid()
-    created = int(time.time())
     full_response = ""
     eos = False
     gen_stats = None
-    # track stage for tag_type if need to
     state = {}
 
-    # no streaming of tool use at the moment
-    # track if there is change in tag
     current_tag = text_tag
-    current_text = ""   # hold text if tag use wait_till_complete
+    current_text = ""
 
-
-    def return_stream_chunk(tag: TagDefinition, text: str):
+    def process_and_format_chunk(tag: TagDefinition, text: str):
         try:
-            extra_args = {
-                "model_name": model_name,
-                "unique_id": unique_id,
-                "state": state
-            }
-
+            extra_args = {"model_name": model_name, "unique_id": formatter.unique_id, "state": state}
             _processed_text = tag.post_processor(text, extra_args)
             _api_tag = tag.api_tag
             _role = tag.role
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Error in post-processor: {e}")
             logger.info("Fall back to text tag")
-            _processed_text = text
-            _api_tag = text_tag.api_tag
-            _role = text_tag.role
+            _processed_text, _api_tag, _role = text, text_tag.api_tag, text_tag.role
 
-        choice_delta_object = {
-            _api_tag: _processed_text,
-            "role": _role
-        }
         try:
-            chunk_data = ChatCompletionResponse(
-                id=unique_id,
-                model=model_name,
-                object="chat.completion.chunk",
-                created=created,
-                choices=[
-                    StreamChoice(
-                        index=0,
-                        delta=ChoiceDelta(**choice_delta_object)
-                    )
-                ]
-            )
-            return {"data": json.dumps(
-                chunk_data.model_dump(
-                    exclude_unset=True
-                ),
-                default=pydantic_encoder,
-                ensure_ascii=False
-            )}
+            return formatter.stream_chunk(api_tag=_api_tag, text=_processed_text, role=_role)
         except Exception as e:
-            logger.error(e)
-            logger.info(f"choice_delta_object: {choice_delta_object}")
+            logger.error(f"Error in stream_chunk formatting: {e}")
             raise e
+
+    # Emit starting event(s)
+    for event in formatter.stream_start():
+        yield event
 
     while not eos:
         accumulated_text = ""
-
         try:
             while True:
                 item = gen_queue.get_nowait()
@@ -173,107 +139,105 @@ async def chat_completion_response_stream(
                 elif isinstance(item, GenStart):
                     logger.info(f"Stream starts with {item.gen_type}")
                     if current_tag != item.gen_type:
-                        # it is not text type, set current tag accordingly
-                        current_tag=item.gen_type
+                        current_tag = item.gen_type
                         try:
                             stream_parser.push_tag_context(item.gen_type)
                         except Exception as e:
                             logger.error(e)
                 elif isinstance(item, GenerationStats):
                     gen_stats = item
-
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.01)  # Sleep for 100ms (adjust as needed)
-
+            await asyncio.sleep(0.01)
 
         if accumulated_text or eos:
             full_response += accumulated_text
-
             parsed_text = stream_parser.process_stream(accumulated_text)
 
-            # If EOS, force the parser to empty its buffer
             if eos:
                 parsed_text.extend(stream_parser.flush())
 
             if parsed_text:
-
                 for _tag, _text_chunk in parsed_text:
                     if current_tag != _tag:
-                        # if tag switch and there is content in current_text
-                        # return it to the client
+                        logger.info(f"new tag: {_tag}")
                         if current_text:
-                            if chunk := return_stream_chunk(current_tag, current_text):
-                                yield chunk
+                            # 1. Open block via formatter
+                            for e in formatter.open_block(current_tag.api_tag):
+                                yield e
 
-                            # reset current tracking
+                            # 2. Yield chunks
+                            if chunk := process_and_format_chunk(current_tag, current_text):
+                                for c in chunk:
+                                    yield c
+
                             current_text = ""
+
+                        # 3. Close old block via formatter
+                        for e in formatter.close_block():
+                            yield e
 
                         current_tag = _tag
 
                     if _tag.wait_till_complete:
-                        # append and continue
                         current_text += _text_chunk
                     else:
-                        # no need to wait till completion
-                        # straight away return
-                        if chunk := return_stream_chunk(_tag, _text_chunk):
-                            yield chunk
+                        for e in formatter.open_block(_tag.api_tag):
+                            yield e
+
+                        if chunk := process_and_format_chunk(_tag, _text_chunk):
+                            for c in chunk:
+                                yield c
 
         if eos:
-            # if there is any remaining current text -> stream to the client
             if current_text:
-                if chunk := return_stream_chunk(current_tag, current_text):
-                    yield chunk
+                for e in formatter.open_block(current_tag.api_tag):
+                    yield e
+
+                if chunk := process_and_format_chunk(current_tag, current_text):
+                    for c in chunk:
+                        yield c
+
+            # Close final block via formatter
+            for e in formatter.close_block():
+                yield e
 
             logger.info(f"full_response: {full_response}")
 
-            if gen_stats and query.stream_options and query.stream_options.include_usage:
-                usage_data = ChatCompletionResponse(
-                    id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    choices=[],
-                    usage=UsageResponse(
-                        prompt_tokens=gen_stats.input_tokens_count,
-                        completion_tokens=gen_stats.output_tokens_count,
-                        total_tokens=gen_stats.total_tokens_count,
-                    ),
+            # Safe stop handling
+            # Determine finish reason from gen_stats; formatter will override for tool_calls
+            if provider == "openai":
+                base_finish_reason = gen_stats.get_openai_stop_reason() if gen_stats else "stop"
+            else:
+                base_finish_reason = gen_stats.stop_reason if gen_stats else "end_turn"
+
+            if gen_stats and query.stream_options and getattr(query.stream_options, "include_usage", True):
+                stream_stop_events = formatter.stream_stop(
+                    input_tokens=gen_stats.input_tokens_count,
+                    output_tokens=gen_stats.output_tokens_count,
+                    total_tokens=gen_stats.total_tokens_count,
+                    finish_reason=base_finish_reason,
                 )
-                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
+            else:
+                stream_stop_events = formatter.stream_stop(finish_reason=base_finish_reason)
+
+            for event in stream_stop_events:
+                yield event
 
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
-            # TODO to get the actual finish reason and implement
-            # # Send final chunk with finish_reason
-            # chunk_data = ChatCompletionResponse(
-            #     id=unique_id,
-            #     model=model_name,
-            #     object="chat.completion.chunk",
-            #     created=created,
-            #     choices=[
-            #         StreamChoice(
-            #             index=0,
-            #             delta=ChoiceDelta(),
-            #             finish_reason="tool_calls" if accumulated_tool_text else "stop"
-            #         )
-            #     ]
-            # )
-            # yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder,
-            #                           ensure_ascii=False)}
-            yield {"data": "[DONE]"}
-
 
 async def chat_completion_response(
     query: ChatMLQuery,
-    gen_queue: GenQueue,
-    # response: str,
-    # gen_stats: GenerationStats,
+    gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
-    # mode: Literal["text", "tool"] = "text"
-    tag_definitions: List[TagDefinition] = None
+    provider: Literal["openai", "anthropic"],
+    tag_definitions: List[TagDefinition] = None,
 ) -> ChatCompletionResponse:
+
+    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
+    formatter = formatter_class(model_name=model_name)
 
     # create streaming pro
     text_tag = TagDefinition(
@@ -291,9 +255,6 @@ async def chat_completion_response(
 
     response = ""
     initial_tag = None
-    # global result_queue
-    # completed_event = asyncio.Event()
-    gen_type = "text"
     gen_stats = None
     eos = False
     while not eos:
@@ -318,79 +279,43 @@ async def chat_completion_response(
             await asyncio.sleep(0.01)    # short sleep before trying again
 
 
-    unique_id = get_response_uid()
     response = response.strip()
     parsed_text = stream_parser.parse_full_text(response, initial_tag=initial_tag)
-    # use choices to keep track
-    choices = []
-    logger.info(f"Parsed text: {parsed_text}")
+
+    # Build provider-agnostic parsed blocks
+    parsed_blocks = []
     if parsed_text:
-        return_obj_dict = {}
-        current_role = None
-        current_allowed_roles = None
-
         for _tag, _text_chunk in parsed_text:
-            _process_text = _tag.post_processor(_text_chunk)
-            _api_tag = _tag.api_tag
-            _role = _tag.role
-            _allowed_roles = _tag.allowed_roles
+            parsed_blocks.append(ParsedContentBlock(
+                api_tag=_tag.api_tag,
+                role=_tag.role,
+                content=_tag.post_processor(_text_chunk),
+                allowed_roles=_tag.allowed_roles,
+            ))
 
-            # As long as the role are not change, we try to combine the result
-            if current_role is None:
-                current_role = _role
-                current_allowed_roles = _allowed_roles
+    # Determine finish reason from content
+    # Base finish reason from gen_stats, mapped per provider
+    if provider == "openai":
+        finish_reason = gen_stats.get_openai_stop_reason() if gen_stats else "stop"
+    else:
+        finish_reason = gen_stats.stop_reason if gen_stats else "end_turn"
 
-            if return_obj_dict.get(_api_tag, None) is None and current_role in current_allowed_roles:
-                # get the inner join
-                current_allowed_roles = current_allowed_roles & _allowed_roles
-                current_role = _role
+    # Override for tool use (gen_stats won't know about tool calls)
+    for block in parsed_blocks:
+        if block.api_tag == "tool_calls":
+            finish_reason = "tool_calls" if provider == "openai" else "tool_use"
+            break
 
-                # perfect matching of role
-                return_obj_dict = {
-                    **return_obj_dict,
-                    **{
-                        "role": current_role,
-                        _api_tag: _process_text
-                    }
-                }
-            else:
-
-                logger.info(f"current_role: {current_role}")
-                choices.append(Choice(**{
-                    "index": len(choices),
-                    "message": return_obj_dict.copy(),
-                    "finish_reason": "stop"
-                }))
-                current_role = _tag.role
-                current_allowed_roles = _allowed_roles
-                return_obj_dict = {
-                    "role": current_role,
-                    _api_tag: _process_text
-                }
-
-        if return_obj_dict:
-            logger.info(f"current_role: {current_role}")
-            choices.append(Choice(**{
-                "index": len(choices),
-                "message": return_obj_dict.copy(),
-                "finish_reason": "stop"
-            }))
-
-        logger.info(f"Choices: {choices}")
-
-        response_obj = ChatCompletionResponse(
-            id=unique_id,
-            model=model_name,
-            choices=choices,
-            usage=UsageResponse(
-                prompt_tokens=gen_stats.input_tokens_count,
-                completion_tokens=gen_stats.output_tokens_count,
-                total_tokens=gen_stats.total_tokens_count,
-            ),
-        )
+    response_obj = formatter.non_stream_response(
+        parsed_blocks=parsed_blocks,
+        input_tokens=gen_stats.input_tokens_count,
+        output_tokens=gen_stats.output_tokens_count,
+        total_tokens=gen_stats.total_tokens_count,
+        finish_reason=finish_reason,
+    )
 
     assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
+    # logger.info(f"full_response: {response}")
     logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
     return response_obj
@@ -411,7 +336,7 @@ async def completion_response(
                     text=response.strip(),
                     index=0,
                     logprobs=None,
-                    finish_reason="stop"  # You may want to determine this based on actual finish reason
+                    finish_reason=gen_stats.get_openai_stop_reason() if gen_stats else "stop"
                 )
             ],
             usage=UsageResponse(
@@ -437,10 +362,6 @@ async def completion_response_stream(
     eos = False
     gen_stats = None
     while not eos:
-        # if await request.is_disconnected():
-        #     logger.info("Request disconnected, stopping queue processing")
-        #     break
-
         accumulated_text = ""
         try:
             while True:
@@ -493,5 +414,3 @@ async def completion_response_stream(
                 pass
     if not eos:
         logger.info("Stream ended before receiving GenEnd")
-
-

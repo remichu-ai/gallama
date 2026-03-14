@@ -134,7 +134,7 @@ def get_package_file_path(file_name: str) -> str:
 # Util function to get a PIL image from a URL or from a file in the script's directory
 def get_image(
     file: str = None,
-    url: str =None,     # url of the image or base64 url in this format f"data:image/jpeg;base64,{base64_image}"
+    url: str = None,  # url of the image or base64 url in this format f"data:image/jpeg;base64,{base64_image}"
 ):
     assert (file or url) and not (file and url)
 
@@ -153,8 +153,18 @@ def get_image(
             # Open the image from the decoded data
             return Image.open(BytesIO(image_data))
         else:
-            # Assume url is a regular URL and fetch it as a stream
-            return Image.open(requests.get(url, stream=True).raw)
+            # Assume url is a regular URL and fetch it
+            # Added User-Agent to bypass bot protections (fixes the Wikimedia issue)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, stream=True)
+
+            # This throws a clear HTTPError if the download fails (e.g., 403 Forbidden or 404 Not Found)
+            # so PIL doesn't try to open a broken file/HTML page.
+            response.raise_for_status()
+
+            return Image.open(response.raw)
 
 
 def is_flash_attention_installed() -> (bool, str):

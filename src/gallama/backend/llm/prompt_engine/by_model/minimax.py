@@ -6,7 +6,7 @@ from .....data_classes.data_class import (
     TagDefinition
 )
 from .....utils.utils import get_response_tool_uid
-from typing import List, Dict
+from typing import List, Dict, Optional
 import xml.etree.ElementTree as ET
 
 
@@ -88,14 +88,21 @@ def minimax_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
     return results
 
+def tool_prompt(tool_name: Optional[str] = None):
+    if tool_name is None:
+        return "<minimax:tool_call>"
+    else:
+        return f'<minimax:tool_call>\n<invoke name="{tool_name}">'
+
 minimax = {
     "tool": TagDefinition(
         start_marker="<minimax:tool_call>",
         end_marker="</minimax:tool_call>",
         tag_type="tool_calls",
         api_tag="tool_calls",
-        role="tool",
+        role="assistant",
         post_processor=minimax_tool_parser,
+        prompt_init=tool_prompt,
         wait_till_complete=True
     ),
     "thinking": TagDefinition(

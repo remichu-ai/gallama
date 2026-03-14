@@ -8,6 +8,7 @@ import torch
 import re
 import base64
 from PIL import Image
+from ..logger import logger
 from .video import VideoFrame
 
 
@@ -47,7 +48,12 @@ class TagDefinition(BaseModel):
         default=False
     )
 
-    # FIX: Removed duplicate definition. Kept the detailed one.
+    prompt_init: Optional[Callable[[Any], str]] = Field(
+        description="optional function to get the string to init the prompt, currently used for tool prompting",
+        exclude=True,
+        default=None
+    )
+
     post_processor: Callable[[str, Optional[Dict]], Any] = Field(
         description="optional function to post process the input",
         exclude=True,
@@ -215,7 +221,10 @@ class MultiModalImageHFContent(BaseModel):
 
 
 class BaseMessage(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(
+        extra="allow",
+        populate_by_name=True
+    )
 
     role: Literal['system', 'user', 'assistant', 'tool', 'developer']
     content: Optional[Union[
@@ -229,6 +238,7 @@ class BaseMessage(BaseModel):
     ]]] = ""
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
+    reasoning: Optional[str] = Field(default=None, description="previous reasoning for interleave thinking", alias="reasoning_content")
 
     @validator('content', pre=True)
     def convert_null_to_empty(cls, value):
@@ -273,15 +283,29 @@ class ToolForce(BaseModel):
     class Config:
         extra = "forbid"  # This will prevent extra keys in the dictionary
 
+class ResponseFormat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["text", "json_object"]
+
+
+class JsonSchemaSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    schema: dict[str, Any]
+    strict: bool | None = None
+
+class ResponseFormatJSONSchema(BaseModel):
+    type: Literal["json_schema"]
+    json_schema: JsonSchemaSpec
+    model_config = ConfigDict(extra="forbid")
 
 class ChatMLQuery(BaseModel):
     # Configure the model to forbid extra fields
-    model_config = ConfigDict(extra="forbid")
-
-    class ResponseFormat(BaseModel):
-        type: Literal["text", "json_object"]
+    # populate_by_name=True to support alias
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     class StreamOption(BaseModel):
+        # differ to openai spec where it only return when set to true manually in stream mode
         include_usage: bool = False
 
     model: Optional[str] = ""
@@ -311,6 +335,7 @@ class ChatMLQuery(BaseModel):
     regex_pattern: Optional[constr(min_length=1)] = None   # regex to enforce
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
+    return_stop_word: Optional[bool] = False
     thinking_template: Optional[str] = None
 
     # tool call
@@ -339,7 +364,7 @@ class ChatMLQuery(BaseModel):
     top_logprob: int = None
     n: int = 1
     presence_penalty: float = 0
-    response_format: Optional[ResponseFormat] = None
+    response_format: Optional[Union[ResponseFormat, ResponseFormatJSONSchema]] = None
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
     parallel_tool_calls: bool = True            # default let the model handle and can not toggle
@@ -443,6 +468,8 @@ class UsageResponse(BaseModel):
     completion_tokens: int = 0
     total_tokens: int = 0
 
+OpenAIStopReason = Literal["stop", "length", "tool_calls", "content_filter"]
+AnthropicStopReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded"]
 
 class Choice(BaseModel):
     index: int = 0
@@ -577,9 +604,9 @@ class GenerateQuery(BaseModel):
 #         else:
 #             return 0
 
-    @property
-    def total_tokens_count(self) -> float:
-        return self.input_tokens_count + self.output_tokens_count
+    # @property
+    # def total_tokens_count(self) -> float:
+    #     return self.input_tokens_count + self.output_tokens_count
 
 
 class ModelObject(BaseModel):
@@ -802,14 +829,21 @@ class ModelSpec(BaseModel):
         """
         Generate a string of GPU indices based on allocated GPUs.
         If no GPUs are specified, return all available GPU indices.
-
-        Returns:
-            str: A comma-separated string of GPU indices with allocated VRAM,
-                 or all available GPU indices if none are specified.
+        Respects existing CUDA_VISIBLE_DEVICES environment variable if set.
         """
+        import os
+
+        # 1. First, check if the user explicitly set the env variable externally
+        existing_cvd = os.environ.get('CUDA_VISIBLE_DEVICES')
+
         if self.gpus is None or self.gpus == "auto":
-            import torch
-            return ','.join(str(i) for i in range(torch.cuda.device_count()))
+            if existing_cvd is not None:
+                # Pass through the exact string provided via CLI (e.g., "2,3,0,1,4,5")
+                return existing_cvd
+            else:
+                # Fallback if launched without CLI variables
+                import torch
+                return ','.join(str(i) for i in range(torch.cuda.device_count()))
 
         if all(vram == 0 for vram in self.gpus):
             return ""  # No GPUs allocated
@@ -890,3 +924,283 @@ class ModelDownloadSpec(BaseModel):
 
     # disable protected_namespaces due to it field use model_ in the name
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+
+# === Anthropic/Claude Messages API Data Classes ===
+
+class AnthropicTextContent(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class AnthropicBase64ImageSource(BaseModel):
+    type: Literal["base64"] = "base64"
+    media_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+    data: str
+
+
+class AnthropicURLImageSource(BaseModel):
+    type: Literal["url"] = "url"
+    url: str
+
+
+class AnthropicImageContent(BaseModel):
+    type: Literal["image"] = "image"
+    source: Union[AnthropicBase64ImageSource, AnthropicURLImageSource] = Field(discriminator="type")
+
+
+class AnthropicToolUseContent(BaseModel):
+    type: Literal["tool_use"] = "tool_use"
+    id: str
+    name: str
+    input: Dict[str, Any]
+
+
+class AnthropicToolResultContent(BaseModel):
+    type: Literal["tool_result"] = "tool_result"
+    tool_use_id: str
+    content: Union[str, List[AnthropicTextContent]]
+
+
+class AnthropicToolInputSchema(BaseModel):
+    type: str = "object"
+    properties: Optional[Dict[str, Any]] = None
+    required: List[str] = []
+
+
+class AnthropicTool(BaseModel):
+    name: str
+    description: Optional[str] = None
+    input_schema: AnthropicToolInputSchema
+    strict: Optional[bool] = None
+
+
+class AnthropicToolChoice(BaseModel):
+    type: Literal["auto", "any", "none", "tool"]
+    name: Optional[str] = None  # only when type="tool"
+
+
+class AnthropicTextBlock(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+class AnthropicThinkingBlock(BaseModel):
+    type: Literal["thinking"] = "thinking"
+    thinking: str
+    signature: Optional[str] = "NA"
+
+class AnthropicToolUseBlock(BaseModel):
+    type: Literal["tool_use"] = "tool_use"
+    id: str
+    name: str
+    input: Dict[str, Any]
+
+
+class AnthropicUsage(BaseModel):
+    input_tokens: int
+    output_tokens: int
+
+class AnthropicMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: Union[str, List[Union[
+        AnthropicTextContent,
+        AnthropicThinkingBlock,
+        AnthropicImageContent,
+        AnthropicToolUseContent,
+        AnthropicToolResultContent,
+    ]]]
+
+class AnthropicOutputFormat(BaseModel):
+    type: Literal["json_schema"]
+    schema_: Dict[str, Any] = Field(alias="schema")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AnthropicOutputConfig(BaseModel):
+    format: AnthropicOutputFormat
+
+
+class AnthropicMessagesResponse(BaseModel):
+    id: str = Field(default_factory=lambda: "msg_" + uuid.uuid4().hex)
+    type: Literal["message"] = "message"
+    role: Literal["assistant"] = "assistant"
+    content: List[Union[AnthropicTextBlock, AnthropicThinkingBlock, AnthropicToolUseBlock]]
+    model: str
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = "end_turn"
+    stop_sequence: Optional[str] = None
+    usage: AnthropicUsage
+
+class AnthropicMessagesRequest(BaseModel):
+    model: str
+    messages: List[AnthropicMessage]
+    max_tokens: int  # required in Claude API
+    system: Optional[Union[str, List[AnthropicTextContent]]] = None
+    tools: Optional[List[AnthropicTool]] = None
+    tool_choice: Optional[AnthropicToolChoice] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    stream: Optional[bool] = False
+    stop_sequences: Optional[List[str]] = None
+    metadata: Optional[dict] = None
+    output_config: Optional[AnthropicOutputConfig] = None
+
+    def get_ChatMLQuery(self) -> ChatMLQuery:
+        import json
+        chat_messages = []
+
+        # 1. Translate Top-Level System Prompt to System Message
+        if self.system:
+            sys_content = ""
+            if isinstance(self.system, str):
+                sys_content = self.system
+            elif isinstance(self.system, list):
+                # Concatenate all text blocks if system prompt is a list
+                sys_content = "\n".join([b.text for b in self.system if getattr(b, "type", "") == "text"])
+
+            chat_messages.append(BaseMessage(role="system", content=sys_content))
+
+        # 2. Translate Messages and Content Blocks
+        for msg in self.messages:
+            if isinstance(msg.content, str):
+                chat_messages.append(BaseMessage(role=msg.role, content=msg.content))
+            else:
+                text_and_media_contents = []
+                tool_calls = []
+                tool_results = []
+                reasoning_text = None
+
+                for block in msg.content:
+                    if block.type == "text":
+                        text_and_media_contents.append(
+                            MultiModalTextContent(type="text", text=block.text)
+                        )
+
+                    elif block.type == "thinking":
+                        # Extract Anthropic thinking block into BaseMessage's reasoning field
+                        if reasoning_text is None:
+                            reasoning_text = block.thinking
+                        else:
+                            reasoning_text += "\n" + block.thinking
+
+                    elif block.type == "image":
+                        # Convert Anthropic Image to OpenAI Image URL Format
+                        if getattr(block.source, "type", None) == "base64":
+                            data_uri = f"data:{block.source.media_type};base64,{block.source.data}"
+                            img_detail = MultiModalImageContent.ImageDetail(url=data_uri)
+                            text_and_media_contents.append(
+                                MultiModalImageContent(type="image_url", image_url=img_detail)
+                            )
+                        elif getattr(block.source, "type", None) == "url":
+                            img_detail = MultiModalImageContent.ImageDetail(url=block.source.url)
+                            text_and_media_contents.append(
+                                MultiModalImageContent(type="image_url", image_url=img_detail)
+                            )
+
+                    elif block.type == "tool_use":
+                        # Extract Anthropic tool usage into OpenAI tool_calls
+                        func_call = FunctionCall(
+                            name=block.name,
+                            arguments=json.dumps(block.input)
+                        )
+                        tool_calls.append(ToolCall(id=block.id, function=func_call, type="function"))
+
+                    elif block.type == "tool_result":
+                        # Anthropic passes tool results inside a "user" message.
+                        # OpenAI requires these to be separate "tool" role messages.
+                        content_str = ""
+                        if isinstance(block.content, str):
+                            content_str = block.content
+                        elif isinstance(block.content, list):
+                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
+
+                        tool_results.append(BaseMessage(
+                            role="tool",
+                            tool_call_id=block.tool_use_id,
+                            content=content_str
+                        ))
+
+                # Handling the assembled blocks
+                if msg.role == "user" and tool_results:
+                    # If the user message had text along with the tool results, add it first
+                    if text_and_media_contents:
+                        chat_messages.append(BaseMessage(role="user", content=text_and_media_contents))
+                    # Then append all the separated tool result messages
+                    chat_messages.extend(tool_results)
+                else:
+                    # Standard message (User or Assistant)
+                    base_msg = BaseMessage(
+                        role=msg.role,
+                        content=text_and_media_contents if text_and_media_contents else "",
+                        tool_calls=tool_calls if tool_calls else None,
+                        reasoning=reasoning_text
+                    )
+                    chat_messages.append(base_msg)
+
+        # 3. Translate Tools Schema
+        chat_tools = None
+        if self.tools:
+            chat_tools = []
+            for t in self.tools:
+                param_spec = ParameterSpec(
+                    type=t.input_schema.type,
+                    properties=t.input_schema.properties,
+                    required=t.input_schema.required
+                )
+                func_spec = FunctionSpec(
+                    name=t.name,
+                    description=t.description,
+                    parameters=param_spec
+                )
+                chat_tools.append(ToolSpec(type="function", function=func_spec))
+
+        # 4. Translate Tool Choice Constraints
+        chat_tool_choice = None
+        if self.tool_choice:
+            if self.tool_choice.type == "auto":
+                chat_tool_choice = "auto"
+            elif self.tool_choice.type == "any":
+                chat_tool_choice = "required"
+            elif self.tool_choice.type == "none":
+                chat_tool_choice = "none"
+            elif self.tool_choice.type == "tool" and self.tool_choice.name:
+                chat_tool_choice = ToolForce(
+                    type="function",
+                    function=SingleFunctionDict(name=self.tool_choice.name)
+                )
+
+        # 4b. Translate output_config to response_format
+        chat_response_format = None
+        if self.output_config and self.output_config.format:
+            fmt = self.output_config.format
+            if fmt.type == "json_schema":
+                chat_response_format = ResponseFormatJSONSchema(
+                    type="json_schema",
+                    json_schema=JsonSchemaSpec(
+                        name="anthropic_structured_output",
+                        schema=fmt.schema_,
+                        strict=True
+                    )
+                )
+
+        # 5. Build and return the final ChatMLQuery object
+        query_kwargs = {
+            "model": self.model,
+            "messages": chat_messages,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "stream": self.stream,
+            "max_tokens": self.max_tokens,
+            "tools": chat_tools,
+            "tool_choice": chat_tool_choice,
+            "stop_words": self.stop_sequences,
+            "response_format": chat_response_format,
+        }
+
+        # Filter out None values so Pydantic applies its own defaults
+        filtered_kwargs = {k: v for k, v in query_kwargs.items() if v is not None}
+
+        logger.debug(f"converted to ChatMLQuery: {filtered_kwargs}")
+
+        return ChatMLQuery(**filtered_kwargs)

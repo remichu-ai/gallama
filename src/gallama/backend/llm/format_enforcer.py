@@ -10,11 +10,10 @@ from gallama.backend.llm.tools import Tools
 
 try:
     from formatron.formatter import FormatterBuilder
-    from formatron.integrations.exllamav2 import create_formatter_filter
 
 except ImportError:
     FormatterBuilder = None
-    create_formatter_filter = None
+
 
 try:
     from vllm.sampling_params import GuidedDecodingParams
@@ -62,6 +61,8 @@ class FormatEnforcer:
         # formatron does not support llama cpp at the moment
         if backend == "llama_cpp":
             return "lm_enforcer"
+        elif backend in ["exllamav3"]:
+            return "formatron"
         elif backend in ["exllama", "transformers", "exllamav3"]:
             # use formatron if it is available if it is exllama
             if preference == "auto":
@@ -82,7 +83,6 @@ class FormatEnforcer:
             return "auto"   # vllm require setting guided decoding upon server start
         else:
             raise "Invalid backend"
-
 
 
     def regex(
@@ -123,9 +123,6 @@ class FormatEnforcer:
             return GuidedDecodingParams(
                 regex=regex_pattern,
             )
-
-
-
 
 
     def json(

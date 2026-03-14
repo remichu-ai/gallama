@@ -5,25 +5,25 @@ import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
 
 # logger
-from gallama.logger import logger
+from ....logger import logger
 
 # format enforcement
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from formatron.formatter import FormatterBuilder
 from formatron.schemas.pydantic import ClassSchema
-from gallama.backend.llm.format_enforcer import FormatEnforcer
+from ....backend.llm.format_enforcer import FormatEnforcer
 
 # thinking
-from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
+from ....backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
 
 # function calling
-from gallama.backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
+from ....backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
 
-from gallama.utils.utils import get_token_length
-from gallama.api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
+from ....utils.utils import get_token_length
+from ....api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
 from ..format_enforcer import SGLangFormatter
 
-from gallama.data_classes import (
+from ....data_classes import (
     ModelSpec,
     ChatMLQuery,
     GenEnd,
@@ -35,7 +35,8 @@ from gallama.data_classes import (
     GenQueueDynamic,
     VideoFrame,
     MultiModalTextContent,
-    MultiModalImageContent
+    MultiModalImageContent,
+    ToolForce
 )
 from ....config.config_manager import ConfigManager
 # handle prompting
@@ -280,28 +281,123 @@ class ModelInterface(ABC):
 
         query = self.validate_video_support(query)
 
+        json_schema = None
+        prefix_strings = query.prefix_strings
+
         try:
             prompt, gen_start = prompt_eng.get_prompt(
                 query
             )
 
+            # check if json schema enforced
+            if query.response_format and query.response_format.type=="json_schema":
+                json_schema = query.response_format.json_schema.schema
+
+            else:
+                # currently these mode can not be used together:
+                # - tool enforcement
+                # - json_object
+                # - prefix_strings
+
+                # Handle Tool force
+                # check and log
+                _tool_force = (query.tools and query.tool_choice != "none" and query.tool_choice is not None) or False
+                _json_object = (query.response_format and query.response_format.type=="json_object") or False
+                _prefix_string = query.prefix_strings or False
+                if sum([_tool_force, _json_object, _prefix_string]) >= 2:
+                    logger.info("""
+    currently these mode can not be used together, the precedence will be:
+    - tool enforcement
+    - json_object
+    - prefix_strings """)
+
+
+                if _json_object:
+                    prefix_strings = ['{"']
+
+                if query.tools and query.tool_choice != "none" and query.tool_choice is not None:
+
+                    tool_tag = prompt_eng.tag_dict.get("tool") if prompt_eng.tag_dict else None
+
+                    # 1st scenario: tool is forced but no specific one
+                    if query.tool_choice == "required":
+                        prefix_strings = ['{\n "functions_calling": [{"name:"']
+
+                        # check for custom tool init prompt
+                        if tool_tag and tool_tag.prompt_init:
+                            prefix_strings = [tool_tag.prompt_init()]
+
+                    # 2nd scenario: specific tool is forced
+                    elif isinstance(query.tool_choice, ToolForce):
+                        prefix_strings = ['{\n "functions_calling": [{"name": "{' + query.tool_choice.function.name + '}"']
+
+                        # check for custom tool init prompt
+                        if tool_tag and tool_tag.prompt_init:
+                            prefix_strings = [tool_tag.prompt_init(query.tool_choice.function.name)]
+
+                if prefix_strings:
+                    logger.info(f"prefix string: {prefix_strings}")
+
+            if prompt_eng.is_thinking and (prefix_strings or json_schema):
+                # split the generation into 2 set, the first set is for thinking
+
+                # get the ending of thinking token:
+                thinking_tag = prompt_eng.tag_dict.get("thinking")
+
+                if thinking_tag:
+                    stop_words = query.stop_words if query.stop_words else []
+                    stop_words.append(thinking_tag.end_marker)
+
+                    generation_args = {
+                        'temperature': query.temperature,
+                        'top_p': query.top_p,
+                        'gen_type': GenStart(gen_type=gen_start),
+                        # 'formatter': self.formatter,
+                        # add endtag of thinking as stop token
+                        'stop_words': stop_words,
+                        'max_tokens': query.max_tokens,
+                        # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
+                        # 'banned_strings': banned_strings,
+                        'request': request,
+                        'stop_event': stop_event,
+                        'video': query.video,
+                        'vision_token': prompt_eng.vision_token,
+                        'send_eos': False,      # suppress eos
+                        'return_stop_word': True,
+                    }
+
+                    partial_response = await self.generate(
+                        prompt=prompt,
+                        messages=query.messages,
+                        gen_queue=gen_queue,
+                        **generation_args
+                    )
+
+                    # append this to the prompt
+                    prompt += partial_response
+
+            generation_args = {
+                'temperature': query.temperature,
+                'top_p': query.top_p,
+                'gen_type': GenStart(gen_type=gen_start),
+                # 'formatter': self.formatter,
+                'stop_words': query.stop_words,
+                'max_tokens': query.max_tokens,
+                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
+                # 'banned_strings': banned_strings,
+                'request': request,
+                'stop_event': stop_event,
+                'video': query.video,
+                'vision_token': prompt_eng.vision_token,
+                'json_schema': json_schema,
+                'return_stop_word': query.return_stop_word,
+            }
+
             await self.generate(
                 prompt=prompt,
                 messages=query.messages,
                 gen_queue=gen_queue,
-                **{
-                    'temperature': query.temperature,
-                    'top_p': query.top_p,
-                    'gen_type': GenStart(gen_type=gen_start),
-                    # 'formatter': formatter_regex,
-                    'stop_words': query.stop_words,
-                    'max_tokens': query.max_tokens,
-                    # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
-                    # 'banned_strings': banned_strings,
-                    'request': request,
-                    'stop_event': stop_event,
-                    'video': query.video,
-                }
+                **generation_args
             )
         except Exception as e:
             if stop_event.is_set():

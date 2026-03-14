@@ -7,7 +7,7 @@ from .....data_classes.data_class import (
     TagDefinition
 )
 from .....utils.utils import get_response_tool_uid
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 def glm4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
@@ -92,14 +92,21 @@ def glm4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
     return results
 
+def tool_prompt(tool_name: Optional[str] = None):
+    if tool_name is None:
+        return "<tool_call>\n"
+    else:
+        return f"<tool_call>\n{tool_name}\n"
+
 glm4 = {
     "tool": TagDefinition(
         start_marker="<tool_call>",
         end_marker="</tool_call>",
         tag_type="tool_calls",
         api_tag="tool_calls",
-        role="tool",
+        role="assistant",
         post_processor=glm4_tool_parser,
+        prompt_init=tool_prompt,
         wait_till_complete=True
     ),
     "thinking": TagDefinition(

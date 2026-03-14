@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
 from typing import Optional, Literal, List, Dict, Union, Any, Type, TypeVar
-from .data_class import TagDefinition
+from .data_class import TagDefinition, AnthropicStopReason, OpenAIStopReason
 from dataclasses import dataclass
 import asyncio
 import weakref
@@ -13,6 +13,9 @@ class GenerationStats(BaseModel):
     time_generate: float = Field(description='time to generate tokens', default=0)
     cached_pages: int = Field(description='number of cached pages', default=0)
     cached_tokens: int = Field(description='number of cached tokens', default=0)
+
+    # use Anthropic stop reason here as it cover more scenario than OpenAI
+    stop_reason: Optional[AnthropicStopReason] = Field(default="end_turn", description="Anthropic stop reason")
 
     @property
     def total_tokens_count(self) -> int:
@@ -35,6 +38,24 @@ class GenerationStats(BaseModel):
             return round(self.input_tokens_count / self.time_to_first_token, ndigits=1)
         else:
             return 0
+
+    def get_openai_stop_reason(self) -> OpenAIStopReason:
+        """
+        Maps the Anthropic stop reason to the closest OpenAI equivalent.
+        Defaults to 'stop' if no specific match is found.
+        """
+        mapping: Dict[AnthropicStopReason, OpenAIStopReason] = {
+            "end_turn": "stop",
+            "stop_sequence": "stop",
+            "pause_turn": "stop",
+            "max_tokens": "length",
+            "model_context_window_exceeded": "length",
+            "tool_use": "tool_calls",
+            "refusal": "content_filter",
+        }
+
+        # Safely get the mapped value, defaulting to "stop"
+        return mapping.get(self.stop_reason, "stop")
 
 class GenStart(BaseModel):
     """ this item signal start of generation"""

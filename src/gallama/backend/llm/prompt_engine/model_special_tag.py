@@ -8,6 +8,7 @@ from .by_model import (
 # the key here should match the model_type field from transformers.AutoConfig
 MODEL_SPECIAL_TAG = {
     "qwen3_moe":  qwen3_moe,
+    "qwen3_5_moe": qwen3_moe,
     "minimax": minimax,
     "minimax_m2": minimax,
     "glm4v_moe": glm4,
@@ -21,4 +22,9 @@ MODEL_EOS_TOKEN = {
     "glm4v_moe":  ["<|user|>", "<|observation|>"],
     "glm4_moe":  ["<|user|>", "<|observation|>"],
     "mistral3": ["</s>"]
+}
+
+MODEL_VISION_TOKEN = {
+    "qwen3_5_moe":  "<|vision_start|><|image_pad|><|vision_end|>",
+    "glm4v_moe": "<|begin_of_image|><|image|><|end_of_image|>"
 }

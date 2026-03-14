@@ -28,6 +28,12 @@ from .data_class import (
     TagDefinition
 )
 
+# anthropic
+from .data_class import (
+    AnthropicMessagesRequest,
+    AnthropicStopReason
+)
+
 from .audio_data_class import (
     TranscriptionResponse,
     TimeStampedWord,

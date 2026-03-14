@@ -22,7 +22,7 @@ from textwrap import dedent
 from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 from transformers import AutoTokenizer, AutoConfig
-from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN
+from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, MODEL_VISION_TOKEN
 from ....api_response.stream_parser_v2 import StreamParserByTag
 
 
@@ -43,6 +43,7 @@ class PromptEngineTransformers:
         self.model_prompt = None
         self.model_type = self._transformer_config.model_type
         logger.info(f"transformer model_type: {self.model_type}")
+
         self.special_tag = MODEL_SPECIAL_TAG.get(self.model_type, None)
         self._tag_definitions = list(self.special_tag.values()) if self.special_tag else None
         self.thinking_tag = self.special_tag.get("thinking") if self.special_tag else None
@@ -64,6 +65,8 @@ class PromptEngineTransformers:
         if MODEL_EOS_TOKEN.get(self.model_type, None) is not None:
             self.eos_token_list.extend(MODEL_EOS_TOKEN[self.model_type])
 
+        self._vision_token = MODEL_VISION_TOKEN.get(self.model_type, None)
+
         # make unique, transformers might return None hence need to exclude
         self.eos_token_list = list(set([_s for _s in self.eos_token_list if _s is not None]))
 
@@ -71,9 +74,23 @@ class PromptEngineTransformers:
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
         self.support_developer_role = self._template_supports_developer_role(self._transformer_tokenizer)
 
+
+
     @property
     def tag_definitions(self):
         return self._tag_definitions
+
+    @property
+    def tag_dict(self):
+        return self.special_tag
+
+    @property
+    def is_thinking(self):
+        return self.is_thinking_model
+
+    @property
+    def vision_token(self):
+        return self._vision_token
 
     def check_thinking_model(self):
         """
@@ -93,6 +110,7 @@ class PromptEngineTransformers:
         instead of 'message.reasoning_content'.
         """
         if not self._transformer_tokenizer.chat_template:
+
             return
 
         # Check if the standard HF field is present
@@ -102,9 +120,9 @@ class PromptEngineTransformers:
                 "message.reasoning_content",
                 "message.reasoning"
             )
-            print(f"Patched chat template: reasoning_content -> reasoning")
+            logger.info(f"Patched chat template: reasoning_content -> reasoning")
         else:
-            print("No patching needed or target variable not found.")
+            logger.info("No patching needed or target variable not found.")
 
     @lru_cache(maxsize=1)
     def _template_supports_list_content(self, tokenizer) -> bool:
@@ -128,14 +146,17 @@ class PromptEngineTransformers:
             # 3. Check the output
             # If the raw list structure appears in the output, the template failed to parse it.
             if "[{'type': 'text'" in result or '[{"type": "text"' in result:
+                logger.info("Chat template does not support list content")
                 return False
 
             # If our probe token exists but the list syntax doesn't, it worked.
             if "PROBE_TEST_TOKEN" in result:
+                logger.info("Chat template supports list content")
                 return True
 
-        except Exception:
+        except Exception as e:
             # If the template crashes on a list input, it definitely doesn't support it.
+            logger.debug("Failed to probe whether list content is supported -> set to not supported")
             return False
 
         return False

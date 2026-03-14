@@ -71,3 +71,15 @@ class PromptEngine:
     @property
     def tag_definitions(self):
         return self._impl.tag_definitions
+
+    @property
+    def tag_dict(self):
+        return self._impl.special_tag
+
+    @property
+    def is_thinking(self):
+        return self._impl.is_thinking
+
+    @property
+    def vision_token(self) -> str | None:
+        return self._impl.vision_token
