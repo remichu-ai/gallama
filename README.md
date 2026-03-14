@@ -531,6 +531,12 @@ Example:
 gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3"
 ```
 
+To also write the same CLI logs to a file:
+
+```shell
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" `--log-file ./log/gallama.log`
+```
+
 Useful optional arguments:
 
 - `max_seq_len=32768`
@@ -540,6 +546,7 @@ Useful optional arguments:
 - `prompt_template=<template-name>`
 - `strict=True`
 - `max_concurrent_requests=<n>`
+- `--log-file ./log/gallama.log` to mirror CLI logs into a file
 
 Notes:
 

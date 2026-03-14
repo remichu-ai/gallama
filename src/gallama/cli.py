@@ -2,7 +2,7 @@ import argparse
 import shutil
 from pathlib import Path
 from gallama.config import ConfigManager
-from gallama.logger.logger import logger
+from gallama.logger.logger import logger, get_logger
 from gallama.server import run_from_script
 from gallama.server_routes import download_model
 from gallama.data_classes.data_class import ModelDownloadSpec, SUPPORTED_BACKENDS
@@ -112,6 +112,7 @@ def main_cli():
                                    "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
+    serve_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
     serve_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
 
 
@@ -127,6 +128,14 @@ def main_cli():
                              help="List downloaded model (default) or list available to show the list of model that can be downloaded")
 
     args = arg_parser.parse_args()
+
+    global logger
+    logger = get_logger(
+        log_file=getattr(args, "log_file", None) or "./log/llm_response.log",
+        to_console=True,
+        to_file=bool(getattr(args, "log_file", None)),
+        to_zmq=False
+    )
 
     # ensure config file is there
     ensure_config_file()

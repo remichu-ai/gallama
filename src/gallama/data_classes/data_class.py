@@ -1007,7 +1007,8 @@ class AnthropicOutputFormat(BaseModel):
 
 
 class AnthropicOutputConfig(BaseModel):
-    format: AnthropicOutputFormat
+    format: Optional[AnthropicOutputFormat] = None
+    effort: Optional[Literal["low", "medium", "high", "max"]] = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -1161,6 +1162,7 @@ class AnthropicMessagesRequest(BaseModel):
 
         # 4b. Translate output_config to response_format
         chat_response_format = None
+        chat_reasoning_effort = None
         if self.output_config and self.output_config.format:
             fmt = self.output_config.format
             if fmt.type == "json_schema":
@@ -1172,6 +1174,16 @@ class AnthropicMessagesRequest(BaseModel):
                         strict=True
                     )
                 )
+        if self.output_config and self.output_config.effort:
+            # Gallama's internal schema does not distinguish Anthropic "max"
+            # from "high", so map it to the closest supported value.
+            effort_map = {
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "max": "high",
+            }
+            chat_reasoning_effort = effort_map[self.output_config.effort]
 
         # 5. Build and return the final ChatMLQuery object
         query_kwargs = {
@@ -1185,6 +1197,7 @@ class AnthropicMessagesRequest(BaseModel):
             "tool_choice": chat_tool_choice,
             "stop_words": self.stop_sequences,
             "response_format": chat_response_format,
+            "reasoning_effort": chat_reasoning_effort,
         }
 
         # Filter out None values so Pydantic applies its own defaults
