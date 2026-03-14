@@ -9,8 +9,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from collections import defaultdict
 from typing import Union
 from gallama.data_classes.data_class import ModelSpec
-from gallama.data_classes import  ModelInstanceInfo,  ModelInfo, AgentWithThinking
-from gallama.server_engine import handle_mixture_of_agent_request, create_options_response
+from gallama.data_classes import  ModelInstanceInfo,  ModelInfo
+from gallama.server_engine import create_options_response
 from gallama.utils import parse_request_body
 from typing import List, Dict
 from gallama.config import ConfigManager
@@ -458,27 +458,6 @@ async def get_instance_for_model(model: str):
     return min(running_instances, key=lambda inst: active_requests[inst.port])
 
 
-async def forward_to_multiple_agents(request: Request, agent_list: List[Union[str, AgentWithThinking]], modified_body: str, modified_headers: str):
-    tasks = []
-    for agent in agent_list:
-        if isinstance(agent, str):
-            instance = await get_instance_for_model(agent)
-            tasks.append(forward_request(request, instance, modified_body, modified_headers))
-        elif isinstance(agent, AgentWithThinking):
-            instance = await get_instance_for_model(agent.model)
-            if agent.thinking_template:
-                # Modify the request to include the thinking in the thinking_template field
-                agent_body = json.loads(modified_body)
-                agent_body["thinking_template"] = agent.thinking_template
-                agent_modified_body = json.dumps(agent_body).encode()
-                agent_modified_headers = dict(modified_headers)
-                agent_modified_headers["content-length"] = str(len(agent_modified_body))
-                tasks.append(forward_request(request, instance, agent_modified_body, agent_modified_headers))
-            else:
-                tasks.append(forward_request(request, instance, modified_body, modified_headers))
-    return await asyncio.gather(*tasks)
-
-
 
 async def load_balanced_router(request: Request, path: str):
     server_manager = get_server_manager()
@@ -491,9 +470,6 @@ async def load_balanced_router(request: Request, path: str):
 
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
-
-    if isinstance(body_json, dict) and body_json.get("mixture_of_agents", False):
-        return await handle_mixture_of_agent_request(request, body_json, server_manager.models, active_requests)
 
     model = await get_model_from_body(request)
 
@@ -708,4 +684,3 @@ if __name__ == "__main__":
     args = arg_parser.parse_args()
 
     run_from_script(args)
-

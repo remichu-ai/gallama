@@ -1,6 +1,7 @@
 # gallama - Guided Agentic Llama
 
 __gallama__ is an opinionated Python library that provides a LLM inference API service backend optimized for local agentic tasks.
+It focuses on model serving, realtime, multimodal, and local inference integrations rather than multi-agent orchestration.
 
 Currently, the backend is mainly using ExllamaV2. Llama.cpp support is under experiment. 
 

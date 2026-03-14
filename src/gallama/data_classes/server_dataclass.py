@@ -26,14 +26,5 @@ class ModelInstanceInfo(BaseModel):
 class ModelInfo(BaseModel):
     instances: List[ModelInstanceInfo]
 
-
-class AgentWithThinking(BaseModel):
-    model: str = Field(description="The name of the model")
-    thinking_template: Optional[str] = Field(default=None, description="The XML thinking for the agent")
-
-
-class MixtureOfAgents(BaseModel):
-    agent_list: List[Union[str, AgentWithThinking]]
-
 class StopModelByPort(BaseModel):
     port: int
