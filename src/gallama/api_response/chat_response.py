@@ -42,6 +42,27 @@ import asyncio
 import uuid
 
 
+def format_generation_stats_log(model_name: str, gen_stats: GenerationStats) -> str:
+    parts = [
+        f"{model_name} | generation {gen_stats.generation_speed:.1f} tok/s",
+        f"prefill {gen_stats.prefill_speed:.1f} tok/s",
+        f"input {gen_stats.input_tokens_count}",
+        f"output {gen_stats.output_tokens_count}",
+        f"total {gen_stats.total_tokens_count}",
+        f"ttft {gen_stats.time_to_first_token:.2f}s",
+        f"gen {gen_stats.time_generate:.2f}s",
+        f"total_time {gen_stats.total_time:.2f}s",
+        f"stop {gen_stats.stop_reason}",
+    ]
+
+    if gen_stats.cached_tokens:
+        parts.append(f"cached_tokens {gen_stats.cached_tokens}")
+    if gen_stats.cached_pages:
+        parts.append(f"cached_pages {gen_stats.cached_pages}")
+
+    return " | ".join(parts)
+
+
 async def get_response_from_queue(
     gen_queue: GenQueue | GenQueueDynamic | List[GenQueue|GenQueueDynamic],
     request: Request = None,
@@ -223,7 +244,7 @@ async def chat_completion_response_stream(
                 yield event
 
             if gen_stats:
-                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+                logger.info(format_generation_stats_log(model_name, gen_stats))
 
 
 async def chat_completion_response(
@@ -315,7 +336,8 @@ async def chat_completion_response(
 
     assert response_obj is not None
     # logger.info(f"full_response: {response}")
-    logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+    if gen_stats:
+        logger.info(format_generation_stats_log(model_name, gen_stats))
 
     return response_obj
 
@@ -401,7 +423,7 @@ async def completion_response_stream(
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
             if gen_stats is not None:
-                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
+                logger.info(format_generation_stats_log(model_name, gen_stats))
             yield "[DONE]"
             break
         else:

@@ -131,6 +131,13 @@ def make_server(args):
     global logger
     global draft_spec_dict
 
+    logger = get_logger(
+        log_file=args.log_file or "./log/llm_response.log",
+        to_console=True,
+        to_file=bool(args.log_file),
+        to_zmq=False
+    )
+
     # Add signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         logger.info("Received shutdown signal, cleaning up...")
@@ -257,6 +264,7 @@ if __name__ == "__main__":
     arg_parser.add_argument('-d', "--detached", action='store_true', help="Log to ZeroMQ")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
+    arg_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
     arg_parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
 
     args = arg_parser.parse_args()

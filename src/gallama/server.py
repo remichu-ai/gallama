@@ -31,7 +31,13 @@ from gallama.server_routes import (
     stop_model_instance
 )
 from gallama.server_engine import log_model_status
-from gallama.dependencies_server import get_server_manager, get_server_logger, start_log_receiver, DEFAULT_ZMQ_URL
+from gallama.dependencies_server import (
+    get_server_manager,
+    get_server_logger,
+    start_log_receiver,
+    DEFAULT_ZMQ_URL,
+    configure_server_logging,
+)
 
 
 server_logger = get_server_logger()
@@ -364,12 +370,14 @@ async def run_model(model_spec: ModelSpec):
 
             # Determine the correct Python executable
             python_exec = shutil.which("python3") or shutil.which("python")
+            child_log_file_args = ["--log-file", server_manager.log_file] if server_manager.log_file else []
 
             if backend in ["exllama", "exllamav3"]:
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
+                    *child_log_file_args,
                     stdout=asyncio.subprocess.DEVNULL,
                     env=env,
                     # stderr=asyncio.subprocess.DEVNULL,
@@ -382,6 +390,7 @@ async def run_model(model_spec: ModelSpec):
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
+                    *child_log_file_args,
                     # stdout=asyncio.subprocess.DEVNULL,
                     # stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
@@ -558,10 +567,11 @@ async def start_server(port=8000):
     await server.serve()
 
 
-async def main(model_list=None, port=8000, strict_mode=False):
+async def main(model_list=None, port=8000, strict_mode=False, log_file: str | None = None):
     server_manager = get_server_manager()
+    server_manager.log_file = log_file
 
-    receiver_thread = start_log_receiver(DEFAULT_ZMQ_URL)
+    receiver_thread = start_log_receiver(DEFAULT_ZMQ_URL, log_file=log_file)
     server_logger.info("Starting main function")
     server_logger.info(f"Strict mode: {'enabled' if strict_mode else 'disabled'}")
 
@@ -618,6 +628,10 @@ def llama_picture():
 
 
 def run_from_script(args):
+    global server_logger
+    configure_server_logging(getattr(args, "log_file", None))
+    server_logger = get_server_logger()
+
     # opening llama picture cause why not
     llama_picture()
 
@@ -655,7 +669,8 @@ def run_from_script(args):
         main(
             model_list=model_list,
             port=args.port,
-            strict_mode=args.strict_mode
+            strict_mode=args.strict_mode,
+            log_file=getattr(args, "log_file", None)
         )
     )
 
@@ -682,6 +697,7 @@ if __name__ == "__main__":
     arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
+    arg_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
 
     # arg_parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
 

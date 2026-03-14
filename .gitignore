@@ -13,3 +13,4 @@
 sonar-project.properties
 /src/tests/*
 
+/dist/

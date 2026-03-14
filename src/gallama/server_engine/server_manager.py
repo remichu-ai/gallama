@@ -10,6 +10,7 @@ class ServerManager:
         self.loading_lock = asyncio.Lock()
         self.active_requests_lock = asyncio.Lock()
         self.task_status = {}
+        self.log_file: str | None = None
 
     def get_instance(
         self,

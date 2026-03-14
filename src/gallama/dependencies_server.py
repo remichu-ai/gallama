@@ -9,6 +9,7 @@ import traceback
 
 
 server_manager = ServerManager()
+receiver_log_file = None
 
 def get_server_manager():
     if server_manager is None:
@@ -18,13 +19,19 @@ def get_server_manager():
 
 
 # set up logging
-def start_log_receiver(zmq_url):
+def start_log_receiver(zmq_url, log_file: str | None = None):
     context = zmq.Context()
     socket = context.socket(zmq.PULL)
     socket.bind("tcp://*:5555")
 
     # Initialize the logger for the receiver
-    receiver_logger = get_logger(name="log_receiver", to_console=True, to_file=False, to_zmq=False)
+    receiver_logger = get_logger(
+        name="log_receiver",
+        log_file=log_file or "./log/llm_response.log",
+        to_console=True,
+        to_file=bool(log_file),
+        to_zmq=False
+    )
 
     receiver_logger.info(f"Log receiver started on {zmq_url}")
 
@@ -63,6 +70,21 @@ DEFAULT_ZMQ_URL = "tcp://127.0.0.1:5555"  # Using 5559 as a standard port for lo
 # Initialize the logger for the manager
 # Set to_console=True and to_zmq=False to avoid duplication
 server_logger = get_logger(name="manager", to_console=True, to_zmq=False)
+
+
+def configure_server_logging(log_file: str | None = None):
+    global server_logger
+    global receiver_log_file
+
+    receiver_log_file = log_file
+    server_logger = get_logger(
+        name="manager",
+        log_file=log_file or "./log/llm_response.log",
+        to_console=True,
+        to_file=bool(log_file),
+        to_zmq=False
+    )
+    return server_logger
 
 def get_server_logger():
     if server_logger is None:

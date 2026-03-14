@@ -1007,7 +1007,8 @@ class AnthropicOutputFormat(BaseModel):
 
 
 class AnthropicOutputConfig(BaseModel):
-    format: AnthropicOutputFormat
+    format: Optional[AnthropicOutputFormat] = None
+    effort: Optional[Literal["low", "medium", "high", "max"]] = None
 
 
 class AnthropicMessagesResponse(BaseModel):
@@ -1025,6 +1026,7 @@ class AnthropicMessagesRequest(BaseModel):
     messages: List[AnthropicMessage]
     max_tokens: int  # required in Claude API
     system: Optional[Union[str, List[AnthropicTextContent]]] = None
+    strip_claude_code_billing_header: bool = True
     tools: Optional[List[AnthropicTool]] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     temperature: Optional[float] = None
@@ -1034,6 +1036,47 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
+
+    @staticmethod
+    def _is_claude_code_billing_header_text(text: str) -> bool:
+        if not text:
+            return False
+
+        text_normalized = text.strip()
+        return (
+            text_normalized.startswith("x-anthropic-billing-header:")
+            and "cc_version=" in text_normalized
+            and "cch=" in text_normalized
+        )
+
+    def remove_claude_code_billing_header_system_message(self) -> bool:
+        """
+        Remove Claude Code's volatile billing header from the top-level system
+        prompt so it does not spoil prompt caching across turns.
+        """
+        if not self.system:
+            return False
+
+        if isinstance(self.system, str):
+            kept_lines = [
+                line for line in self.system.splitlines()
+                if not self._is_claude_code_billing_header_text(line)
+            ]
+            cleaned_system = "\n".join(kept_lines).strip()
+            changed = cleaned_system != self.system.strip()
+            self.system = cleaned_system or None
+            return changed
+
+        cleaned_blocks = [
+            block for block in self.system
+            if not (
+                getattr(block, "type", "") == "text"
+                and self._is_claude_code_billing_header_text(block.text)
+            )
+        ]
+        changed = len(cleaned_blocks) != len(self.system)
+        self.system = cleaned_blocks or None
+        return changed
 
     def get_ChatMLQuery(self) -> ChatMLQuery:
         import json
@@ -1161,6 +1204,7 @@ class AnthropicMessagesRequest(BaseModel):
 
         # 4b. Translate output_config to response_format
         chat_response_format = None
+        chat_reasoning_effort = None
         if self.output_config and self.output_config.format:
             fmt = self.output_config.format
             if fmt.type == "json_schema":
@@ -1172,6 +1216,16 @@ class AnthropicMessagesRequest(BaseModel):
                         strict=True
                     )
                 )
+        if self.output_config and self.output_config.effort:
+            # Gallama's internal schema does not distinguish Anthropic "max"
+            # from "high", so map it to the closest supported value.
+            effort_map = {
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "max": "high",
+            }
+            chat_reasoning_effort = effort_map[self.output_config.effort]
 
         # 5. Build and return the final ChatMLQuery object
         query_kwargs = {
@@ -1185,6 +1239,7 @@ class AnthropicMessagesRequest(BaseModel):
             "tool_choice": chat_tool_choice,
             "stop_words": self.stop_sequences,
             "response_format": chat_response_format,
+            "reasoning_effort": chat_reasoning_effort,
         }
 
         # Filter out None values so Pydantic applies its own defaults
