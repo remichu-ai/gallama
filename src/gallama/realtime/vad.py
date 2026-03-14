@@ -1,15 +1,12 @@
-from silero_vad import load_silero_vad, VADIterator
 from ..data_classes.realtime_client_proto import TurnDetectionConfig
 from ..data_classes.internal_ws import SpeechState
 import numpy as np
 from typing import Tuple, Optional, Dict, Literal
 import torch
 from dataclasses import dataclass
-import librosa
 from collections import deque
 from .audio_preprocessor import AudioPreprocessor
 import os
-import soundfile as sf
 from datetime import datetime
 
 from ..dependencies_server import get_server_logger
@@ -48,6 +45,8 @@ class VADProcessor:
                  input_sample_rate: int = 24000, debug: bool = False,
                  # debug_folder_path: str = "/home/remichu/work/ML/gallama/experiment/log"):
                  debug_folder_path: str = ""):
+        from silero_vad import load_silero_vad, VADIterator
+
         self.model = load_silero_vad()
         self.model.eval()
 
@@ -94,6 +93,8 @@ class VADProcessor:
         """Resample audio from input sample rate to VAD sample rate"""
         if audio.size == 0:
             return np.array([], dtype=np.float32)
+        import librosa
+
         return librosa.resample(
                 audio,
                 orig_sr=self.input_sample_rate,
@@ -104,6 +105,7 @@ class VADProcessor:
         """Save debug audio to file"""
         if not self.debug or not self.debug_folder_path:
             return
+        import soundfile as sf
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = os.path.join(self.debug_folder_path, f"speech_segment_{timestamp}.wav")
@@ -222,4 +224,3 @@ class VADProcessor:
         self.current_chunk = np.array([], dtype=np.float32)
         self.state = VADState()
         self.total_audio_processed = 0.0
-

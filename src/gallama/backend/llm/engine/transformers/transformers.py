@@ -7,15 +7,21 @@ from fastapi import Request                 # for type hint
 from threading import Thread
 from importlib import import_module
 import os
-from huggingface_hub.utils.tqdm import enable_progress_bars
-import huggingface_hub.constants
+try:
+    from huggingface_hub.utils.tqdm import enable_progress_bars
+    import huggingface_hub
+    import huggingface_hub.constants
+except ImportError:
+    enable_progress_bars = None
+    huggingface_hub = None
 
 
 def overwrite_are_progress_bars_disabled():
     return False
 
 
-huggingface_hub.utils.tqdm.are_progress_bars_disabled = overwrite_are_progress_bars_disabled
+if huggingface_hub is not None:
+    huggingface_hub.utils.tqdm.are_progress_bars_disabled = overwrite_are_progress_bars_disabled
 
 
 # format enforcement with formatron
@@ -100,9 +106,10 @@ class ModelTransformers(ModelInterface):
 
         # infinity emb set this to 1 and cause some bug with current version of Huggingface
         # to remove this env for tqdm to work
-        huggingface_hub.constants.HF_HUB_DISABLE_PROGRESS_BARS = False
-        os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
-        enable_progress_bars()
+        if huggingface_hub is not None and enable_progress_bars is not None:
+            huggingface_hub.constants.HF_HUB_DISABLE_PROGRESS_BARS = False
+            os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)
+            enable_progress_bars()
 
 
         cache = None  # in case not a backend with separate cache like llama cpp

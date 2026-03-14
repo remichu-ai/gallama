@@ -1,8 +1,45 @@
-from . import cli
-from gallama.logger.logger import logger
-from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
-from . import app
-from .app import make_server
-from .config import ConfigManager
-from .dependencies import model_manager
-from .dependencies_server import get_server_manager, get_server_logger, DEFAULT_ZMQ_URL
+__all__ = [
+    "THINKING_TEMPLATE",
+    "Thinking",
+    "make_server",
+    "ConfigManager",
+    "model_manager",
+    "get_server_manager",
+    "get_server_logger",
+    "DEFAULT_ZMQ_URL",
+]
+
+
+def __getattr__(name):
+    if name in {"THINKING_TEMPLATE", "Thinking"}:
+        from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
+
+        return {
+            "THINKING_TEMPLATE": THINKING_TEMPLATE,
+            "Thinking": Thinking,
+        }[name]
+    if name == "make_server":
+        from .app import make_server
+
+        return make_server
+    if name == "ConfigManager":
+        from .config import ConfigManager
+
+        return ConfigManager
+    if name == "model_manager":
+        from .dependencies import model_manager
+
+        return model_manager
+    if name in {"get_server_manager", "get_server_logger", "DEFAULT_ZMQ_URL"}:
+        from .dependencies_server import (
+            get_server_manager,
+            get_server_logger,
+            DEFAULT_ZMQ_URL,
+        )
+
+        return {
+            "get_server_manager": get_server_manager,
+            "get_server_logger": get_server_logger,
+            "DEFAULT_ZMQ_URL": DEFAULT_ZMQ_URL,
+        }[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -5,7 +5,6 @@ import struct
 from lxml import etree
 from pathlib import Path
 from PIL import Image
-import requests
 import os
 from io import BytesIO
 from fastapi import Request
@@ -155,6 +154,8 @@ def get_image(
         else:
             # Assume url is a regular URL and fetch it
             # Added User-Agent to bypass bot protections (fixes the Wikimedia issue)
+            import requests
+
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }

@@ -1,4 +1,3 @@
-import exllamav3
 import re
 from gallama.backend.llm.engine.base import ModelInterface
 from typing import Optional, Dict, List, Union, get_args

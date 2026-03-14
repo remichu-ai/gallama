@@ -4,8 +4,6 @@ from typing import TypeVar, Optional, Union, Tuple, List
 import numpy as np
 from starlette.websockets import WebSocket
 import base64
-import soundfile as sf
-import aiohttp
 import io
 from gallama.data_classes.realtime_client_proto import (
     ConversationItem,
@@ -22,7 +20,6 @@ from gallama.realtime.websocket_client import WebSocketClient
 from difflib import SequenceMatcher
 import uuid
 from ..dependencies_server import get_server_logger
-import librosa
 
 logger = get_server_logger()
 
@@ -510,6 +507,9 @@ class MessageQueues:
     async def _save_debug_audio_files(self, truncated_audio: np.ndarray):
         """Save audio files for debugging when verbose is True."""
         try:
+            import librosa
+            import soundfile as sf
+
             # Save as 16-bit PCM WAV at 16kHz
             debug_path = "/home/remichu/work/ML/gallama/experiment/debug_audio.wav"
             sf.write(debug_path, truncated_audio, self.sample_rate, subtype='PCM_16')
@@ -532,6 +532,8 @@ class MessageQueues:
 
     async def _prepare_truncated_audio_buffer(self, audio_data: np.ndarray, audio_end_ms: int) -> tuple[np.ndarray, io.BytesIO]:
         """Prepare truncated audio data and buffer for transcription."""
+        import soundfile as sf
+
         # Convert milliseconds to samples
         end_sample = int((audio_end_ms / 1000) * self.sample_rate)
 
@@ -560,6 +562,8 @@ class MessageQueues:
 
     async def _get_transcription(self, audio_buffer: io.BytesIO) -> str:
         """Get transcription for the truncated audio."""
+        import aiohttp
+
         form_data = aiohttp.FormData()
         form_data.add_field('file', audio_buffer, filename='audio.wav', content_type='audio/wav')
         form_data.add_field('model', 'whisper-1')

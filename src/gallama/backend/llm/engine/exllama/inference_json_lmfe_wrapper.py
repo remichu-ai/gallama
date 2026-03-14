@@ -1,5 +1,10 @@
-from exllamav2 import ExLlamaV2, ExLlamaV2Tokenizer
-from exllamav2.generator.filters import ExLlamaV2Filter
+try:
+    from exllamav2 import ExLlamaV2, ExLlamaV2Tokenizer
+    from exllamav2.generator.filters import ExLlamaV2Filter
+except ImportError:
+    ExLlamaV2 = None
+    ExLlamaV2Tokenizer = None
+    ExLlamaV2Filter = object
 from functools import lru_cache
 from lmformatenforcer.integrations.exllamav2 import build_token_enforcer_tokenizer_data
 from lmformatenforcer import TokenEnforcer, CharacterLevelParser

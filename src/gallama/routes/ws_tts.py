@@ -1,11 +1,9 @@
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 import asyncio
-import soundfile as sf
 import time
 import io
 from typing import AsyncIterator, Optional, Literal
 from ..data_classes import TTSEvent, WSInterTTS, WSInterConfigUpdate, WSInterCancel, WSInterCleanup
-import librosa
 import numpy as np
 import json
 from pathlib import Path
@@ -128,6 +126,8 @@ class TTSConnection:
     async def process_audio_queue(self):
         """Process and send audio chunks to the client"""
         try:
+            import librosa
+
             buffer_threshold = 2048  # Buffer size for processing
             accumulated_chunk = np.array([], dtype=np.float32)
             prev_chunk_end = np.zeros(256, dtype=np.float32)  # Store end of previous chunk for crossfade

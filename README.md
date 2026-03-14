@@ -462,6 +462,33 @@ Now to install gallama from pip
 pip install gallama
 ```
 
+Optional extras are available if you only want specific components:
+```shell
+pip install "gallama[all]"
+pip install "gallama[exl2]"
+pip install "gallama[exl3]"
+pip install "gallama[llama-cpp]"
+pip install "gallama[transformers-backend]"
+pip install "gallama[utils]"
+pip install "gallama[embedding]"
+pip install "gallama[stt]"
+pip install "gallama[tts]"
+pip install "gallama[video]"
+pip install "gallama[vllm]"
+pip install "gallama[sglang]"
+```
+
+Extras can be combined as needed:
+```shell
+pip install "gallama[exl3,tts]"
+pip install "gallama[llama-cpp,stt]"
+```
+
+For newer model support, the latest `transformers` release is often needed. If a model is not loading correctly, update it with:
+```shell
+pip install -U transformers
+```
+
 Or, install from source:
 
 ```shell
@@ -498,11 +525,17 @@ If you're starting from scratch and don't have these dependencies yet, follow th
    ```shell
    pip install gallama
    ```
+   Or install with only the components you need:
+   ```shell
+   pip install "gallama[all]"
+   pip install "gallama[exl3]"
+   pip install "gallama[exl2,stt]"
+   ```
    Or, install from source:
    ```shell
    git clone https://github.com/remichu-ai/gallama.git
    cd gallama
-   pip install .
+   pip install ".[all]"
    ```
 
 ## Usage
@@ -610,4 +643,3 @@ Customize the model launch using various parameters. Available parameters for th
    ```
 8. Others
    If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
-

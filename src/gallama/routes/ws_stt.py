@@ -1,6 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import numpy as np
-import soundfile
 import io
 from typing import Dict, Optional
 from ..dependencies import get_model_manager
@@ -9,7 +8,6 @@ from ..data_classes.internal_ws import WSInterSTT, WSInterSTTResponse, WSInterCo
 from gallama.logger.logger import logger
 import base64
 import asyncio
-import librosa
 
 router = APIRouter(prefix="", tags=["audio"])
 
@@ -184,6 +182,9 @@ class TranscriptionConnectionManager:
 
     def process_raw_buffer(self, raw_buffer: bytearray, asr_processor, sample_rate: int) -> Optional[np.ndarray]:
         try:
+            import librosa
+            import soundfile
+
             # Read the raw audio buffer using soundfile
             with soundfile.SoundFile(
                 io.BytesIO(raw_buffer),
@@ -470,4 +471,3 @@ async def websocket_endpoint(
 
 
 manager = TranscriptionConnectionManager()
-

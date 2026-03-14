@@ -1,5 +1,11 @@
-# LLM
-from .llm import ModelExllama, ModelLlamaCpp, ModelTransformers
+try:
+    from .llm import ModelExllama, ModelLlamaCpp, ModelTransformers
+except ImportError:
+    ModelExllama = None
+    ModelLlamaCpp = None
+    ModelTransformers = None
 
-# Embedding
-from .embedding.embedding import EmbeddingModel
+try:
+    from .embedding.embedding import EmbeddingModel
+except ImportError:
+    EmbeddingModel = None

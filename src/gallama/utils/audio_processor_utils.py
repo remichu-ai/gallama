@@ -1,7 +1,5 @@
-import librosa
 import numpy as np
 import io
-import soundfile as sf
 from gallama.logger.logger import logger
 import time
 import asyncio
@@ -105,6 +103,9 @@ class AudioProcessor:
         process_start = time.time()
 
         try:
+            import librosa
+            import soundfile as sf
+
             # Convert bytes to numpy array
             audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
 

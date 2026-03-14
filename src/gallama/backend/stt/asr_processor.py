@@ -6,7 +6,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import os
 from datetime import datetime
-import soundfile as sf
 from ...data_classes import TranscriptionResponse, LanguageType
 from ...data_classes.realtime_client_proto import TurnDetectionConfig
 from .audio_buffer import AudioBufferWithTiming
@@ -269,6 +268,8 @@ class ASRProcessor:
             filepath = os.path.join(self.debug_audio_dir, filename)
 
             try:
+                import soundfile as sf
+
                 sf.write(filepath, audio_data, self.SAMPLING_RATE)
                 logger.info(f"Saved debug audio to {filepath}")
             except Exception as e:

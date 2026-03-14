@@ -1,8 +1,16 @@
 from ...base import TTSBase
 import os
-from kokoro import KPipeline
-from kokoro.pipeline import LANG_CODES
-from kokoro.model import KModel
+try:
+    from kokoro import KPipeline
+    from kokoro.pipeline import LANG_CODES
+    from kokoro.model import KModel
+except ImportError:
+    KPipeline = object
+    LANG_CODES = {}
+    class _MissingKModel:
+        REPO_ID = ""
+
+    KModel = _MissingKModel
 import torch
 from gallama.data_classes import ModelSpec
 from gallama.logger import logger
@@ -13,8 +21,6 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from split_lang import LangSplitter
 from split_lang.model import SubString
-
-from huggingface_hub import hf_hub_download
 
 
 class KPipelineModified(KPipeline):
@@ -48,6 +54,13 @@ class KPipelineModified(KPipeline):
 
             # fall back to download from hugging face
             if not use_local_voice:
+                try:
+                    from huggingface_hub import hf_hub_download
+                except ImportError as exc:
+                    raise ImportError(
+                        "Kokoro voice download requires `huggingface-hub`. "
+                        "Install `gallama[utils]` or place the voice file locally."
+                    ) from exc
                 f = hf_hub_download(repo_id=KModel.REPO_ID, filename=f'voices/{voice}.pt')
 
             if not voice.startswith(self.lang_code):
