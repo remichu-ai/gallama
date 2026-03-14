@@ -1026,6 +1026,7 @@ class AnthropicMessagesRequest(BaseModel):
     messages: List[AnthropicMessage]
     max_tokens: int  # required in Claude API
     system: Optional[Union[str, List[AnthropicTextContent]]] = None
+    strip_claude_code_billing_header: bool = True
     tools: Optional[List[AnthropicTool]] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     temperature: Optional[float] = None
@@ -1035,6 +1036,47 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
+
+    @staticmethod
+    def _is_claude_code_billing_header_text(text: str) -> bool:
+        if not text:
+            return False
+
+        text_normalized = text.strip()
+        return (
+            text_normalized.startswith("x-anthropic-billing-header:")
+            and "cc_version=" in text_normalized
+            and "cch=" in text_normalized
+        )
+
+    def remove_claude_code_billing_header_system_message(self) -> bool:
+        """
+        Remove Claude Code's volatile billing header from the top-level system
+        prompt so it does not spoil prompt caching across turns.
+        """
+        if not self.system:
+            return False
+
+        if isinstance(self.system, str):
+            kept_lines = [
+                line for line in self.system.splitlines()
+                if not self._is_claude_code_billing_header_text(line)
+            ]
+            cleaned_system = "\n".join(kept_lines).strip()
+            changed = cleaned_system != self.system.strip()
+            self.system = cleaned_system or None
+            return changed
+
+        cleaned_blocks = [
+            block for block in self.system
+            if not (
+                getattr(block, "type", "") == "text"
+                and self._is_claude_code_billing_header_text(block.text)
+            )
+        ]
+        changed = len(cleaned_blocks) != len(self.system)
+        self.system = cleaned_blocks or None
+        return changed
 
     def get_ChatMLQuery(self) -> ChatMLQuery:
         import json

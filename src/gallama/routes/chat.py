@@ -67,6 +67,11 @@ def validate_api_request(query: ChatMLQuery):
 
 @router.post("/messages")
 async def anthropic_message(request: Request, message: AnthropicMessagesRequest):
+    if message.strip_claude_code_billing_header:
+        removed = message.remove_claude_code_billing_header_system_message()
+        if removed:
+            logger.info("Removed Claude Code billing header from Anthropic system prompt for prompt caching")
+
     return await chat_completion(
         request,
         message.get_ChatMLQuery(),
