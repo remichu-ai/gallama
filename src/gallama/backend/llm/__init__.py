@@ -1,4 +1,3 @@
-from .thinking_template import THINKING_TEMPLATE
 from .format_enforcer import SGLangFormatter
 
 # selective import as not all backend available on all platform

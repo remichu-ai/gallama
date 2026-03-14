@@ -102,13 +102,6 @@ class TextTag(TagEqualityMixin, BaseModel):
     tag_type: Literal["text"] = "text"
 
 
-class ArtifactTag(BaseModel):
-    tag_type: Literal["artifact"] = "artifact"
-    artifact_type: Literal["code", "self_contained_text"]
-    identifier: str
-    title: str
-    language: Optional[str] = None
-
 class GenericTag(BaseModel):
     tag_type: str
 
@@ -336,7 +329,6 @@ class ChatMLQuery(BaseModel):
     regex_prefix_pattern: Optional[constr(min_length=1)] = Field(default=None, description="regex to enforce in the beginning of the generation, can not be used together with prefix_string")
     stop_words: Optional[List[str]] = Field(default=None, alias="stop")     # OpenAI use stop
     return_stop_word: Optional[bool] = False
-    thinking_template: Optional[str] = None
 
     # tool call
     tool_call_thinking: bool = Field(default= True, description="Automatically trigger one liner tool call thinking when tool in auto mode to decide if tool is required")
@@ -347,11 +339,10 @@ class ChatMLQuery(BaseModel):
         Field(default="postfix", description="Position of the schema of individual tools. If tool_schema is unchanged through out, "
                                             "keep it as prefix for maximum kv caching. postfix for cases where tool are changing between api request"))
 
-    artifact: Optional[Literal["No", "Fast", "Slow"]] = Field(default="No", description="Normal will parse the streamed output for artifact, whereas Strict is slower and will use format enforcer to enforce")
     use_thinking: Literal[True, False, "Skip"] = Field(default=False, description="True to force thinking, False to do nothing, Skip to force skip")
     return_thinking: Optional[Literal[False, True, "separate"]] = Field(
         default=False,
-        description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field. If used together with artifact, True will return as separate."
+        description="Return the generated thinking to front end. False - not return, True - return, 'separate' - return separately as .thinking field."
     )
     guided_decoding_backend: Optional[Literal["auto", "formatron", "lm-format-enforcer"]] = Field(
         default="auto",
@@ -432,8 +423,6 @@ class ChatMessage(BaseModel):
 
     # function_call: Optional[ToolCalling] = None   # depreciated
     tool_calls: Optional[List[ToolCallResponse]] = None
-    artifact_meta: Union[TextTag, ArtifactTag] = None
-
     def __str__(self) -> str:
         if self.role == "system":
             return f"system:\n{self.content}\n"

@@ -3,29 +3,12 @@
 __gallama__ is an opinionated Python library that provides a LLM inference API service backend optimized for local agentic tasks.
 It focuses on model serving, realtime, multimodal, and local inference integrations rather than multi-agent orchestration.
 
-Currently, the backend is mainly using ExllamaV2. Llama.cpp support is under experiment. 
+Gallama is predominantly tested with the Exllama V3 workflow at this point. Other backends are still available, but they may have bugs or rough edges depending on the model and feature path.
+
+Currently, the backend is mainly using Exllama-family backends. Llama.cpp support is under experiment. 
 
 Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
 
-# New in version: 0.0.9 - OpenAI realtime websocket
-From version 0.0.9, gallama does provide a OpenAI Realtime websocket by wrapping Websocker over a TTS + LLM + TTS setup.
-While this is not true Sound to Sound set up, it does provide a mock-up of OpenAI realtime websocket for testing.
-The setup also provide integration with Video from Livekit for video voice chat app.
-
-The Realtime Websocket API is tested working with follow:
-- https://github.com/livekit-examples/realtime-playground.git
-- https://github.com/openai/openai-realtime-console/tree/websockets
-
-API Spec:
-- https://platform.openai.com/docs/guides/realtime
-
-To Use Video Chat feature
-Please refer to the PAI app here:
-- https://github.com/remichu-ai/pai.git
-- https://github.com/remichu-ai/pai-agent.git
-
-Do note that there are some package at Linux level that you will need to install. Refer to installation portion below.
-While it does mimic openai realtime, there could be bug due to it not using native audio to audio model
 
 # Quick Start
    Head down to the installation guide at the bottom of this page.
@@ -35,138 +18,6 @@ While it does mimic openai realtime, there could be bug due to it not using nati
 
 # Features
 
-# NEW - Vision Model
-
-As of v0.0.8post1, Qwen 2 VL (Image only, no Video) and Pixtral are supported via Exllama (>=0.2.4). 
-
-For Pixtral, please install Exllama V2 `v0.2.4` onwards
-For Exllama V2, please install `dev` branch of Exllama V2 as the code is not yet merged to `v0.2.4`.
-
-After Exllama roll out support for Qwen 2 VL, running model via transformers will be depreciated.
-Currently, both exllamaV2 and llama.cpp do not support Vision model yet. Hence, this is achieved by running `transformers` with the use of awq for quantization.
-
-1. Pixtral
-Currently, Pixtral Exl2 quantization from huggingface https://huggingface.co/turboderp/pixtral-12b-exl2 has a typo in the config file which set the context to 1mio tokens.
-The model support up to 128k token context, hence please set the context accordingly when u load the model
-
-```shell
-# sample
-gallama download pixtral:5.0
-gallama run -id "model_name=pixtral max_seq_len=32768"
-
-```
-
-2. Qwen 2 VL:
-For Exllama V2, please install `dev` branch of Exllama V2 as the code is not yet merged to `v0.2.4`.
-
-After installation you can download by following commands (choose a version that fit your VRAM), there are other quantization available from 3 to 8bpw.
-```shell
-# 2B model
-gallama download qwen-2-VL-2B:4.0
-gallama run qwen-2-VL-2B
-
-# 7B model
-gallama download qwen-2-VL-7B:4.0
-gallama run qwen-2-VL-7B
-
-# 72B model
-gallama download qwen-2-VL-72B:4.0
-gallama run qwen-2-VL-72B
-```
-
-If you need an UI to run it, check out Gallama UI, it is working with images, however, the support is not perfect at the moment:
-https://github.com/remichu-ai/gallamaUI.git
-![alt_text](https://github.com/remichu-ai/gallamaUI/blob/main/doc/gen.gif)
-
-
-## Integrated Model downloader
-
-Ability to download exl2 model from Hugging Face via CLI for popular models.
-
-Example as following to download llama-3.1 8B at 4.0bpw (4 bit per weight quantization)
-
-```shell
-gallama download qwen-2.5-32B:4.0
-```
-
-By default, it will download `exllama` version. For model with `gguf` available, you can download it by set the `backend`
-```shell
-gallama download qwen-2.5-32B:4.0 --backend=llama_cpp
-```
-
-After download, you can run the model with:
-```shell
-gallama run qwen-2.5-32B
-```
-
-Here is the list of currently supported models for downloader:
-
-You can view it in CLI using following command:
-```shell
-gallama list available
-```
-
-**LLM Models**
-
-| Model         | Backend      | Available Quantizations (bpw)                                                          |
-|---------------|--------------|----------------------------------------------------------------------------------------|
-| llama-3.1-8B  | exllama      | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                        |
-|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
-| llama-3.1-70B | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`                                        |
-|               | llama_cpp    | `3.0`, `4.0`, `5.0`                                                                    |
-| mistral       | exllama      | `2.8`, `3.0`, `4.0`, `4.5`, `5.0`, `6.0`                                               |
-|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
-| mistral-large | exllama      | `2.3`, `2.5`, `2.75`, `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `4.5`, `4.75`, `5.0`, `6.0` |
-| mistral-nemo  | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                 |
-|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-| codestral     | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
-|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
-| gemma-2-9B    | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `5.5`, `6.0`, `8.0`                          |
-| gemma-2-27B   | exllama      | `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0`                                        |
-| qwen-2-1.5B   | exllama      | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-|               | llama_cpp    | `4.0`, `5.0`, `6.0`, `8.0`                                                             |
-| qwen-2-7B     | exllama      | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-| qwen-2-72B    | exllama      | `3.0`, `3.5`, `4.0`, `4.25`, `4.65`, `5.0`, `6.0`, `8.0`                               |
-|               | llama_cpp    | `2.0`, `3.0`, `4.0`                                                                    |
-| yi-1.5-34B    | exllama      | `3.0`, `3.5`, `3.75`, `4.0`, `4.25`, `5.0`, `6.0`, `6.5`, `8.0`                        |
-| qwen-2.5-72B  | exllama      | `2.2`, `3.0`, `3.5`, `4.25`, `4.65`, `5.0`, `6.5`, `8.0`                               |
-|               | llama_cpp    | `2.0`, `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                               |
-| qwen-2.5-32B  | exllama      | `3.0`, `4.0`, `4.65`, `5.0`, `6.0`, `8.0`                                              |
-|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-| qwen-2.5-14B  | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
-|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-| qwen-2.5-7B   | exllama      | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                                     |
-|               | llama_cpp    | `3.0`, `4.0`, `5.0`, `6.0`, `8.0`                                                      |
-| qwen-2.5-Coder-32B    | exllama      | `2.2`, `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                       |
-| qwen-2.5-Coder-14B    | exllama      | `3.0`, `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                              |
-| qwen-2.5-Coder-7B     | exllama      | `3.5`, `4.25`, `5.0`, `6.5`, `8.0`                                                     |
-
-
-**Vision Large Language Models**
-
-| Model         | Backend      | Available Quantizations (bpw)                          |
-|---------------|--------------|--------------------------------------------------------|
-| qwen-2-VL-2B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
-| qwen-2-VL-7B  | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
-| qwen-2-VL-72B | exllama | `3.0`, `3.5`, `4.0`, `4.5` ,`5.0`, `6.0`, `8.0`        |
-| qwen-2.5-VL-7B | exllama | `4.0bpw`, `5.0bpw`, `6.0bpw`, `8.0bpw`                 |
-| qwen-2.5-VL-72B | exllama | `5.5bpw`                                               |
-| pixtral               | exllama      | `2.5`, `3.0`, `3.5`, `4.0`, `4.5`, `5.0`, `6.0`, `8.0` |
-
-
-**Embedding Models:**
-
-| Model | Backend | Available Quantizations (bpw) |
-|-------|---------|-------------------------------|
-| multilingual-e5-large-instruct | embedding | `16.0` |
-| gte-large-en-v1.5 | embedding | `16.0` |
-
-The syntax to specify the model is model name follow by `:` then follow by quantization float number e.g. `qwen-2-72B:4.0`
-
-For model not listed here, you can refer to `examples/Model_Downloader.ipynb` for code to download from huggingface.
-And then you will need to manually update the config in `~/gallama/model_config.yaml`. Instruction will be updated
-
-Sometime, the download speed might get slowed down. Just cancel the download by Ctrl+C and run the same download command again. The download will resume with higher speed.
 
 ## OpenAI Compatible Server
 Fully compatible with the OpenAI client.
@@ -196,6 +47,49 @@ completion = client.chat.completions.create(
 
 print(completion)
 ```
+
+See [`src/tests/test_openai.py`](./src/tests/test_openai.py) and [`src/tests/test_openai_server.py`](./src/tests/test_openai_server.py) for more complete examples.
+
+## Anthropic Compatible Server
+Gallama also exposes an Anthropic-compatible Messages endpoint.
+
+Install the Anthropic SDK and point it at your local server:
+
+```shell
+pip install anthropic
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    base_url="http://127.0.0.1:8000",
+    api_key="test",
+)
+```
+
+```python
+response = client.messages.create(
+    model="claude-sonnet-4-20250514",
+    max_tokens=1024,
+    messages=[
+        {"role": "user", "content": "Which is faster in terms of reaction speed: a cat or a dog?"}
+    ],
+)
+
+print(response.content)
+```
+
+See [`src/tests/test_anthropic.py`](./src/tests/test_anthropic.py) for a more complete Anthropic client example suite.
+
+### Claude Code
+You can also point Claude Code at a local Gallama server by overriding the Anthropic base URL and auth token:
+
+```shell
+ANTHROPIC_BASE_URL="http://127.0.0.1:8000/" ANTHROPIC_AUTH_TOKEN="local" claude --model minimax
+```
+
+This lets Claude Code talk to your local model through Gallama's Anthropic-compatible API.
 
 ## Function Calling
 Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.
@@ -234,97 +128,6 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.tool_calls[0].function)
 ```
 
-## Artifact System (Experimental)
-The engine support artifact mode (similar to Claude's Artifact).
-While Claude probably train their model with custom dataset, we neither have this with open source nor I think there will be a standard for it (much like every new model use a different special tokens :D)
-
-Current the library implement it via a combination of prompting, XML tag and format enforcement.
-
-To be able to use Artifact mode effectively, you will need a good enough model, from our testing you will need minimally codestral 22B.
-70B+ models such as Qwen2 or Llama 3.1 will give the best result.
-
-As Artifact feature is most useful for interaction instead of via API, we do have a lightweight WebUI here which work with our Artifact System.
-
-If using python, you can interact with the UI as following.
-
-__Non-Streaming__
-```python
-completion = client.chat.completions.create(
-    model="codestral",
-    messages=[{"role": "user",
-               "content": "Explain in one liner what quicksort is and write me quicksort in python and Java"}],
-    extra_body={
-        "artifact": "Fast",
-    }
-)
-
-for choice in completion.choices:
-    print("-------------------------------\n")
-    print(choice.message.artifact_meta)
-    print(choice.message.content)
-```
-
-__Streaming__
-```python
-completion = client.chat.completions.create(
-  model="codestral",
-    messages=[{"role": "user",
-               "content": "Explain in one liner what quicksort is and write me quicksort in python and Java"}],
-  stream=True,
-  extra_body= {
-      "artifact": "Fast",
-  }
-)
-
-current_content_type = None
-for chunk in completion:
-  if current_content_type != chunk.choices[0].delta.artifact_meta["tag_type"]:
-      print("\n------------------------------")
-      print(chunk.choices[0].delta.artifact_meta)
-      print("\n------------------------------")
-      current_content_type = chunk.choices[0].delta.artifact_meta["tag_type"]
-  print(chunk.choices[0].delta.content, end='')
-```
-
-
-## Thinking Method
-A novel approach to guide LLM's thinking with XML templates (e.g., chain of thought) without modifying the prompt.
-The benefit of this versus traditional CoT prompting is you can customize the XML template to be used depending on model and situation without the need to fix change the prompt,
-As following example, you can influence the model to provide the answer with CoT while not showing the CoT in the answer.
-
-```python
-thinking_template = """
-<chain_of_thought>
-  <problem>{problem_statement}</problem>
-  <initial_state>{initial_state}</initial_state>
-  <steps>
-    <step>{action1}</step>
-    <step>{action2}</step>
-    <!-- Add more steps as needed -->
-  </steps>
-  <answer>Provide the answer</answer>
-  <final_answer>Only the final answer, no need to provide the step by step problem solving</final_answer>
-</chain_of_thought>
-"""
-
-messages = [
-    {"role": "user", "content": "I went to the market and bought 10 apples. I gave 2 apples to the neighbor and 2 to the repairman. I then went and bought 5 more apples and ate 1. How many apples did I remain with?"}
-]
-
-completion = client.chat.completions.create(
-    model="mistral",
-    messages=messages,
-    temperature=0.1,
-    max_tokens=200,
-    extra_body={
-        "thinking_template": thinking_template,
-    },
-)
-
-print(completion.choices[0].message.content)
-# 10 apples
-```
-
 ## Multiple Concurrent Models
 Run multiple models (different or same) with automatic load balancing and request routing. 
 Model VRAM usage can be auto_loaded or with specific GPUs spliting.
@@ -340,11 +143,6 @@ Customize GPUs split
 ```shell
 gallama run -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B gpus=0,0,0,20"
 ```
-
-## Mixture of Experts
-Query and combine response from multiple model via OpenAI client
-
-
 
 ## OpenAI Embedding Endpoint
 Utilize Infinity Embedding library for both embedding via OpenAI client.
@@ -389,7 +187,7 @@ completion = client.chat.completions.create(
 ```
 
 ## Streaming
-Streaming is fully supported even in artifact mode.
+Streaming is fully supported.
 
 ```python
 messages = [{"role": "user", "content": "Tell me a 200-word story about a Llama"}]
@@ -445,8 +243,7 @@ response = requests.post(api_url, json=payload)
 
 gallama requires certain components to be installed and functioning. 
 
-Ensure that you have either ExllamaV2 (recommended) or Llama CPP Python (in development) installed. You can have both installed and use both with gallama as well,
-If you already have either ExLlamaV2 (and optionally Flash Attention) running, you can install gallama by:
+Ensure that you have a working backend installed before using Gallama. In practice, Exllama V3 is the backend I test against most often. Other backends may still work, but they may need extra debugging depending on the model and feature set.
 
 OS level package required as followed:
 For Speech to Text, You will need to install the dependency as required by faster whisper
@@ -507,9 +304,9 @@ If you're starting from scratch and don't have these dependencies yet, follow th
    conda activate genv
    ```
 
-2. Install and verify ExLlamaV2 (Recommended):
-   - Follow instructions at [ExLlamaV2 GitHub](https://github.com/turboderp/exLlamav2)
-   - Test with examples from [ExLlamaV2 Examples](https://github.com/turboderp/exLlamav2/tree/master/examples)
+2. Install and verify your backend:
+   - Exllama V3 is the recommended path if you want the setup closest to what is actively tested.
+   - Exllama V2, llama.cpp, transformers, vLLM, sglang, and other backends are still available, but expect some backend-specific rough edges.
 
    (Optional) Install llama cpp-python:
    - Follow instructions at [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
@@ -541,21 +338,19 @@ If you're starting from scratch and don't have these dependencies yet, follow th
 
 ## Usage
 
-Follow these steps to use the model. We aim to make this process more convenient in future releases.
+Follow these steps to use the model.
 
 ### Setup
 
-1. Download the ExLlama model. A Jupyter notebook to assist with the download is included in `examples/Model_download.ipynb`.
-
-2. Initialize gallama:
+1. Initialize gallama:
    ```shell
    gallama run
    ```
    This creates a `model_config.yaml` file in `~/gallama`.
 
-3. Update `~/gallama/model_config.yaml` with your model configurations.
+2. Update `~/gallama/model_config.yaml` with your model configurations.
 
-4. Launch the model:
+3. Launch the model:
    Simple method
       ```shell
       gallama run mistral
@@ -564,6 +359,92 @@ Follow these steps to use the model. We aim to make this process more convenient
       ```shell
       gallama run -id "model_id=mistral"
       ```
+
+### model_config.yaml
+
+Each top-level key is the model name that Gallama will expose through the API. The value under that key is the configuration used to load the backend.
+
+Minimal Exllama example:
+
+```yaml
+mistral:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/Mistral-7B-instruct-v0.3-4.5bpw-exl2
+  prompt_template: Mistral_large
+  gpus: auto
+```
+
+Typical keys:
+
+- `backend`: backend name such as `exllama`, `llama_cpp`, `transformers`, `embedding`, `kokoro`, or `gpt_sovits`
+- `model_id`: local path to the model or model directory
+- `prompt_template`: prompt formatter to use for the model family
+- `gpus`: usually `auto`, but can also be a per-GPU split
+- `max_seq_len`: override context length if needed
+- `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
+- `quant`: optional metadata for the model quantization you downloaded
+- `eos_token_list`: optional extra EOS tokens for models that need them
+- `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `gpt_sovits`, and similar backends
+
+Example with a `transformers` backend:
+
+```yaml
+llama-3.2-Vision-11B_transformers:
+  backend: transformers
+  model_id: /home/your-user/gallama/models/llama-3.2-Vision-11B-4.0bpw-transformers
+  prompt_template: Llama3.2-VL
+  gpus: auto
+  cache_quant: Q4
+  quant: 4.0
+  backend_extra_args:
+    model_class: transformers.MllamaForConditionalGeneration
+    tokenizer_class: transformers.AutoTokenizer
+    processor_class: transformers.AutoProcessor
+    model_class_extra_kwargs:
+      attn_implementation: sdpa
+```
+
+Example with a `llama_cpp` backend:
+
+```yaml
+codestral_llama_cpp:
+  backend: llama_cpp
+  model_id: /home/your-user/gallama/models/codestral-4.0bpw-llama_cpp/Codestral-22B-v0.1-Q4_K_M.gguf
+  prompt_template: Mistral
+  gpus: auto
+  cache_quant: Q4
+  quant: 4.0
+```
+
+Example with TTS voice presets:
+
+```yaml
+gpt_sovits:
+  backend: gpt_sovits
+  model_id: /home/your-user/gallama/models/gpt_sovits
+  backend_extra_args:
+    device: cuda
+    is_half: false
+    version: v2
+    chunk_size_in_s: 0.1
+    bert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-roberta-wwm-ext-large
+    cnhuhbert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-hubert-base
+    t2s_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt
+    vits_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s2G2333k.pth
+  voice:
+    shenhe:
+      language: en
+      ref_audio_path: /path/to/reference.wav
+      ref_audio_transcription: I'm not trying to save the world...
+      speed_factor: 1.1
+```
+
+Notes:
+
+- Use the YAML key itself as the API model name. For example, if the key is `qwen-2.5-32B`, then that is the model string to pass in the client request.
+- `prompt_template` matters. If the wrong one is chosen, the model may still load but chat quality or tool use can break.
+- `backend_extra_args` is the place for backend-specific tuning such as custom tokenizer/model/processor classes or TTS model paths.
+- You can keep your Gallama config in another location by setting `GALLAMA_HOME_PATH`.
    
 ### Advanced Usage
 
@@ -638,9 +519,44 @@ Customize the model launch using various parameters. Available parameters for th
    - Do run a draft model to help further with speed (Qwen2-1.5B, Llama3.1-8B, Mistral v0.3 respectively)
    To enable tensor parallel, simply add `tp=True`
    Exllama tensor parallel support parallelism on odd number of GPUs. Also exact matching of GPU is not requirement
-   The speed boost for TP is huge (close to X1.5-X2).
+   The speed boost for TP for dense model is huge (close to X1.5-X2).
    ```shell
    gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B tp=True"
    ```
 8. Others
    If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
+
+
+# OpenAI realtime websocket (Experimental)
+From version 0.0.9, gallama does provide a OpenAI Realtime websocket by wrapping Websocker over a TTS + LLM + TTS setup.
+While this is not true Sound to Sound set up, it does provide a mock-up of OpenAI realtime websocket for testing.
+The setup also provide integration with Video from Livekit for video voice chat app.
+
+The Realtime Websocket API is tested working with follow:
+- https://github.com/livekit-examples/realtime-playground.git
+- https://github.com/openai/openai-realtime-console/tree/websockets
+
+API Spec:
+- https://platform.openai.com/docs/guides/realtime
+
+To Use Video Chat feature
+Please refer to the PAI app here:
+- https://github.com/remichu-ai/pai.git
+- https://github.com/remichu-ai/pai-agent.git
+
+Do note that there are some package at Linux level that you will need to install. Refer to installation portion below.
+While it does mimic openai realtime, there could be bug due to it not using native audio to audio model
+
+
+
+## Legacy Model Downloader
+
+The built-in model downloader is now considered outdated.
+
+The preferred workflow is:
+
+1. Download or prepare your model manually using your normal tooling.
+2. Put it wherever you want on disk.
+3. Add or update the corresponding entry in `~/gallama/model_config.yaml`.
+
+The legacy downloader commands may still exist in parts of the codebase, but they are no longer the recommended way to manage models.

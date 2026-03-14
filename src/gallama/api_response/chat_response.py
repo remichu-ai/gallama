@@ -32,7 +32,6 @@ from ..data_classes.generation_data_class import (
     GenQueueDynamic
 )
 
-from .stream_parser import StreamParser
 from typing import AsyncIterator, List, Dict, Literal, Union
 from ..utils.utils import get_response_uid, get_response_tool_uid
 from ..logger import logger

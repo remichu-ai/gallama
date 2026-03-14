@@ -17,7 +17,6 @@ from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
-from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 
 

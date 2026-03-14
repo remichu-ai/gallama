@@ -88,10 +88,6 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
         # if not llm:
         #     llm = model_manager.llm_dict[list(model_manager.llm_dict.keys())[0]]
 
-        # log if thinking is used
-        if query.thinking_template:
-            logger.info(f"thinking is used with returnThinking set to {query.return_thinking}")
-
         # start the generation task
         asyncio.create_task(
             llm.chat(

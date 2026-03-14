@@ -466,7 +466,6 @@ class ModelInterface(ABC):
 
         prompt = prompt_eng.get_prompt(
             query,
-            #thinking_template=query.thinking_template,
             backend=self.backend
         )
 
@@ -484,43 +483,6 @@ class ModelInterface(ABC):
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
-
-        # think template prompting
-        thinking_queue = GenQueueDynamic(include_GenEnd=True, include_GenStats=False)  # this queue is not for returning thinking
-        if query.return_thinking:
-            # return thinking to front end
-            queue_group = [
-                thinking_queue,
-                GenQueueDynamic(include_GenEnd=False, include_GenStats=False)
-            ]
-        else:
-            # not return thinking to front end
-            queue_group = [
-                thinking_queue,
-            ]
-
-        await self.generate(
-            prompt,
-            messages=query.messages,
-            gen_type="thinking",
-            gen_queue=queue_group,
-            temperature=query.temperature,
-            top_p=query.top_p,
-            prefix_strings=f"<{thinking.root_tag}>",
-            stop_words=thinking.root_key_stop_words,
-            request=request,
-            stop_event=stop_event,
-            video=query.video,
-        )
-        thinking_response, _ = await get_response_from_queue(thinking_queue)
-
-        # Get the new prompt with thinking response
-        prompt = prompt_eng.get_prompt(
-            query,
-            thinking_template=query.thinking_template,
-            thinking_response=thinking_response,
-            backend=self.backend
-        )
 
         # 1st response if there is regex to match the regex pattern
         first_response = ""
@@ -555,29 +517,6 @@ class ModelInterface(ABC):
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
-        # Handle Artifact mode: overwrite prefix_strings if in artifact mode
-        stop_words_to_use = query.stop_words
-        banned_strings = None
-        if query.artifact and query.artifact == "Fast":
-            prefix_strings = None
-            manual_prefix_string = "<answer>\n "
-            prompt += manual_prefix_string
-
-            # ban XML comment format which could mess up the parsing of output
-            banned_strings = ["<![CDATA[", "<!--"]
-
-            # add the stopword for artifact tag to the answer
-            if isinstance(stop_words_to_use, list):
-                stop_words_to_use.append("</answer>")
-            elif isinstance(stop_words_to_use, str):
-                stop_words_to_use = [stop_words_to_use, "</answer>"]
-            else:
-                stop_words_to_use = "</answer>"
-
-            # add the initial string as prefix_strings can not be used together with banned_strings
-            chunk = GenText(content=manual_prefix_string)
-            gen_queue.put_nowait(chunk)
-
         await self.generate(
             prompt=prompt,
             messages=query.messages,
@@ -586,10 +525,9 @@ class ModelInterface(ABC):
                 'temperature': query.temperature,
                 'top_p': query.top_p,
                 'formatter': formatter_regex,
-                'stop_words': stop_words_to_use,
+                'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
-                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
-                'banned_strings': banned_strings,
+                'prefix_strings': prefix_strings,
                 'request': request,
                 'stop_event': stop_event,
                 'video': query.video,
@@ -606,7 +544,6 @@ class ModelInterface(ABC):
 
         prompt = prompt_eng.get_prompt(
             query,
-            thinking_template=query.thinking_template,
             backend=self.backend
         )
 
@@ -624,50 +561,6 @@ class ModelInterface(ABC):
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
-
-        # think template prompting
-        if query.thinking_template:
-            try:
-                thinking = Thinking(query.thinking_template)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
-
-            # Not returning thinking
-            thinking_queue = GenQueue()
-            if query.return_thinking:
-                # return thinking to front end
-                queue_group = [
-                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
-                    QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
-                ]
-            else:
-                # not return thinking to front end
-                queue_group = [
-                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
-                ]
-
-            await self.generate(
-                prompt,
-                messages=query.messages,
-                gen_type="thinking",
-                gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
-                prefix_strings=f"<{thinking.root_tag}>",
-                stop_words=thinking.root_key_stop_words,
-                request=request,
-                stop_event=stop_event,
-                video=query.video,
-            )
-            thinking_response, _ = await get_response_from_queue(thinking_queue)
-
-            # Get the new prompt with thinking response
-            prompt = prompt_eng.get_prompt(
-                query,
-                thinking_template=query.thinking_template,
-                thinking_response=thinking_response,
-                backend=self.backend
-            )
 
         # 1st response if there is regex to match the regex pattern
         first_response = ""
@@ -702,29 +595,6 @@ class ModelInterface(ABC):
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
-        # Handle Artifact mode: overwrite prefix_strings if in artifact mode
-        stop_words_to_use = query.stop_words
-        banned_strings = None
-        if query.artifact and query.artifact == "Fast":
-            prefix_strings = None
-            manual_prefix_string = "<answer>\n "
-            prompt += manual_prefix_string
-
-            # ban XML comment format which could mess up the parsing of output
-            banned_strings = ["<![CDATA[", "<!--"]
-
-            # add the stopword for artifact tag to the answer
-            if isinstance(stop_words_to_use, list):
-                stop_words_to_use.append("</answer>")
-            elif isinstance(stop_words_to_use, str):
-                stop_words_to_use = [stop_words_to_use, "</answer>"]
-            else:
-                stop_words_to_use = "</answer>"
-
-            # add the initial string as prefix_strings can not be used together with banned_strings
-            chunk = GenText(content=manual_prefix_string)
-            gen_queue.put_nowait(chunk)
-
         await self.generate(
             prompt=prompt,
             messages=query.messages,
@@ -733,10 +603,9 @@ class ModelInterface(ABC):
                 'temperature': query.temperature,
                 'top_p': query.top_p,
                 'formatter': formatter_regex,
-                'stop_words': stop_words_to_use,
+                'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
-                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
-                'banned_strings': banned_strings,
+                'prefix_strings': prefix_strings,
                 'request': request,
                 'stop_event': stop_event,
                 'video': query.video,
@@ -1519,4 +1388,3 @@ End of Function Calling Instruction
 
                 # swap queue non function calling
                 gen_queue.swap(no_tool.gen_dynamic_queue[0])
-

@@ -1,6 +1,4 @@
 __all__ = [
-    "THINKING_TEMPLATE",
-    "Thinking",
     "make_server",
     "ConfigManager",
     "model_manager",
@@ -11,13 +9,6 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name in {"THINKING_TEMPLATE", "Thinking"}:
-        from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
-
-        return {
-            "THINKING_TEMPLATE": THINKING_TEMPLATE,
-            "Thinking": Thinking,
-        }[name]
     if name == "make_server":
         from .app import make_server
 

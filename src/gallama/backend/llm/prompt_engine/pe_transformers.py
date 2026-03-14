@@ -19,7 +19,6 @@ from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
-from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 from transformers import AutoTokenizer, AutoConfig
 from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, MODEL_VISION_TOKEN

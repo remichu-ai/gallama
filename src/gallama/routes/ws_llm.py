@@ -276,7 +276,6 @@ class WebSocketSession:
             temperature=session_config.temperature if session_config else 0.8,
             stream=True,
             max_tokens=max_token_to_use,
-            artifact="No",
             tools=tools if tools else None,
             # Tool extra settings:
             tool_call_thinking=session_config.tool_call_thinking,
