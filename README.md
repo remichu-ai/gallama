@@ -9,12 +9,66 @@ Currently, the backend is mainly using Exllama-family backends. Llama.cpp suppor
 
 Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a reliable and pure ExllamaV2 API backend.
 
+## Native Tool Calling
+Gallama supports native tool calling. Instead of forcing every model into one synthetic format, Gallama uses the model's own tool-calling format when that format is supported by a parser in [`src/gallama/backend/llm/prompt_engine/by_model`](./src/gallama/backend/llm/prompt_engine/by_model).
+
+Current models with custom native tool parsers:
+
+- `Qwen 3`
+- `GLM-4`
+- `Minimax`
+- `Ministral 3`
+
+For these models, Gallama expects the model to emit its native tool-call structure, and Gallama parses that structure back into OpenAI-compatible `tool_calls` or Anthropic-compatible `tool_use` blocks.
+
+If you want to use a new model with a different native tool-calling format, Gallama will usually need a new parser added under [`src/gallama/backend/llm/prompt_engine/by_model`](./src/gallama/backend/llm/prompt_engine/by_model) so the backend can interpret that model correctly. Without a matching parser, tool calling may fail or be decoded incorrectly even if the model itself knows how to call tools.
+
+## Reasoning Output
+Gallama also returns model reasoning when the model emits it.
+
+With the OpenAI-compatible API, reasoning is returned on the assistant message as `reasoning` in the raw response payload:
+
+```python
+completion = client.chat.completions.create(
+    model="qwen3",
+    messages=[{"role": "user", "content": "Solve 27 * 43. Give only the answer."}],
+)
+
+message = completion.choices[0].message
+
+print(message.content)
+
+# Depending on the SDK version, custom fields may be available either directly
+# or through a raw/model-extra view of the response object.
+print(getattr(message, "reasoning", None))
+print(getattr(message, "model_extra", {}).get("reasoning") if getattr(message, "model_extra", None) else None)
+```
+
+With the Anthropic-compatible API, reasoning is returned as `thinking` blocks inside `response.content`:
+
+```python
+response = client.messages.create(
+    model="qwen3",
+    max_tokens=4096,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "Solve 27 * 43. Give only the answer."}],
+)
+
+thinking_blocks = [block for block in response.content if block.type == "thinking"]
+reasoning_text = "\n".join(block.thinking for block in thinking_blocks)
+
+print(reasoning_text)
+```
+
+This makes it possible to inspect the model's intermediate reasoning while still using standard OpenAI or Anthropic client libraries against Gallama.
+
 
 # Quick Start
    Head down to the installation guide at the bottom of this page.
    Then check out the [Examples_Notebook.ipynb](https://github.com/remichu-ai/gallama/blob/main/examples/Examples_Notebook.ipynb) in the examples folder
    A simple python streamlit frontend chat UI code is included in the examples folder [streamlit](https://github.com/remichu-ai/gallama/blob/main/examples/streamlit_chatbot.py)
-   Or checkout [GallamaUI](https://github.com/remichu-ai/gallamaUI.git) 
+   Or checkout [GallamaUI](https://github.com/remichu-ai/gallamaUI.git)
+   You can also refer to `src/tests` folder for more example using OpenAI and Anthropic client.
 
 # Features
 
@@ -474,7 +528,7 @@ Minimum required arguments for a YAML-free LLM launch:
 Example:
 
 ```shell
-gallama run -id "model_name=minimax model_id=/path/to/model backend=transformers"
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3"
 ```
 
 Useful optional arguments:
