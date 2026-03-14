@@ -337,8 +337,12 @@ async def run_model(model_spec: ModelSpec):
 
         server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
 
-        model_config = config_manager.configs.get(model_spec.model_name)
+        model_config = config_manager.configs.get(model_spec.model_name) or {}
         backend = model_spec.backend or model_config.get('backend')
+        if not backend:
+            raise ValueError(
+                f"backend is required to start model '{model_spec.model_name}' when it is not defined in model_config.yaml"
+            )
 
         # Create a copy of the current environment
         env = os.environ.copy()

@@ -72,19 +72,25 @@ class ModelManager:
         it might not have all the properties required for the model to be loaded
         the config_manager below contain all the models properties
         """
-        # global config_manager, llm_dict, stt_dict, tts_dict
-
-        # get the config from the yml
         model_name = model_spec.model_name
-        model_config = self.config_manager.get_model_config(model_name)
-        if not model_config:
-            raise Exception(f"Model config for '{model_name}' not exist in ~/gallama/model_config.yaml")
+        if not model_name:
+            raise Exception("model_name is required when loading a model from CLI")
 
-        model_config.update({"model_name": model_name})
+        # get the config from the yml, if available
+        model_config = self.config_manager.get_model_config(model_name) or {}
+        if model_config:
+            model_config = model_config.copy()
+            model_config.update({"model_name": model_name})
+        else:
+            logger.info(f"Model config for '{model_name}' not found in ~/gallama/model_config.yaml, using CLI arguments only")
 
         # handle draft model
         if model_spec.draft_model_name and not model_spec.draft_model_id:
             draft_model_config = self.config_manager.get_model_config(model_spec.draft_model_name)
+            if not draft_model_config:
+                raise Exception(
+                    f"Draft model config for '{model_spec.draft_model_name}' not exist in ~/gallama/model_config.yaml"
+                )
             model_config.update({
                 "draft_model_id": model_spec.draft_model_id or draft_model_config["model_id"],
                 "draft_model_name": model_spec.draft_model_name or draft_model_config["model_name"],
@@ -92,10 +98,19 @@ class ModelManager:
                 "draft_cache_quant": model_spec.draft_cache_quant or draft_model_config["cache_quant"],
             })
 
-        _default_model_spec = ModelSpec.from_dict(model_config)
+        if model_config:
+            _default_model_spec = ModelSpec.from_dict(model_config)
+            # Merge configurations that user pass in with default setting of the model
+            model_spec = ModelSpec.from_merged_config(model_spec, _default_model_spec.model_dump())
 
-        # Merge configurations that user pass in with default setting of the model
-        model_spec = ModelSpec.from_merged_config(model_spec, _default_model_spec.model_dump())
+        if not model_spec.model_id:
+            raise Exception(f"model_id is required for '{model_name}' when it is not fully defined in model_config.yaml")
+
+        if not model_spec.backend:
+            raise Exception(f"backend is required for '{model_name}' when it is not defined in model_config.yaml")
+
+        if not model_spec.model_type:
+            model_spec.model_type = ModelSpec.get_model_type_from_backend(model_spec.backend)
 
 
         # load the model with config from the model_spec and yml. model_spec comes from cli

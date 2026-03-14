@@ -452,14 +452,45 @@ Using `gallama run -id` followed by a string which is a dictionary of key-value 
 
 Customize the model launch using various parameters. Available parameters for the `-id` option include:
 
-- `model_id`: ID of the model from the yml file (required)
-- `model_name`: Name of the model (optional, defaults to the last part of `model_id`)
+- `model_name`: API model name to expose from Gallama. Required when running without a matching `model_config.yaml` entry.
+- `model_id`: Model path or Hugging Face repo ID. Required for YAML-free launch and optional when it already exists in `model_config.yaml`.
 - `gpus`: VRAM usage for each GPU, comma-separated list of floats (optional)
 - `cache_size`: Context length for cache text in integers (optional)
-- `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional, defaults to Q4)
+- `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional)
 - `max_seq_len`: Maximum sequence length (optional)
-- `backend`: Model engine backend, options are "exLlama", "Llama_cpp", "embedding" (optional, defaults to "exLlama")
+- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `gpt_sovits`, `kokoro`.
 - `tp`: enable tensor parallel with exllama v2 (experimental). See further below
+
+#### Run Without `model_config.yaml`
+
+If you fully specify the model on the CLI, Gallama can run it without a matching entry in `~/gallama/model_config.yaml`.
+
+Minimum required arguments for a YAML-free LLM launch:
+
+- `model_name`
+- `model_id`
+- `backend`
+
+Example:
+
+```shell
+gallama run -id "model_name=minimax model_id=/path/to/model backend=transformers"
+```
+
+Useful optional arguments:
+
+- `max_seq_len=32768`
+- `gpus=20,20` or leave it as automatic
+- `cache_size=32768`
+- `cache_quant=Q4`
+- `prompt_template=<template-name>`
+- `strict=True`
+- `max_concurrent_requests=<n>`
+
+Notes:
+
+- If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
+- Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
 
 #### Speculative Decoding Parameters
 - `draft_model_id`: ID of the draft model (optional)
@@ -472,12 +503,12 @@ Customize the model launch using various parameters. Available parameters for th
 
 1. Launch two models simultaneously:
    ```shell
-   gallama run -id "model_id=mistral" -id "model_id=llama3"
+   gallama run -id "model_name=mistral model_id=/path/to/mistral backend=exllamav3" -id "model_name=llama3 model_id=/path/to/llama3 backend=exllamav3"
    ```
 
 2. Launch a model with specific VRAM limits per GPU:
    ```shell
-   gallama run -id "model_id=qwen2-72B gpus=22,22,10,0"
+   gallama run -id "model_name=qwen2-72B model_id=/path/to/qwen2-72B backend=exllamav3 gpus=22,22,10,0"
    ```
    This limits memory usage to 22GB for GPU0 and GPU1, 10GB for GPU2, and 0GB for GPU3.
 
@@ -486,19 +517,19 @@ Customize the model launch using various parameters. Available parameters for th
    However, if there is VRAM to spare, increase cache_size will have model to perform better for concurrent and batched request.
    By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesn't work well with Q4 cache, please use Q6 or Q8.
    ```shell
-   gallama run -id "model_id=mistral cache_size=102400 cache_quant=Q8"
+   gallama run -id "model_name=mistral model_id=/path/to/mistral backend=exllamav3 cache_size=102400 cache_quant=Q8"
    ```
    
 4. Launch a model with reduced cache size and quantization:
    For model with high context, lower the sequence length can significantly reduce VRAM usage.
    e.g. Mistral Large 2 can handle 128K content, however, it will require significant VRAM for the cache
    ```shell
-   gallama run -id "model_id=mistral_large max_seq_len=32768"
+   gallama run -id "model_name=mistral_large model_id=/path/to/mistral_large backend=exllamav3 max_seq_len=32768"
    ```
 
 5. Launch a model for embedding:
    ```shell
-   gallama run -id "model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
+   gallama run -id "model_name=gte-large-en-v1.5 model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
    ```
 
 6. Launch a model with speculative decoding:
@@ -506,7 +537,7 @@ Customize the model launch using various parameters. Available parameters for th
    For reference, by enabling speculative decoding, qwen2-72B generation speed improve from 20tok/s to 25-35tok/s on my 4090s.
    Highly recommend speculative decoding if you have VRAM to spare.
    ```shell
-   gallama run -id "model_id=qwen2-72B draft_model_id=qwen2-1.5B"
+   gallama run -id "model_name=qwen2-72B model_id=/path/to/qwen2-72B backend=exllama draft_model_id=/path/to/qwen2-1.5B"
    ```
    Ensure your GPU settings can accommodate the model requirements. Trial and adjust parameters as needed for your specific use case.
    Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.
@@ -521,7 +552,7 @@ Customize the model launch using various parameters. Available parameters for th
    Exllama tensor parallel support parallelism on odd number of GPUs. Also exact matching of GPU is not requirement
    The speed boost for TP for dense model is huge (close to X1.5-X2).
    ```shell
-   gallama run -id "model_id=qwen-2-72B draft_model_id=qwen-2-1.5B tp=True"
+   gallama run -id "model_name=qwen-2-72B model_id=/path/to/qwen-2-72B backend=exllama draft_model_id=/path/to/qwen-2-1.5B tp=True"
    ```
 8. Others
    If you keep gallama config folder in another location instead of `~home/gallama` then you can set env parameter `GALLAMA_HOME_PATH` when running. 
