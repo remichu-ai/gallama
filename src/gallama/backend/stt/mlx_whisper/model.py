@@ -4,7 +4,6 @@ import numpy as np
 
 from ....logger import logger
 from ....data_classes import ModelSpec, TranscriptionResponse, TimeStampedWord, LanguageType
-import soundfile as sf
 
 
 # faster whisper wont work. For now we import to reuse the data classes
@@ -14,9 +13,12 @@ try:
 except ImportError:
     TranscriptionOptions, TranscriptionInfo, Segment = None, None, None, None, None
 
-
-import mlx_whisper as mlx_model
-import mlx.core as mx
+try:
+    import mlx_whisper as mlx_model
+    import mlx.core as mx
+except ImportError:
+    mlx_model = None
+    mx = None
 
 
 class ASRMLXWhisper(ASRBase):
@@ -69,6 +71,8 @@ class ASRMLXWhisper(ASRBase):
         """
 
         if not isinstance(audio, np.ndarray):
+            import soundfile as sf
+
             audio_to_use, sample_rate = sf.read(audio)
         else:
             audio_to_use = audio

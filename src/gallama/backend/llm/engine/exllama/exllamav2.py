@@ -262,13 +262,16 @@ class ModelExllama(ModelInterface):
         return "{{VIDEO-PlaceHolderTokenHere}}"
 
 
-    def generate_eos_tokens_id(self) -> List[int]:
+    def generate_eos_tokens_id(self, tokenizer: ExLlamaV2Tokenizer = None) -> List[int]:
         """Generate the end-of-sequence token IDs."""
         if self.eos_token_str:
             # exllama
-            if ExLlamaV2Tokenizer and isinstance(self.tokenizer, ExLlamaV2Tokenizer):
-                eos_token_ids = [self.tokenizer.single_id(token) for token in self.eos_token_str]
-                return eos_token_ids
+            if tokenizer:
+                return [tokenizer.single_id(token) for token in self.eos_token_str]
+            elif self.tokenizer:
+                return [self.tokenizer.single_id(token) for token in self.eos_token_str]
+            else:
+                return []
         else:
             return []
 
@@ -378,20 +381,6 @@ class ModelExllama(ModelInterface):
         settings.temperature_last = False
 
         return settings
-
-    @staticmethod
-    def get_stop_word(text, stop_words) -> Union[str, None]:
-        """ this function will match the stop word used given the text that llm ended generation with and a list of stop_words."""
-
-        # sort the list by length to find the longest first
-        sorted_stop_words = sorted(stop_words, key=len, reverse=True)
-
-        text = text.lstrip()  # Remove trailing whitespace
-        for stop_word in stop_words:
-            if stop_word in text:
-                return stop_word
-
-        return None
 
     @staticmethod
     @lru_cache(1024)     # TODO set this dynamically
@@ -593,7 +582,7 @@ class ModelExllama(ModelInterface):
                         gen_queue_list.append(
                             GenQueueDynamic(existing_queue=queue, include_GenStats=True, include_GenEnd=True))
                     else:
-                        raise TypeError("gen_queue list must contain only GenQueue or GenQueueDynamic objects")
+                        raise TypeError(f"gen_queue list must contain only GenQueue or GenQueueDynamic objects. Received type is {type(queue)}")
             else:
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 

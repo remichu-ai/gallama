@@ -1,25 +1,33 @@
 import json
 import yaml
 from typing import List, Dict, Union, Literal
-from gallama.data_classes.data_class import BaseMessage, ChatMLQuery, ToolCall, MultiModalTextContent, MultiModalImageContent
+from gallama.data_classes.data_class import (
+    BaseMessage,
+    ChatMLQuery,
+    ToolCall,
+    MultiModalTextContent,
+    MultiModalImageContent,
+    MultiModalImageHFContent,
+    MultiModalAudioContent
+)
+from gallama.logger.logger import logger
 from pydantic import BaseModel
 from copy import deepcopy
 from gallama.utils.utils import parse_xml_to_dict
 from fastapi import HTTPException
 from pathlib import Path
 from textwrap import dedent
-from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import uuid
 
-class PromptEngine:
-    def __init__(self, prompt_format: str):
+
+class PromptEngineCustom:
+    def __init__(self, prompt_format: str| None = None, model_path: str = None):
+        self.model_prompt_all = self.get_prompt_token()
         self.system_msg_enabled = False
         self.tool_enabled = False
-        self.model_prompt_all = self.get_prompt_token()
-        if not self.model_prompt_all.get(prompt_format):
-            raise ValueError(f'Prompt format {prompt_format} not found in data/model_token.yaml')
-
         self.model_prompt = self.model_prompt_all.get(prompt_format)
+        if self.model_prompt is None:
+            raise ValueError(f'Prompt format {prompt_format} not found in data/model_token.yaml')
         self.system_msg_enabled = self.model_prompt.get("system_msg_enabled")
         self.tool_enabled = self.model_prompt.get("tool_enabled")
         self.eos_token_list = self.model_prompt.get("eos_token_list")
@@ -86,6 +94,31 @@ class PromptEngine:
     def get_image_pad_token(self):
         return self.model_prompt.get("image_pad", "")
 
+    def get_audio_start_token(self):
+        return self.model_prompt.get("audio_start", "")
+
+    def get_audio_end_token(self):
+        return self.model_prompt.get("audio_end", "")
+
+    def get_audio_pad_token(self):
+        return self.model_prompt.get("audio_pad", "")
+
+    def get_video_pad_token(self):
+        return self.model_prompt.get("video_pad", "")
+
+    @property
+    def thinking_start_token(self):
+        return self.model_prompt.get("thinking_start", "\n<think>\n")
+
+    @property
+    def thinking_end_token(self):
+        return self.model_prompt.get("thinking_start", "\n</think>\n")
+
+    @property
+    def thinking_skip_token(self):
+        return self.model_prompt.get("thinking_start", "\n<think>\n\n</think>\n")
+
+
     def _get_role_token(self, role, token_type: Literal["start", "end"]):
         if token_type == "start":
             if role == "system":
@@ -139,17 +172,17 @@ class PromptEngine:
 
         func_name = tool_call.function.name
         args_str = tool_call.function.arguments.replace('"', '')
-        return f"{func_name}({args_str})"
+        return f"{func_name}(**{args_str})"
 
     def _format_tool_result(self, msg: BaseMessage) -> str:
         content = msg.content if msg.content else ""
 
         try:
-            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
+            content = self._get_role_token(role="tool_result",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
         except:
-            content = self._get_role_token(role="user",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
+            content = self._get_role_token(role="tool_result",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(content) + "\n---\n\n"
 
-        return content + self._get_role_token(role="user",token_type="end")
+        return content + self._get_role_token(role="tool_result",token_type="end")
 
     def _format_tool_result_msg(self, msg: BaseMessage) -> str:
         """one msg might have multiple tool calls"""
@@ -287,15 +320,17 @@ class PromptEngine:
         for chunk in content:
             if isinstance(chunk, MultiModalTextContent):
                 content_str += chunk.text
-            elif isinstance(chunk, MultiModalImageContent):
+            elif isinstance(chunk, MultiModalImageContent) or isinstance(chunk, MultiModalImageHFContent):
                 if not exllama_vision_token:
                     content_str += self.get_vision_start_token() + self.get_image_pad_token() + self.get_vision_end_token()   # TODO
                 else:
                     # use a standard token as place holder, TODO - refractor
                     # content_str += "{{IMG-" + f"{uuid.uuid4().hex}" + "}}"
                     content_str += "{{IMG-PlaceHolderTokenHere}}"   #TODO use a constant instead
+            elif isinstance(chunk, MultiModalAudioContent):
+                content_str += self.get_audio_start_token() + self.get_audio_pad_token() + self.get_audio_end_token()
             else:
-                raise ValueError("Unexpected content type ")
+                raise ValueError(f"Unexpected content type {type(chunk)}")
 
         return content_str
 
@@ -307,13 +342,13 @@ class PromptEngine:
         answer_format_schema: bool = True,  # whether to add the instruction for tool calling answer schema
         prefix_prompt: str = "",
         leading_prompt: str = "",
-        use_thinking: bool = True,
         thinking_template: str = None,
         thinking_response: str = None,
         backend: Literal["exllama", "llama_cpp", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
         pydantic_tool_code: str = None,     # the code representation of tool
     ) -> str:
-        exllama_vision_token = (backend=="exllama")     # vision token in exllama is handled and assigned from the embedding itself
+        # vision token in exllama is handled and assigned from the embedding itself
+        exllama_vision_token = (backend=="exllama")
 
         def _create_leading_prompt(original_prompt, query_leading_prompt, model_leading_prompt):
             # add leading prompt from user or model
@@ -329,27 +364,9 @@ class PromptEngine:
 
             return _leading_prompt
 
-        thinking_example = ""
-
-        # thinking_example = dedent("""
-        # ### Thinking example:
-        # Question: Is dog or cat faster? Answer in Capital letter
-        # Apply thinking template:
-        # <format_restriction>Any specific format requirement from user</format_restriction>
-        # My thought process using the thinking template:
-        # <format_restriction>User request for answer in capital letter</format_restriction>
-        # Final answer:
-        # CAT
-        # End of Thinking Example.
-        # """).strip()
-
         msg_list_copy = []
 
         prompt = self.get_conversation_start_token()     # use arrange to story prompt
-
-        # add the default system prompt for artifact
-        if query.artifact != "No":
-            prompt += ARTIFACT_SYSTEM_PROMPT
 
         # standardize multimodal message
         for message in query.messages:
@@ -404,57 +421,20 @@ class PromptEngine:
 # End of Example of answer with Tool/ Function_calling usage.
 #
 # """
-        # TODO move the thinking_template check to request receiver
-        # initialize thinking_template_dict
-        thinking_template_dict = {}
-        root_key = None
-        if thinking_template:
-            try:
-                thinking_template_dict = parse_xml_to_dict(thinking_template)
-                if len(list(thinking_template_dict.keys())) > 1:
-                    raise HTTPException(status_code=400, detail=f"thinking_template must be a XML with only 1 root key")
 
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
+        prompt += self.get_conversation_end_token()
 
-            # find the XML root key
-            root_key = list(thinking_template_dict.keys())[0]
+        prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
 
-        # prompt creation with thinking_template
-        if use_thinking and thinking_template and not thinking_response:
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
-
-            prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
-                      f"{thinking_example}\n" + \
-                      "The thinking template i need to apply to answer this question is as follow:\n" + \
-                      thinking_template + "\n" + \
-                      f"My thinking using the above XML template as follow:\n\n```xml\n"
-            # add ending token
-            # prompt += self.get_conversation_end_token()
-
-        elif use_thinking and thinking_template and thinking_response:
-            # the thinking result is ready here
-            # root key need to be added as we use it for leading prompt in the prompt creation above so it is not part of the response
-            prompt += "\nNow, before answering the question, I am required to apply XML thinking template to guide my internal thinking process.\n" + \
-                      f"{thinking_example}\n" + \
-                      "Now, the thinking template i need to apply to answer this question is:\n" + \
-                      thinking_template + "\n" + \
-                      f"My thinking using the XML template as follow:\n```xml\n{thinking_response}\n" + \
-                      "Now answer the question. Remember that the thinking above is INVISIBLE to user, " + \
-                      "and you are PROHIBITED to mentioned to user about the existence of Thinking section. You are ALLOWED to reiterate points from thinking section to user if necessary."
-
-            # add ending token
-            prompt += self.get_conversation_end_token()
-
-            # for thinking response, we put it before the leading prompt
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
-
+        if query.use_thinking=="Skip":
+            prompt += self.thinking_skip_token
+        elif query.use_thinking:
+            prompt += self.thinking_start_token
         else:
-            # add ending token
-            prompt += self.get_conversation_end_token()
+            # let model generate naturally
+            pass
 
-            prompt += _create_leading_prompt(prompt, query.leading_prompt, self.leading_prompt_token())
-
+        prompt += thinking_response if thinking_response else ""
 
         # add leading_prompt from code which is usually tool related
         # e.g. ```json
@@ -465,3 +445,6 @@ class PromptEngine:
 
         # match tool call result #TODO
 
+    @property
+    def tag_definitions(self):
+        return None

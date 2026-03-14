@@ -2,8 +2,6 @@ from .server_dataclass import (
     ModelRequest,
     ModelInstanceInfo,
     ModelInfo,
-    AgentWithThinking,
-    MixtureOfAgents,
     StopModelByPort
 )
 
@@ -24,7 +22,14 @@ from .data_class import (
     ChatCompletionResponse,
     UsageResponse,
     MultiModalTextContent,
-    MultiModalImageContent
+    MultiModalImageContent,
+    TagDefinition
+)
+
+# anthropic
+from .data_class import (
+    AnthropicMessagesRequest,
+    AnthropicStopReason
 )
 
 from .audio_data_class import (

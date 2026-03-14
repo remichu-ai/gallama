@@ -5,9 +5,12 @@ from ...data_classes.data_class import (
     ModelSpec
 )
 from ...utils.utils import floats_to_base64
-from typing import Dict
 import logging
-from infinity_emb import EngineArgs, AsyncEmbeddingEngine
+try:
+    from infinity_emb import EngineArgs, AsyncEmbeddingEngine
+except:
+    EngineArgs = None
+    AsyncEmbeddingEngine = None
 
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)      # disable logging from infinity

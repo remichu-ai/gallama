@@ -1,28 +1,29 @@
 from abc import ABC, abstractmethod
-from typing import Dict, List, Union, Optional, Literal, Callable, Tuple
+from typing import List, Union, Optional, Literal, Callable, Tuple
 import asyncio
 import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
-import textwrap
 
 # logger
-from gallama.logger import logger
+from ....logger import logger
 
 # format enforcement
 from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
 from formatron.formatter import FormatterBuilder
 from formatron.schemas.pydantic import ClassSchema
-from gallama.backend.llm.format_enforcer import FormatEnforcer
+from ....backend.llm.format_enforcer import FormatEnforcer
 
 # thinking
-from gallama.backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
+from ....backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
 
 # function calling
-from gallama.backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
+from ....backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
 
-from gallama.utils.utils import get_token_length
-from gallama.api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
-from gallama.data_classes import (
+from ....utils.utils import get_token_length
+from ....api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
+from ..format_enforcer import SGLangFormatter
+
+from ....data_classes import (
     ModelSpec,
     ChatMLQuery,
     GenEnd,
@@ -34,11 +35,12 @@ from gallama.data_classes import (
     GenQueueDynamic,
     VideoFrame,
     MultiModalTextContent,
-    MultiModalImageContent
+    MultiModalImageContent,
+    ToolForce
 )
 from ....config.config_manager import ConfigManager
 # handle prompting
-from gallama.backend.llm.prompt_engine import PromptEngine
+from gallama.backend.llm.prompt_engine.prompt_engine import PromptEngine
 from dataclasses import dataclass
 
 # video handling
@@ -59,7 +61,10 @@ class ModelInterface(ABC):
         # if a backend does not support the value, please set it in the __init__ or load_model()
 
         # load prompt engine
-        self.prompt_eng = PromptEngine(prompt_format=model_spec.prompt_template)
+        self.prompt_eng = PromptEngine(
+            prompt_format=model_spec.prompt_template,
+            model_path = model_spec.model_id
+        )
 
         # model_spec capture cli argument
         # model_config is from yml file
@@ -82,7 +87,7 @@ class ModelInterface(ABC):
                 self.cache_size = max(self.cache_size, self.max_seq_len)
 
         # self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
-        self.cache_quant = model_spec.cache_quant or "Q6"       # default to cache quant 6
+        self.cache_quant = model_spec.cache_quant or None       # default to FP16
         # self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.backend = model_spec.backend   # default should be set as exllama if not defined
         # self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
@@ -112,7 +117,7 @@ class ModelInterface(ABC):
         # get the eos_token_str by merging the default config with anything set by user
         self.eos_token_str = list(set(model_spec.eos_token_list + self.prompt_eng.eos_token_list))
         self.eos_token_str_set = set(self.eos_token_str)    # set for some more efficient operation
-
+        logger.info(f"EOS tokens: {self.eos_token_str}")
         # load_model method in each subclass should set the following parameters:
         self.model = None
         self.tokenizer = None
@@ -172,7 +177,7 @@ class ModelInterface(ABC):
         gen_type: Union[str, GenStart] = "text", # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -276,24 +281,123 @@ class ModelInterface(ABC):
 
         query = self.validate_video_support(query)
 
-        # set the suitable method for tool calling
-        if (query.tools or query.tool_choice != "none") and self.support_tool:
-            chat_method = self.chat_with_tool_v2
-        else:
-            # enforce tool_choice to none if it is backend issue
-            if not self.support_tool:
-                logger.info("Tool not supported for this backend")
-                query.tool_choice = "none"
-
-            chat_method = self.chat_no_tool
+        json_schema = None
+        prefix_strings = query.prefix_strings
 
         try:
-            await chat_method(
-                query=query,
-                prompt_eng=prompt_eng,
+            prompt, gen_start = prompt_eng.get_prompt(
+                query
+            )
+
+            # check if json schema enforced
+            if query.response_format and query.response_format.type=="json_schema":
+                json_schema = query.response_format.json_schema.schema_
+
+            else:
+                # currently these mode can not be used together:
+                # - tool enforcement
+                # - json_object
+                # - prefix_strings
+
+                # Handle Tool force
+                # check and log
+                _tool_force = (query.tools and query.tool_choice != "none" and query.tool_choice is not None) or False
+                _json_object = (query.response_format and query.response_format.type=="json_object") or False
+                _prefix_string = query.prefix_strings or False
+                if sum([_tool_force, _json_object, _prefix_string]) >= 2:
+                    logger.info("""
+    currently these mode can not be used together, the precedence will be:
+    - tool enforcement
+    - json_object
+    - prefix_strings """)
+
+
+                if _json_object:
+                    prefix_strings = ['{"']
+
+                if query.tools and query.tool_choice != "none" and query.tool_choice is not None:
+
+                    tool_tag = prompt_eng.tag_dict.get("tool") if prompt_eng.tag_dict else None
+
+                    # 1st scenario: tool is forced but no specific one
+                    if query.tool_choice == "required":
+                        prefix_strings = ['{\n "functions_calling": [{"name:"']
+
+                        # check for custom tool init prompt
+                        if tool_tag and tool_tag.prompt_init:
+                            prefix_strings = [tool_tag.prompt_init()]
+
+                    # 2nd scenario: specific tool is forced
+                    elif isinstance(query.tool_choice, ToolForce):
+                        prefix_strings = ['{\n "functions_calling": [{"name": "{' + query.tool_choice.function.name + '}"']
+
+                        # check for custom tool init prompt
+                        if tool_tag and tool_tag.prompt_init:
+                            prefix_strings = [tool_tag.prompt_init(query.tool_choice.function.name)]
+
+                if prefix_strings:
+                    logger.info(f"prefix string: {prefix_strings}")
+
+            if prompt_eng.is_thinking and (prefix_strings or json_schema):
+                # split the generation into 2 set, the first set is for thinking
+
+                # get the ending of thinking token:
+                thinking_tag = prompt_eng.tag_dict.get("thinking")
+
+                if thinking_tag:
+                    stop_words = query.stop_words if query.stop_words else []
+                    stop_words.append(thinking_tag.end_marker)
+
+                    generation_args = {
+                        'temperature': query.temperature,
+                        'top_p': query.top_p,
+                        'gen_type': GenStart(gen_type=gen_start),
+                        # 'formatter': self.formatter,
+                        # add endtag of thinking as stop token
+                        'stop_words': stop_words,
+                        'max_tokens': query.max_tokens,
+                        # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
+                        # 'banned_strings': banned_strings,
+                        'request': request,
+                        'stop_event': stop_event,
+                        'video': query.video,
+                        'vision_token': prompt_eng.vision_token,
+                        'send_eos': False,      # suppress eos
+                        'return_stop_word': True,
+                    }
+
+                    partial_response = await self.generate(
+                        prompt=prompt,
+                        messages=query.messages,
+                        gen_queue=gen_queue,
+                        **generation_args
+                    )
+
+                    # append this to the prompt
+                    prompt += partial_response
+
+            generation_args = {
+                'temperature': query.temperature,
+                'top_p': query.top_p,
+                'gen_type': GenStart(gen_type=gen_start),
+                # 'formatter': self.formatter,
+                'stop_words': query.stop_words,
+                'max_tokens': query.max_tokens,
+                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
+                # 'banned_strings': banned_strings,
+                'request': request,
+                'stop_event': stop_event,
+                'video': query.video,
+                'vision_token': prompt_eng.vision_token,
+                'json_schema': json_schema,
+                'return_stop_word': query.return_stop_word,
+            }
+
+            await self.generate(
+                prompt=prompt,
+                messages=query.messages,
                 gen_queue=gen_queue,
-                request=request,
-                stop_event=stop_event,
+                **generation_args
             )
         except Exception as e:
             if stop_event.is_set():
@@ -335,17 +439,33 @@ class ModelInterface(ABC):
             raise HTTPException(status_code=400, detail=f"Token length exceeds max length of {self.max_seq_len}")
 
 
-    async def chat_no_tool(
+    @staticmethod
+    def get_stop_word(text, stop_words) -> Union[str, None]:
+        """ this function will match the stop word used given the text that llm ended generation with and a list of stop_words."""
+
+        if stop_words:      # sgl return stop word stop reason for matched eos
+            # sort the list by length to find the longest first
+            sorted_stop_words = sorted(stop_words, key=len, reverse=True)
+
+            text = text.lstrip()  # Remove trailing whitespace
+            for stop_word in stop_words:
+                if stop_word in text:
+                    return stop_word
+
+        return None
+
+
+    async def chat_no_tool_v3(
         self,
         query: ChatMLQuery,
         prompt_eng: PromptEngine,
-        gen_queue, request: Request,
+        gen_queue,
+        request: Request,
         stop_event: asyncio.Event = None
     ):
 
         prompt = prompt_eng.get_prompt(
             query,
-            thinking_template=query.thinking_template,
             backend=self.backend
         )
 
@@ -363,50 +483,6 @@ class ModelInterface(ABC):
 
         token_length_prompt = get_token_length(self.tokenizer, prompt)
         self.validate_token_length(token_length_prompt)
-
-        # think template prompting
-        if query.thinking_template:
-            try:
-                thinking = Thinking(query.thinking_template)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"thinking_template is not valid XML string")
-
-            # Not returning thinking
-            thinking_queue = GenQueue()
-            if query.return_thinking:
-                # return thinking to front end
-                queue_group = [
-                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
-                    QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
-                ]
-            else:
-                # not return thinking to front end
-                queue_group = [
-                    QueueContext.create(gen_queue=thinking_queue, include_GenEnd=True, include_GenStats=False),
-                ]
-
-            await self.generate(
-                prompt,
-                messages=query.messages,
-                gen_type="thinking",
-                gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
-                prefix_strings=f"<{thinking.root_tag}>",
-                stop_words=thinking.root_key_stop_words,
-                request=request,
-                stop_event=stop_event,
-                video=query.video,
-            )
-            thinking_response, _ = await get_response_from_queue(thinking_queue)
-
-            # Get the new prompt with thinking response
-            prompt = prompt_eng.get_prompt(
-                query,
-                thinking_template=query.thinking_template,
-                thinking_response=thinking_response,
-                backend=self.backend
-            )
 
         # 1st response if there is regex to match the regex pattern
         first_response = ""
@@ -441,28 +517,83 @@ class ModelInterface(ABC):
         # set prefix string
         prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
-        # Handle Artifact mode: overwrite prefix_strings if in artifact mode
-        stop_words_to_use = query.stop_words
-        banned_strings = None
-        if query.artifact and query.artifact == "Fast":
-            prefix_strings = None
-            manual_prefix_string = "<answer>\n "
-            prompt += manual_prefix_string
+        await self.generate(
+            prompt=prompt,
+            messages=query.messages,
+            gen_queue=gen_queue,
+            **{
+                'temperature': query.temperature,
+                'top_p': query.top_p,
+                'formatter': formatter_regex,
+                'stop_words': query.stop_words,
+                'max_tokens': query.max_tokens,
+                'prefix_strings': prefix_strings,
+                'request': request,
+                'stop_event': stop_event,
+                'video': query.video,
+            }
+        )
 
-            # ban XML comment format which could mess up the parsing of output
-            banned_strings = ["<![CDATA[", "<!--"]
+    async def chat_no_tool(
+        self,
+        query: ChatMLQuery,
+        prompt_eng: PromptEngine,
+        gen_queue, request: Request,
+        stop_event: asyncio.Event = None
+    ):
 
-            # add the stopword for artifact tag to the answer
-            if isinstance(stop_words_to_use, list):
-                stop_words_to_use.append("</answer>")
-            elif isinstance(stop_words_to_use, str):
-                stop_words_to_use = [stop_words_to_use, "</answer>"]
-            else:
-                stop_words_to_use = "</answer>"
+        prompt = prompt_eng.get_prompt(
+            query,
+            backend=self.backend
+        )
 
-            # add the initial string as prefix_strings can not be used together with banned_strings
-            chunk = GenText(content=manual_prefix_string)
-            gen_queue.put_nowait(chunk)
+        formatter_prefix_regex = self.formatter.regex(
+            query.regex_prefix_pattern,
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        ) if query.regex_prefix_pattern else None
+
+        formatter_regex = self.formatter.regex(
+            query.regex_pattern,
+            backend=self.backend,
+            preference=query.guided_decoding_backend
+        ) if query.regex_pattern else None
+
+        token_length_prompt = get_token_length(self.tokenizer, prompt)
+        self.validate_token_length(token_length_prompt)
+
+        # 1st response if there is regex to match the regex pattern
+        first_response = ""
+
+        if query.regex_prefix_pattern:
+            prefix_queue = GenQueue()
+            queue_group = [
+                QueueContext.create(gen_queue=prefix_queue, include_GenEnd=True, include_GenStats=False),
+                QueueContext.create(gen_queue=gen_queue, include_GenEnd=False, include_GenStats=False)
+            ]
+
+            await self.generate(
+                prompt,
+                messages=query.messages,
+                gen_queue=queue_group,
+                temperature=query.temperature,
+                top_p=query.top_p,
+                formatter=formatter_prefix_regex,
+                prefix_strings=query.prefix_strings,
+                request=request,
+                # stop_words=query.stop_words,
+                stop_event=stop_event,
+                video=query.video,
+            )
+
+            first_response, _ = await get_response_from_queue(prefix_queue)
+
+            # append generated content to the full prompt
+            prompt = prompt.strip() + first_response.strip()
+
+        # Final generation to return to client
+        # set prefix string
+        prefix_strings = None if query.regex_prefix_pattern else query.prefix_strings
 
         await self.generate(
             prompt=prompt,
@@ -472,10 +603,9 @@ class ModelInterface(ABC):
                 'temperature': query.temperature,
                 'top_p': query.top_p,
                 'formatter': formatter_regex,
-                'stop_words': stop_words_to_use,
+                'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
-                'prefix_strings': prefix_strings,  # already generated as part of the prefix string
-                'banned_strings': banned_strings,
+                'prefix_strings': prefix_strings,
                 'request': request,
                 'stop_event': stop_event,
                 'video': query.video,
@@ -513,7 +643,7 @@ class ModelInterface(ABC):
         )
 
         # perform generation with tool thinking to evaluate if it is necessity to call a tool
-        prompt = prompt_eng.get_prompt(
+        prompt, gen_start = prompt_eng.get_prompt(
             query,
             pydantic_tool_dict=tool_handler.tool_dict,
             thinking_template=tool_thinking_formatted,
@@ -918,13 +1048,136 @@ response(""" + _tool_answer_prefix
 
 
 
-    async def chat_with_tool_v2(
+    async def chat_with_tool_v3(
         self,
         query: ChatMLQuery,
         prompt_eng: PromptEngine,
         gen_queue: GenQueueDynamic,
         request: Request,
         stop_event: asyncio.Event = None
+    ):
+        """
+        handle tool calling llm generation
+        """
+
+        # tool class have the method to handle converting processing or tool requirement, schema and response
+        tool_handler = Tools(
+            prompt_eng=prompt_eng,
+            tools=query.tools,
+            tool_choice=query.tool_choice,
+        )
+
+
+        no_tool = await self._no_tool_task(
+            prompt_eng=prompt_eng,
+            query=query,
+            request=request
+        )
+
+
+        tasks = []  # to track the task running
+
+        tool_decision_task = None
+        tool_task = None
+        no_tool_task = None
+
+
+        # ensure result is out for decision
+        tool_decision_outcome: Literal["user", "function"] = "function"
+
+        if self.support_concurrency:
+            # tool task will always be run. It is assumed that if this function is called, tool generation is required
+            tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
+            tasks.append(tool_task)
+
+            # if mode is auto, run the tool usage decision generation
+            if query.tool_choice == "auto":
+                tool_decision_task = asyncio.create_task(self.generate(**tool_decision.generate_kwargs))
+                tasks.append(tool_decision_task)
+
+                no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
+                tasks.append(no_tool_task)
+
+                tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+
+
+            if tool_decision == "function" or tool_decision_check_fn(tool_decision_outcome):
+                logger.info("Tool auto decision: function")
+
+                _has_tool = True
+
+                # check first if tool managed to generate
+                if tool_call.gen_dynamic_queue[0].qsize() < 3:
+                    max_wait_time = 3
+                    interval = 0.1
+                    elapsed = 0.0
+
+                    while elapsed < max_wait_time:
+                        await asyncio.sleep(interval)
+                        if tool_call.gen_dynamic_queue[0].qsize() >= 3:
+                            logger.debug(f"Time required to start function calling: {elapsed}")
+                            break
+                        elapsed += interval
+
+                    if tool_call.gen_dynamic_queue[0].qsize() < 3:
+                        _has_tool = False
+
+
+                if _has_tool:
+                    if no_tool:
+                        no_tool.stop_event.set()
+
+                    # swap queue for output to function calling
+                    gen_queue.swap(tool_call.gen_dynamic_queue[0])
+                else:
+                    # tool not managed to generate, fall back to standard reply
+                    tool_call.stop_event.set()
+
+                    # swap queue non function calling
+                    gen_queue.swap(no_tool.gen_dynamic_queue[0])
+
+            else:
+                logger.info("Tool auto decision: user")
+                if tool_call:
+                    tool_call.stop_event.set()
+
+                # swap queue non function calling
+                gen_queue.swap(no_tool.gen_dynamic_queue[0])
+
+            # Wait for the remaining tasks to complete (if needed)
+            try:
+                await asyncio.gather(*tasks)
+            except Exception as e:
+                logger.error(f"Error in one of the tasks: {e}")
+
+        else:   # non concurrency backend
+            # if on auto mode
+            # first generate what is the decision regarding whether use tool or not
+            if tool_decision:     # not decided yet
+                tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
+                tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+
+            # handle tool/ non tool generation
+            if tool_decision_check_fn(tool_decision_outcome):
+                logger.info("Tool auto decision: function")
+                tool_task = asyncio.create_task(self.generate(**tool_call.generate_kwargs))
+
+                # swap queue for output to function calling
+                gen_queue.swap(tool_call.gen_dynamic_queue[0])
+            else:
+                logger.info("Tool auto decision: user")
+                no_tool_task = asyncio.create_task(self.generate(**no_tool.generate_kwargs))
+
+                # swap queue non function calling
+                gen_queue.swap(no_tool.gen_dynamic_queue[0])
+
+    async def chat_with_tool_v2(
+            self,
+            query: ChatMLQuery,
+            prompt_eng: PromptEngine,
+            gen_queue: GenQueueDynamic,
+            request: Request,
+            stop_event: asyncio.Event = None
     ):
         """
         handle tool calling llm generation
@@ -973,7 +1226,7 @@ def run_function(arg_dict):
         function_name = call["name"]
         arguments = call["arguments"]
         globals()[function_name](**arguments)
-        
+
 allow_functions = [""" + tool_handler.tool_name_list + """]
 
 def response(""" + _tool_thinking_fn_header + """to: Literal["user","function"], arg_dict: Optional[List[]]=[]):
@@ -1012,6 +1265,7 @@ End of Function Calling Instruction
 ---
 """
 
+        # handling the "auto scenario"
 
         tool_call = await self._tool_calling_task(
             prompt_eng=prompt_eng,
@@ -1021,27 +1275,32 @@ End of Function Calling Instruction
             tool_as_code_prompt=tool_as_code_prompt
         )
 
-        tool_decision, tool_decision_check_fn = await self._tool_decision_task(
-            prompt_eng=prompt_eng,
-            query=query,
-            request=request,
-            tool_handler=tool_handler,
-            tool_as_code_prompt=tool_as_code_prompt
-        )
+        if query.tool_choice == "auto":
+            tool_decision, tool_decision_check_fn = await self._tool_decision_task(
+                prompt_eng=prompt_eng,
+                query=query,
+                request=request,
+                tool_handler=tool_handler,
+                tool_as_code_prompt=tool_as_code_prompt
+            )
 
-
-        no_tool = await self._no_tool_task(
-            prompt_eng=prompt_eng,
-            query=query,
-            request=request
-        )
+            no_tool = await self._no_tool_task(
+                prompt_eng=prompt_eng,
+                query=query,
+                request=request
+            )
+        else:
+            # tool usage is enforced
+            tool_decision = None
+            tool_decision_outcome = "function"
+            tool_decision_check_fn = lambda *args, **kwargs: True
+            no_tool = None
 
         tasks = []  # to track the task running
 
         tool_decision_task = None
         tool_task = None
         no_tool_task = None
-
 
         # ensure result is out for decision
         tool_decision_outcome: Literal["user", "function"] = "function"
@@ -1061,15 +1320,23 @@ End of Function Calling Instruction
 
                 tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
 
-
-            if tool_decision_check_fn(tool_decision_outcome):
+            if tool_decision == "function" or tool_decision_check_fn(tool_decision_outcome):
                 logger.info("Tool auto decision: function")
 
                 _has_tool = True
 
                 # check first if tool managed to generate
                 if tool_call.gen_dynamic_queue[0].qsize() < 3:
-                    await asyncio.sleep(0.3)    # wait for 0.3 more second
+                    max_wait_time = 3
+                    interval = 0.1
+                    elapsed = 0.0
+
+                    while elapsed < max_wait_time:
+                        await asyncio.sleep(interval)
+                        if tool_call.gen_dynamic_queue[0].qsize() >= 3:
+                            logger.debug(f"Time required to start function calling: {elapsed}")
+                            break
+                        elapsed += interval
 
                     if tool_call.gen_dynamic_queue[0].qsize() < 3:
                         _has_tool = False
@@ -1101,10 +1368,12 @@ End of Function Calling Instruction
             except Exception as e:
                 logger.error(f"Error in one of the tasks: {e}")
 
-        else:   # non concurrency backend
+        else:  # non concurrency backend
+            # if on auto mode
             # first generate what is the decision regarding whether use tool or not
-            tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
-            tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
+            if tool_decision:  # not decided yet
+                tool_decision_task = await self.generate(**tool_decision.generate_kwargs)
+                tool_decision_outcome, _ = await get_response_from_queue(tool_decision.gen_dynamic_queue)
 
             # handle tool/ non tool generation
             if tool_decision_check_fn(tool_decision_outcome):
@@ -1119,7 +1388,3 @@ End of Function Calling Instruction
 
                 # swap queue non function calling
                 gen_queue.swap(no_tool.gen_dynamic_queue[0])
-
-
-
-

@@ -1,4 +1,34 @@
-from .exllama.exllamav2 import ModelExllama
-from .llamacpp.llamacpp import ModelLlamaCpp
-from .transformers.transformers import ModelTransformers
-from .mlx_vllm.mlx_vlm import ModelMLXVLM
+try:
+    from .exllama import ModelExllama
+except ImportError:
+    ModelExllama = None
+
+try:
+    from .llamacpp import ModelLlamaCpp
+except ImportError:
+    ModelLlamaCpp = None
+
+try:
+    from .transformers import ModelTransformers
+except ImportError:
+    ModelTransformers = None
+
+try:
+    from .mlx_vllm import ModelMLXVLM
+except ImportError:
+    ModelMLXVLM = None
+
+try:
+    from .sglang import ModelSGLang
+except ImportError:
+    ModelSGLang = None
+
+try:
+    from .exllamav3 import ModelExllamaV3
+except ImportError:
+    ModelExllamaV3 = None
+
+try:
+    from .vllm import ModelVLLM
+except ImportError:
+    ModelVLLM = None

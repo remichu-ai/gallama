@@ -9,8 +9,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from collections import defaultdict
 from typing import Union
 from gallama.data_classes.data_class import ModelSpec
-from gallama.data_classes import  ModelInstanceInfo,  ModelInfo, AgentWithThinking
-from gallama.server_engine import handle_mixture_of_agent_request, create_options_response
+from gallama.data_classes import  ModelInstanceInfo,  ModelInfo
+from gallama.server_engine import create_options_response
 from gallama.utils import parse_request_body
 from typing import List, Dict
 from gallama.config import ConfigManager
@@ -308,7 +308,7 @@ async def model_loader():
         await asyncio.sleep(1)
 
 
-async def wait_for_model_ready(port, timeout=300):  # 5 minutes timeout
+async def wait_for_model_ready(port, timeout=600):  # 10 minutes timeout
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
@@ -337,8 +337,20 @@ async def run_model(model_spec: ModelSpec):
 
         server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
 
-        model_config = config_manager.configs.get(model_spec.model_name)
+        model_config = config_manager.configs.get(model_spec.model_name) or {}
         backend = model_spec.backend or model_config.get('backend')
+        if not backend:
+            raise ValueError(
+                f"backend is required to start model '{model_spec.model_name}' when it is not defined in model_config.yaml"
+            )
+
+        # Create a copy of the current environment
+        env = os.environ.copy()
+
+        # Set CUDA_VISIBLE_DEVICES
+        env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
+        server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
+        env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
@@ -353,29 +365,24 @@ async def run_model(model_spec: ModelSpec):
             # Determine the correct Python executable
             python_exec = shutil.which("python3") or shutil.which("python")
 
-            if backend == "exllama":
+            if backend in ["exllama", "exllamav3"]:
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
                     stdout=asyncio.subprocess.DEVNULL,
+                    env=env,
                     # stderr=asyncio.subprocess.DEVNULL,
                 )
             else:
                 # other than exllama, we will use env setting to set visible GPUs
                 # CUDA_VISIBLE_DEVICES constraints before launching fastapi
 
-                # Create a copy of the current environment
-                env = os.environ.copy()
-
-                # Set CUDA_VISIBLE_DEVICES
-                env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
-
                 # model_cli_args = model.to_arg_string()
                 # server_logger.debug(f"model cli: {model_cli_args}")
                 process = await asyncio.create_subprocess_exec(
                     python_exec, app_path, "--model-spec", model_b64, "--detached", "--port", str(port),
-                    stdout=asyncio.subprocess.DEVNULL,
+                    # stdout=asyncio.subprocess.DEVNULL,
                     # stderr=asyncio.subprocess.DEVNULL,
                     env=env  # Pass the modified environment to the subprocess
                 )
@@ -455,27 +462,6 @@ async def get_instance_for_model(model: str):
     return min(running_instances, key=lambda inst: active_requests[inst.port])
 
 
-async def forward_to_multiple_agents(request: Request, agent_list: List[Union[str, AgentWithThinking]], modified_body: str, modified_headers: str):
-    tasks = []
-    for agent in agent_list:
-        if isinstance(agent, str):
-            instance = await get_instance_for_model(agent)
-            tasks.append(forward_request(request, instance, modified_body, modified_headers))
-        elif isinstance(agent, AgentWithThinking):
-            instance = await get_instance_for_model(agent.model)
-            if agent.thinking_template:
-                # Modify the request to include the thinking in the thinking_template field
-                agent_body = json.loads(modified_body)
-                agent_body["thinking_template"] = agent.thinking_template
-                agent_modified_body = json.dumps(agent_body).encode()
-                agent_modified_headers = dict(modified_headers)
-                agent_modified_headers["content-length"] = str(len(agent_modified_body))
-                tasks.append(forward_request(request, instance, agent_modified_body, agent_modified_headers))
-            else:
-                tasks.append(forward_request(request, instance, modified_body, modified_headers))
-    return await asyncio.gather(*tasks)
-
-
 
 async def load_balanced_router(request: Request, path: str):
     server_manager = get_server_manager()
@@ -488,9 +474,6 @@ async def load_balanced_router(request: Request, path: str):
 
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
-
-    if isinstance(body_json, dict) and body_json.get("mixture_of_agents", False):
-        return await handle_mixture_of_agent_request(request, body_json, server_manager.models, active_requests)
 
     model = await get_model_from_body(request)
 
@@ -705,4 +688,3 @@ if __name__ == "__main__":
     args = arg_parser.parse_args()
 
     run_from_script(args)
-

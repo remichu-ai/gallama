@@ -2,7 +2,6 @@ from dataclasses import dataclass
 import numpy as np
 from typing import Optional, List, Dict, Tuple
 import torch
-from silero_vad import VADIterator, load_silero_vad
 from .audio_buffer import AudioBufferWithTiming
 from ...data_classes.realtime_client_proto import TurnDetectionConfig
 from gallama.logger import logger
@@ -17,6 +16,8 @@ class VADProcessor:
 
         # Initialize Silero VAD
         try:
+            from silero_vad import VADIterator, load_silero_vad
+
             self.model = load_silero_vad()
             self.model.eval()
             self.vad_iterator = VADIterator(

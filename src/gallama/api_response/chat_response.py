@@ -1,8 +1,10 @@
 from fastapi import Request
+
+from .api_formatter import OpenAIFormatter, AnthropicFormatter, ParsedContentBlock
+from .stream_parser_v2 import StreamParserByTag, DummyParser
 from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
-    Choice,
     ChatMessage,
     UsageResponse,
     OneTool,
@@ -15,6 +17,11 @@ from ..data_classes.data_class import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
     TextTag,
+    TagDefinition,
+    AnthropicMessagesResponse,
+    AnthropicTextBlock,
+    AnthropicToolUseBlock,
+    AnthropicUsage,
 )
 from ..data_classes.generation_data_class import (
     GenerationStats,
@@ -25,14 +32,14 @@ from ..data_classes.generation_data_class import (
     GenQueueDynamic
 )
 
-from .stream_parser import StreamParser
-from typing import AsyncIterator, List
-from gallama.utils.utils import get_response_uid, get_response_tool_uid
-from gallama.logger.logger import logger
+from typing import AsyncIterator, List, Dict, Literal, Union
+from ..utils.utils import get_response_uid, get_response_tool_uid
+from ..logger import logger
 from pydantic.json import pydantic_encoder
 import time
 import json
 import asyncio
+import uuid
 
 
 async def get_response_from_queue(
@@ -72,344 +79,242 @@ async def get_response_from_queue(
 
 async def chat_completion_response_stream(
     query: ChatMLQuery,
-    gen_queue: GenQueue,
+    gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
+    provider: Literal["openai", "anthropic"],
+    tag_definitions: List[TagDefinition] = None
 ) -> AsyncIterator[dict]:
-    unique_id = get_response_uid()
-    created = int(time.time())
+
+    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
+    formatter = formatter_class(model_name=model_name)
+
+    text_tag = TagDefinition(tag_type="text", api_tag="content")
+
+    if tag_definitions is not None:
+        stream_parser = StreamParserByTag(tag_definitions=tag_definitions, default_tag_type=text_tag)
+    else:
+        stream_parser = DummyParser()
+
     full_response = ""
     eos = False
-    gen_type = "text"  # Default generation type
     gen_stats = None
+    state = {}
 
-    # no streaming of tool use at the moment
-    accumulated_tool_text = ""
+    current_tag = text_tag
+    current_text = ""
+
+    def process_and_format_chunk(tag: TagDefinition, text: str):
+        try:
+            extra_args = {"model_name": model_name, "unique_id": formatter.unique_id, "state": state}
+            _processed_text = tag.post_processor(text, extra_args)
+            _api_tag = tag.api_tag
+            _role = tag.role
+        except Exception as e:
+            logger.error(f"Error in post-processor: {e}")
+            logger.info("Fall back to text tag")
+            _processed_text, _api_tag, _role = text, text_tag.api_tag, text_tag.role
+
+        try:
+            return formatter.stream_chunk(api_tag=_api_tag, text=_processed_text, role=_role)
+        except Exception as e:
+            logger.error(f"Error in stream_chunk formatting: {e}")
+            raise e
+
+    # Emit starting event(s)
+    for event in formatter.stream_start():
+        yield event
 
     while not eos:
         accumulated_text = ""
-        accumulated_thinking = ""
-
-
         try:
             while True:
                 item = gen_queue.get_nowait()
                 if isinstance(item, GenText):
-                    if item.text_type == "tool":
-                        accumulated_tool_text += item.content
-                    elif item.text_type == "thinking":
-                        accumulated_thinking += item.content
-                    else:  # text type
-                        accumulated_text += item.content
+                    accumulated_text += item.content
                 elif isinstance(item, GenEnd):
                     eos = True
                     break
                 elif isinstance(item, GenStart):
-                    gen_type = item.gen_type
+                    logger.info(f"Stream starts with {item.gen_type}")
+                    if current_tag != item.gen_type:
+                        current_tag = item.gen_type
+                        try:
+                            stream_parser.push_tag_context(item.gen_type)
+                        except Exception as e:
+                            logger.error(e)
                 elif isinstance(item, GenerationStats):
                     gen_stats = item
-
         except asyncio.QueueEmpty:
-            await asyncio.sleep(0.01)  # Sleep for 100ms (adjust as needed)
+            await asyncio.sleep(0.01)
 
+        if accumulated_text or eos:
+            full_response += accumulated_text
+            parsed_text = stream_parser.process_stream(accumulated_text)
 
-        if accumulated_text or accumulated_thinking:
-            full_response += accumulated_thinking + accumulated_text
+            if eos:
+                parsed_text.extend(stream_parser.flush())
 
-            if gen_type == "text" or gen_type == "thinking":
-                if query.return_thinking is True and accumulated_thinking:
-                    if accumulated_text:
-                        accumulated_text = "\n" + accumulated_text
-                    accumulated_text = accumulated_thinking + accumulated_text
+            if parsed_text:
+                for _tag, _text_chunk in parsed_text:
+                    if current_tag != _tag:
+                        logger.info(f"new tag: {_tag}")
+                        if current_text:
+                            # 1. Open block via formatter
+                            for e in formatter.open_block(current_tag.api_tag):
+                                yield e
 
-                if accumulated_thinking and query.return_thinking == "separate":
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChoiceDelta(
-                                    thinking=accumulated_thinking,
-                                )
-                            )
-                        ]
-                    )
-                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+                            # 2. Yield chunks
+                            if chunk := process_and_format_chunk(current_tag, current_text):
+                                for c in chunk:
+                                    yield c
 
-                if accumulated_text:
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChoiceDelta(
-                                    content=accumulated_text,
-                                )
-                            )
-                        ]
-                    )
-                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+                            current_text = ""
 
-        # currently not support partial streaming of tool use
-        if eos and accumulated_tool_text:
-            # We'll try to parse it as JSON but if it fails, we'll just stream it as is
-            try:
-                # If this is the start of a tool call (containing the function name)
-                response_dict = json.loads(accumulated_tool_text)
+                        # 3. Close old block via formatter
+                        for e in formatter.close_block():
+                            yield e
 
-                # successfully parse JSON, convert the tool used into response format
-                tools_list = []  # the list of tool to call
-                for index, tool in enumerate(response_dict['functions_calling']):
-                    tool_id = get_response_tool_uid()
-                    tools_list.append(
-                        ToolCallResponse(
-                            id=tool_id,
-                            index=index,
-                            function=OneTool(
-                                name=tool['name'],
-                                arguments=json.dumps(tool['arguments']),
-                            )
-                        )
-                    )
+                        current_tag = _tag
 
-                    chunk_data = ChatCompletionResponse(
-                        unique_id=unique_id,
-                        model=model_name,
-                        object="chat.completion.chunk",
-                        created=created,
-                        choices=[
-                            StreamChoice(
-                                index=0,
-                                delta=ChoiceDelta(
-                                    tool_calls=[
-                                        ChoiceDeltaToolCall(
-                                            index=index,
-                                            id=get_response_tool_uid(),
-                                            function=ChoiceDeltaToolCallFunction(
-                                                name=tool.get("name"),
-                                                arguments=json.dumps(tool.get("arguments",""))
-                                            ),
-                                            type="function"
-                                        )
-                                    ]
-                                )
-                            )
-                        ]
-                    )
+                    if _tag.wait_till_complete:
+                        current_text += _text_chunk
+                    else:
+                        for e in formatter.open_block(_tag.api_tag):
+                            yield e
 
-                    yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
-
-            except json.JSONDecodeError:
-                # If parsing fails, just stream the raw text
-                chunk_data = ChatCompletionResponse(
-                    unique_id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    created=created,
-                    choices=[
-                        StreamChoice(
-                            index=0,
-                            delta=ChoiceDelta(
-                                tool_calls=[
-                                    ChoiceDeltaToolCall(
-                                        function=ChoiceDeltaToolCallFunction(
-                                            arguments=accumulated_tool_text
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    ]
-                )
-                yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
+                        if chunk := process_and_format_chunk(_tag, _text_chunk):
+                            for c in chunk:
+                                yield c
 
         if eos:
-            logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
+            if current_text:
+                for e in formatter.open_block(current_tag.api_tag):
+                    yield e
 
-            if gen_stats and query.stream_options and query.stream_options.include_usage:
-                usage_data = ChatCompletionResponse(
-                    unique_id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    choices=[],
-                    usage=UsageResponse(
-                        prompt_tokens=gen_stats.input_tokens_count,
-                        completion_tokens=gen_stats.output_tokens_count,
-                        total_tokens=gen_stats.total_tokens_count,
-                    ),
+                if chunk := process_and_format_chunk(current_tag, current_text):
+                    for c in chunk:
+                        yield c
+
+            # Close final block via formatter
+            for e in formatter.close_block():
+                yield e
+
+            logger.info(f"full_response: {full_response}")
+
+            # Safe stop handling
+            # Determine finish reason from gen_stats; formatter will override for tool_calls
+            if provider == "openai":
+                base_finish_reason = gen_stats.get_openai_stop_reason() if gen_stats else "stop"
+            else:
+                base_finish_reason = gen_stats.stop_reason if gen_stats else "end_turn"
+
+            if gen_stats and query.stream_options and getattr(query.stream_options, "include_usage", True):
+                stream_stop_events = formatter.stream_stop(
+                    input_tokens=gen_stats.input_tokens_count,
+                    output_tokens=gen_stats.output_tokens_count,
+                    total_tokens=gen_stats.total_tokens_count,
+                    finish_reason=base_finish_reason,
                 )
-                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
+            else:
+                stream_stop_events = formatter.stream_stop(finish_reason=base_finish_reason)
+
+            for event in stream_stop_events:
+                yield event
 
             if gen_stats:
                 logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
-            # Send final chunk with finish_reason
-            chunk_data = ChatCompletionResponse(
-                unique_id=unique_id,
-                model=model_name,
-                object="chat.completion.chunk",
-                created=created,
-                choices=[
-                    StreamChoice(
-                        index=0,
-                        delta=ChoiceDelta(),
-                        finish_reason="tool_calls" if accumulated_tool_text else "stop"
-                    )
-                ]
-            )
-            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder, ensure_ascii=False)}
-            yield {"data": "[DONE]"}
-        else:
-            await asyncio.sleep(0.1)
-
 
 async def chat_completion_response(
     query: ChatMLQuery,
-    gen_queue: GenQueue,
-    # response: str,
-    # gen_stats: GenerationStats,
+    gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
-    # mode: Literal["text", "tool"] = "text"
+    provider: Literal["openai", "anthropic"],
+    tag_definitions: List[TagDefinition] = None,
 ) -> ChatCompletionResponse:
 
+    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
+    formatter = formatter_class(model_name=model_name)
+
+    # create streaming pro
+    text_tag = TagDefinition(
+        tag_type="text",
+        api_tag="content",
+    )
+
+    if tag_definitions is not None:
+        stream_parser = StreamParserByTag(
+            tag_definitions=tag_definitions,
+            default_tag_type=text_tag
+        )
+    else:
+        stream_parser = DummyParser()
+
     response = ""
-    response_thinking = ""
-    response_all = ""
-    # global result_queue
-    # completed_event = asyncio.Event()
-    gen_type = "text"
+    initial_tag = None
     gen_stats = None
     eos = False
     while not eos:
         try:
 
-            result = gen_queue.get_nowait()
-            if isinstance(result, GenText) and result.text_type=="text":
-                response += result.content
-                response_all += result.content
-            elif isinstance(result, GenText) and result.text_type=="tool":
-                response += result.content
-                response_all += result.content
-            elif isinstance(result, GenText) and result.text_type=="thinking":
-                response_thinking += result.content
-                response_all += result.content
-            elif isinstance(result, GenerationStats):
-                gen_stats = result        # Not applicable for completion endpoint
-            elif isinstance(result, GenStart):
-                gen_type = result
-                gen_type = result.gen_type      # get the gen_type e.g. text, tool, thinking
-            elif isinstance(result, GenEnd):
+            item = gen_queue.get_nowait()
+            if isinstance(item, GenText):
+                response += item.content
+            elif isinstance(item, GenerationStats):
+                gen_stats = item        # Not applicable for completion endpoint
+            elif isinstance(item, GenStart):
+                logger.info(f"Stream starts with {item.gen_type}")
+                if text_tag != item.gen_type:
+                    initial_tag = item.gen_type
+
+            elif isinstance(item, GenEnd):
                 eos = True
                 gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response_all.strip())
+                logger.info("----------------------LLM Response---------------\n" + response.strip())
 
         except asyncio.QueueEmpty:
             await asyncio.sleep(0.01)    # short sleep before trying again
 
 
-    unique_id = get_response_uid()
     response = response.strip()
+    parsed_text = stream_parser.parse_full_text(response, initial_tag=initial_tag)
 
-    if gen_type == "text" or gen_type=="thinking":
+    # Build provider-agnostic parsed blocks
+    parsed_blocks = []
+    if parsed_text:
+        for _tag, _text_chunk in parsed_text:
+            parsed_blocks.append(ParsedContentBlock(
+                api_tag=_tag.api_tag,
+                role=_tag.role,
+                content=_tag.post_processor(_text_chunk),
+                allowed_roles=_tag.allowed_roles,
+            ))
 
-        # whether to return separate or together
-        if query.return_thinking is False:
-            response_thinking = ""
-        elif query.return_thinking is True:
-            response = response_thinking + "\n" + response
-            # response_thinking = ""     # still return the response_thinking for user to be able to segregate
-        elif query.return_thinking == "separate":
-            pass
+    # Determine finish reason from content
+    # Base finish reason from gen_stats, mapped per provider
+    if provider == "openai":
+        finish_reason = gen_stats.get_openai_stop_reason() if gen_stats else "stop"
+    else:
+        finish_reason = gen_stats.stop_reason if gen_stats else "end_turn"
 
-        response_obj = ChatCompletionResponse(
-            unique_id=unique_id,
-            model=model_name,
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=response,
-                        thinking=response_thinking,
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=UsageResponse(
-                prompt_tokens=gen_stats.input_tokens_count,
-                completion_tokens=gen_stats.output_tokens_count,
-                total_tokens=gen_stats.total_tokens_count,
-            ),
-        )
-    elif gen_type == "tool":
-        try:
-            response_dict = json.loads(response)
-        except:
-            # since out put is not tool, return it as text instead #TODO find better solution
-            response_obj = ChatCompletionResponse(
-                unique_id=unique_id,
-                model=model_name,
-                choices=[
-                    Choice(
-                        index=0,
-                        message=ChatMessage(
-                            role="assistant",
-                            content=response,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=UsageResponse(
-                    prompt_tokens=gen_stats.input_tokens_count,
-                    completion_tokens=gen_stats.output_tokens_count,
-                    total_tokens=gen_stats.total_tokens_count,
-                ),
-            )
+    # Override for tool use (gen_stats won't know about tool calls)
+    for block in parsed_blocks:
+        if block.api_tag == "tool_calls":
+            finish_reason = "tool_calls" if provider == "openai" else "tool_use"
+            break
 
-        # successfully parse JSON, convert the tool used into response format
-        tools_list = []  # the list of tool to call
-        for index, tool in enumerate(response_dict['functions_calling']):
-            tool_id = get_response_tool_uid()
-            tools_list.append(
-                ToolCallResponse(
-                    id=tool_id,
-                    index=index,
-                    function=OneTool(
-                        name=tool['name'],
-                        arguments=json.dumps(tool['arguments']),
-                    )
-                )
-            )
-
-        response_obj = ChatCompletionResponse(
-            model=model_name,
-            choices=[
-                Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=None,
-                        tool_calls=tools_list,
-                    ),
-                    finish_reason="tool_calls",
-                )
-            ],
-            usage=UsageResponse(
-                prompt_tokens=gen_stats.input_tokens_count,
-                completion_tokens=gen_stats.output_tokens_count,
-                total_tokens=gen_stats.total_tokens_count,
-            ),
-        )
+    response_obj = formatter.non_stream_response(
+        parsed_blocks=parsed_blocks,
+        input_tokens=gen_stats.input_tokens_count,
+        output_tokens=gen_stats.output_tokens_count,
+        total_tokens=gen_stats.total_tokens_count,
+        finish_reason=finish_reason,
+    )
 
     assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
+    # logger.info(f"full_response: {response}")
     logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
 
     return response_obj
@@ -430,7 +335,7 @@ async def completion_response(
                     text=response.strip(),
                     index=0,
                     logprobs=None,
-                    finish_reason="stop"  # You may want to determine this based on actual finish reason
+                    finish_reason=gen_stats.get_openai_stop_reason() if gen_stats else "stop"
                 )
             ],
             usage=UsageResponse(
@@ -456,10 +361,6 @@ async def completion_response_stream(
     eos = False
     gen_stats = None
     while not eos:
-        # if await request.is_disconnected():
-        #     logger.info("Request disconnected, stopping queue processing")
-        #     break
-
         accumulated_text = ""
         try:
             while True:
@@ -512,339 +413,3 @@ async def completion_response_stream(
                 pass
     if not eos:
         logger.info("Stream ended before receiving GenEnd")
-
-
-async def chat_completion_response_artifact_stream(
-    query: ChatMLQuery,
-    gen_queue: GenQueue,
-    model_name: str,
-    request: Request,
-) -> AsyncIterator[dict]:
-    unique_id = get_response_uid()
-    created = int(time.time())
-    full_response = ""
-    response_thinking = ""
-    eos = False
-    gen_type = "text"  # Default generation type
-    gen_stats = None
-
-    # last_log_time = time.time()
-    # log_interval = 1  # Log every 5 seconds
-
-    artifact_parser = StreamParser()
-    malformed_data = False
-    MALFORMED_CHECK_LENGTH = 70     # the length limit of text so that the content_type block appear
-    content_type = None    # either text or code
-
-    while not eos:
-        accumulated_text = ""
-        accumulated_thinking = ""
-
-        # if await request.is_disconnected():
-        #     logger.info("Request disconnected, stopping queue processing")
-        #     break
-
-        try:
-            # Collect all available items from the queue
-            while True:
-                item = gen_queue.get_nowait()
-                if isinstance(item, GenText) and item.text_type=="text":
-                    accumulated_text += item.content
-                if isinstance(item, GenText) and item.text_type=="tool":
-                    accumulated_text += item.content
-                elif isinstance(item, GenText) and item.text_type=="thinking":
-                    accumulated_thinking += item.content
-                elif isinstance(item, GenEnd):
-                    eos = True
-                    break
-                elif isinstance(item, GenStart):
-                    gen_type = item.gen_type
-                elif isinstance(item, GenerationStats):
-                    gen_stats = item
-        except asyncio.QueueEmpty:
-            pass
-
-        if accumulated_thinking and query.return_thinking is not False:
-            full_response += accumulated_thinking
-            chunk_data = ChatCompletionResponse(
-                unique_id=unique_id,
-                model=model_name,
-                object="chat.completion.chunk",
-                created=created,
-                choices=[
-                    StreamChoice(
-                        index=0,
-                        delta=ChatMessage(
-                            role="assistant",
-                            content="",
-                            thinking=accumulated_thinking,
-                        ),
-                    )
-                ],
-            )
-            yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True), default=pydantic_encoder,
-                                      ensure_ascii=False)}
-
-        if accumulated_text:
-            full_response += accumulated_text
-
-            if gen_type == "text":
-                parsed_chunks = artifact_parser.process_stream(accumulated_text)
-
-                for chunk_type, chunk_content in parsed_chunks:
-                    if chunk_content:
-                        chunk_data = ChatCompletionResponse(
-                            unique_id=unique_id,
-                            model=model_name,
-                            object="chat.completion.chunk",
-                            created=created,
-                            choices=[
-                                StreamChoice(
-                                    index=0,
-                                    delta=ChatMessage(
-                                        role="assistant",
-                                        content=chunk_content,
-                                        artifact_meta=chunk_type.model_dump()
-
-                                    ),
-                                ),
-                            ],
-                        )
-                        yield {"data": json.dumps(chunk_data.model_dump(exclude_unset=True))}
-
-            elif gen_type == "tool":
-                # artifact do not affect tool usage
-                # Accumulate tool usage data
-                # Note: This assumes that tool data is complete in a single chunk
-                # If tool data can span multiple chunks, you'll need to implement a more sophisticated accumulation strategy
-                tool_response = json.loads(accumulated_text)
-                tools_list = []
-                for index, tool in enumerate(tool_response.get('functions_calling', [])):
-                    tool_id = get_response_tool_uid()
-                    tools_list.append(
-                        ToolCallResponse(
-                            id=tool_id,
-                            index=index,
-                            function=OneTool(
-                                name=tool['name'],
-                                arguments=json.dumps(tool['arguments']),
-                            )
-                        )
-                    )
-                chunk_data = ChatCompletionResponse(
-                    unique_id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    created=created,
-                    choices=[
-                        StreamChoice(
-                            index=0,
-                            delta=ChatMessage(
-                                role="assistant",
-                                tool_calls=tools_list,
-                            ),
-                            finish_reason="tool_calls",
-                        )
-                    ],
-                )
-                yield {"data": json.dumps(chunk_data.dict(exclude_unset=True))}
-
-        if eos:
-            # Log the full response at the end
-            logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
-
-            # Include generation stats if available and requested
-            if gen_stats and query.stream_options and query.stream_options.include_usage:
-                usage_data = ChatCompletionResponse(
-                    unique_id=unique_id,
-                    model=model_name,
-                    object="chat.completion.chunk",
-                    choices=[],
-                    usage=UsageResponse(
-                        prompt_tokens=gen_stats.input_tokens_count,
-                        completion_tokens=gen_stats.output_tokens_count,
-                        total_tokens=gen_stats.total_tokens_count,
-                    ),
-                )
-                yield {"data": json.dumps(usage_data.model_dump(exclude_unset=True))}
-
-            if gen_stats:
-                logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
-
-            # Send the ending DONE message
-            yield {"data": "[DONE]"}
-        else:
-            await asyncio.sleep(0.1)  # Short sleep before next iteration if not at end of stream
-
-
-async def chat_completion_response_artifact(
-    query: ChatMLQuery,
-    gen_queue: GenQueue,
-    model_name: str,
-    request: Request,
-) -> ChatCompletionResponse:
-    response = ""
-    response_thinking = ""
-    response_all = ""
-
-    response_obj = None
-    gen_type = GenStart(gen_type="text")
-    gen_stats = None
-    eos = False
-
-    while not eos:
-        try:
-            # if await request.is_disconnected():
-            #     logger.info("Request disconnected, stopping queue processing")
-            #     break
-
-            result = gen_queue.get_nowait()
-            if isinstance(result, GenText) and result.text_type=="text":
-                response += result.content
-                response_all += result.content
-            elif isinstance(result, GenText) and result.text_type=="tool":
-                response += result.content
-                response_all += result.content
-            elif isinstance(result, GenText) and result.text_type=="thinking":
-                response_thinking += result.content
-                response_all += result.content
-            elif isinstance(result, GenerationStats):
-                gen_stats = result
-            elif isinstance(result, GenStart):
-                gen_type = result
-            elif isinstance(result, GenEnd):
-                eos = True
-                gen_queue.task_done()
-                logger.info("----------------------LLM Response---------------\n" + response_all.strip())
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.01)
-
-    unique_id = get_response_uid()
-    response = response.strip()
-
-    if gen_type.gen_type == "text" or gen_type=="thinking":
-        choices = []
-
-        # return thinking first
-        if response_thinking and query.return_thinking is not False:    # currently always return as separate
-            choices.append(
-                Choice(
-                    index=0,    # only 1 thinking per response for now
-                    message=ChatMessage(
-                        role="assistant",
-                        content='',
-                        thinking=response_thinking,
-                    ),
-                    finish_reason="stop"
-                )
-            )
-
-        parser = StreamParser()
-        parsed_chunks = parser.parse_full_response(response)
-
-        if parsed_chunks:
-            # If parsing was successful, create a structured response
-
-            for idx, (chunk_type, chunk_content) in enumerate(parsed_chunks):
-                choices.append(
-                    Choice(
-                        index=idx,
-                        message=ChatMessage(
-                            role="assistant",
-                            content=chunk_content,
-                            artifact_meta=chunk_type.model_dump(),
-                        ),
-                        finish_reason="stop"
-                    )
-                )
-        else:
-            # If parsing failed, treat the entire response as a single text chunk
-            choices = [
-                Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role="assistant",
-                        content=response,
-                        artifact_meta=TextTag().model_dump()
-                    ),
-                    finish_reason="stop"
-                )
-            ]
-
-        response_obj = ChatCompletionResponse(
-            unique_id=unique_id,
-            model=model_name,
-            choices=choices,
-            usage=UsageResponse(
-                prompt_tokens=gen_stats.input_tokens_count if gen_stats else 0,
-                completion_tokens=gen_stats.output_tokens_count if gen_stats else 0,
-                total_tokens=gen_stats.total_tokens_count if gen_stats else 0,
-            ),
-        )
-
-    elif gen_type.gen_type == "tool":
-        try:
-            response_dict = json.loads(response)
-        except:
-            # since output is not tool, return it as text instead #TODO find better solution
-            response_obj = ChatCompletionResponse(
-                unique_id=unique_id,
-                model=model_name,
-                choices=[
-                    Choice(
-                        index=0,
-                        message=ChatMessage(
-                            role="assistant",
-                            content=response,
-                            artifact_meta=TextTag().model_dump()
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=UsageResponse(
-                    prompt_tokens=gen_stats.input_tokens_count,
-                    completion_tokens=gen_stats.output_tokens_count,
-                    total_tokens=gen_stats.total_tokens_count,
-                ),
-            )
-        else:
-            # successfully parse JSON, convert the tool used into response format
-            tools_list = []  # the list of tool to call
-            for index, tool in enumerate(response_dict['functions_calling']):
-                tool_id = get_response_tool_uid()
-                tools_list.append(
-                    ToolCallResponse(
-                        id=tool_id,
-                        index=index,
-                        function=OneTool(
-                            name=tool['name'],
-                            arguments=json.dumps(tool['arguments']),
-                        )
-                    )
-                )
-
-            response_obj = ChatCompletionResponse(
-                model=model_name,
-                choices=[
-                    Choice(
-                        index=0,
-                        message=ChatMessage(
-                            role="assistant",
-                            content=None,
-                            tool_calls=tools_list,
-                        ),
-                        finish_reason="tool_calls",
-                    )
-                ],
-                usage=UsageResponse(
-                    prompt_tokens=gen_stats.input_tokens_count,
-                    completion_tokens=gen_stats.output_tokens_count,
-                    total_tokens=gen_stats.total_tokens_count,
-                ),
-            )
-
-    assert response_obj is not None
-    logger.debug("----------------------LLM API Response---------------\n" + json.dumps(response_obj.model_dump(), indent=2))
-    logger.info(f"{model_name} | LLM speed {gen_stats.generation_speed:.1f}/s tokens")
-
-    return response_obj

@@ -4,22 +4,138 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gallama"
-version = "0.0.9"
+version = "0.1.0"
 description = "An opinionated Llama Server engine with a focus on agentic tasks"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.11"
-dynamic = ["dependencies"]
+dependencies = [
+    "accelerate",
+    "chardet",
+    "colorama",
+    "datamodel-code-generator",
+    "fastapi",
+    "formatron>=0.4.4",
+    "httpx",
+    "lm-format-enforcer",
+    "lxml",
+    "packaging",
+    "pillow>=10.0.0",
+    "psutil",
+    "pydantic",
+    "pygments",
+    "python-multipart",
+    "pyyaml",
+    "pyzmq",
+    "referencing",
+    "rich",
+    "sse_starlette",
+    "torch>=2.2.0",
+    "torchvision",
+    "transformers",
+    "uvicorn",
+    "websockets>=14.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+utils = [
+    "huggingface-hub",
+]
+embedding = [
+    "infinity-emb[all]",
+    "sentence-transformers",
+]
+exl2 = [
+    "exllamav2",
+]
+exl3 = [
+    "exllamav3",
+]
+llama-cpp = [
+    "cmake",
+    "llama-cpp-python",
+    "ninja",
+]
+sglang = [
+    "qwen_omni_utils",
+    "sglang",
+]
+stt = [
+    "faster-whisper",
+    "scipy",
+    "silero-vad",
+]
+transformers-backend = [
+    "qwen_omni_utils",
+    "qwen_vl_utils",
+]
+tts = [
+    "ffmpeg-python",
+    "fuzzywuzzy",
+    "kokoro",
+    "librosa",
+    "misaki",
+    "misaki[en]",
+    "misaki[ja]",
+    "misaki[ko]",
+    "misaki[zh]",
+    "numpy",
+    "soundfile",
+    "split-lang",
+]
+video = [
+    "livekit>=0.20.2",
+    "livekit-agents>=0.12.15",
+    "livekit-protocol",
+    "qwen_omni_utils",
+]
+vllm = [
+    "qwen_omni_utils",
+    "vllm",
+]
+all = [
+    "cmake",
+    "exllamav2",
+    "exllamav3",
+    "faster-whisper",
+    "ffmpeg-python",
+    "fuzzywuzzy",
+    "huggingface-hub",
+    "infinity-emb[all]",
+    "kokoro",
+    "librosa",
+    "livekit>=0.20.2",
+    "livekit-agents>=0.12.15",
+    "livekit-protocol",
+    "llama-cpp-python",
+    "misaki",
+    "misaki[en]",
+    "misaki[ja]",
+    "misaki[ko]",
+    "misaki[zh]",
+    "ninja",
+    "numpy",
+    "pytest",
+    "qwen_omni_utils",
+    "qwen_vl_utils",
+    "scipy",
+    "sentence-transformers",
+    "sglang",
+    "silero-vad",
+    "soundfile",
+    "split-lang",
+    "vllm",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/remichu-ai/gallama"
 
 [project.scripts]
 gallama = "gallama.cli:main_cli"
-
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -41,9 +157,3 @@ profile = "black"
 
 [tool.mypy]
 ignore_missing_imports = true
-
-project.dependencies = [
-    "transformers @ git+https://github.com/huggingface/transformers.git@c42b3223db0fc24ff9a694f19e6c78faf3ac58a1"
-]
-
-

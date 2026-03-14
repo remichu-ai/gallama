@@ -1,7 +1,6 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 import io
-import soundfile as sf
 from gallama.data_classes import (
     TranscriptionResponse,
     TTSRequest,
@@ -59,6 +58,8 @@ async def create_transcription(
 
 @router.post("/speech")
 async def create_speech(request: TTSRequest):
+    import soundfile as sf
+
     # Validate the model, voice, and input length
     # if request.model not in SUPPORTED_MODELS:
     #     raise HTTPException(status_code=400, detail="Unsupported model")

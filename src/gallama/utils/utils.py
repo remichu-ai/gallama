@@ -5,7 +5,6 @@ import struct
 from lxml import etree
 from pathlib import Path
 from PIL import Image
-import requests
 import os
 from io import BytesIO
 from fastapi import Request
@@ -134,7 +133,7 @@ def get_package_file_path(file_name: str) -> str:
 # Util function to get a PIL image from a URL or from a file in the script's directory
 def get_image(
     file: str = None,
-    url: str =None,     # url of the image or base64 url in this format f"data:image/jpeg;base64,{base64_image}"
+    url: str = None,  # url of the image or base64 url in this format f"data:image/jpeg;base64,{base64_image}"
 ):
     assert (file or url) and not (file and url)
 
@@ -153,8 +152,20 @@ def get_image(
             # Open the image from the decoded data
             return Image.open(BytesIO(image_data))
         else:
-            # Assume url is a regular URL and fetch it as a stream
-            return Image.open(requests.get(url, stream=True).raw)
+            # Assume url is a regular URL and fetch it
+            # Added User-Agent to bypass bot protections (fixes the Wikimedia issue)
+            import requests
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers, stream=True)
+
+            # This throws a clear HTTPError if the download fails (e.g., 403 Forbidden or 404 Not Found)
+            # so PIL doesn't try to open a broken file/HTML page.
+            response.raise_for_status()
+
+            return Image.open(response.raw)
 
 
 def is_flash_attention_installed() -> (bool, str):
@@ -234,3 +245,48 @@ async def get_model_from_body(request: Request) -> str:
     except Exception as e:
         logger.error(f"Error while getting model from request: {e}")
         return ""
+
+
+def get_free_vram_gb():
+    """
+    Returns a list of available (free) VRAM in GB for Nvidia GPUs.
+    Logs a message if non-Nvidia hardware is detected.
+    """
+    import subprocess
+    import shutil
+    import platform
+
+    # 1. Check for Nvidia (Primary Target)
+    if shutil.which('nvidia-smi'):
+        try:
+            # Query memory.free from nvidia-smi
+            # Output format will be lines of numbers like: "24100\n12050"
+            result = subprocess.check_output(
+                ['nvidia-smi', '--query-gpu=memory.free', '--format=csv,nounits,noheader'],
+                encoding='utf-8'
+            )
+
+            # Parse output: Split by line, convert to int, convert MiB to GB
+            free_mib = [int(x) for x in result.strip().split('\n') if x.strip()]
+            free_gb = [round(x / 1024, 2) for x in free_mib]
+            logger.info("Free GPU VRAM: {}".format(free_gb))
+            return free_gb
+
+        except Exception as e:
+            logger.warn(f"Log: Error reading Nvidia SMI: {e}")
+            return []
+
+    # 2. Check for Mac (Apple Silicon)
+    elif platform.system() == 'Darwin' and platform.machine() == 'arm64':
+        logger.info("Log: Apple Silicon detected. Implementation skipped.")
+        return []
+
+    # 3. Check for AMD (ROCm)
+    elif shutil.which('rocm-smi'):
+        logger.info("Log: AMD GPU detected. Implementation skipped.")
+        return []
+
+    # 4. No GPU found
+    else:
+        logger.info("Log: No Nvidia GPU detected.")
+        return []

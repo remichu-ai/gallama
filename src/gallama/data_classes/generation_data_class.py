@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl
 from typing import Optional, Literal, List, Dict, Union, Any, Type, TypeVar
+from .data_class import TagDefinition, AnthropicStopReason, OpenAIStopReason
 from dataclasses import dataclass
 import asyncio
 import weakref
@@ -10,6 +11,11 @@ class GenerationStats(BaseModel):
     output_tokens_count: int = Field(description='output tokens count', default=0)
     time_to_first_token: float = Field(description='time to first token', default=0)
     time_generate: float = Field(description='time to generate tokens', default=0)
+    cached_pages: int = Field(description='number of cached pages', default=0)
+    cached_tokens: int = Field(description='number of cached tokens', default=0)
+
+    # use Anthropic stop reason here as it cover more scenario than OpenAI
+    stop_reason: Optional[AnthropicStopReason] = Field(default="end_turn", description="Anthropic stop reason")
 
     @property
     def total_tokens_count(self) -> int:
@@ -33,11 +39,32 @@ class GenerationStats(BaseModel):
         else:
             return 0
 
+    def get_openai_stop_reason(self) -> OpenAIStopReason:
+        """
+        Maps the Anthropic stop reason to the closest OpenAI equivalent.
+        Defaults to 'stop' if no specific match is found.
+        """
+        mapping: Dict[AnthropicStopReason, OpenAIStopReason] = {
+            "end_turn": "stop",
+            "stop_sequence": "stop",
+            "pause_turn": "stop",
+            "max_tokens": "length",
+            "model_context_window_exceeded": "length",
+            "tool_use": "tool_calls",
+            "refusal": "content_filter",
+        }
+
+        # Safely get the mapped value, defaulting to "stop"
+        return mapping.get(self.stop_reason, "stop")
+
 class GenStart(BaseModel):
     """ this item signal start of generation"""
     model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
 
-    gen_type: Literal["text", "tool", "thinking"]  = Field(description='True to signal end of generation', default="text")
+    gen_type: Union[TagDefinition, str]  = Field(
+        description='the tag type to start off generation',
+        default_factory=lambda: TagDefinition(tag_type="text")
+    )
 
 class GenEnd(BaseModel):
     """ this item signal end of generation"""
@@ -90,7 +117,7 @@ class GenQueueDynamic:
         allowed_types: Optional[List[BaseModel]] = None,
         include_GenStats: bool =True,
         include_GenEnd: bool =True,
-        existing_queue: Optional[GenQueue] = None
+        existing_queue: Optional[GenQueue] = None   # an optional queue to initialize this object with
     ):
         # Initialize with a GenQueue as the active queue
         self._include_GenStats: bool = include_GenStats

@@ -149,7 +149,6 @@ class WebSocketManager:
                     arguments=item.arguments
                 )
             elif isinstance(item, ConversationItemFunctionCallOutput):
-                logger.info("FROG FROG Function call output")
                 processed_item = ConversationItemFunctionCallOutputServer(
                     status="completed",
                     call_id=item.call_id,

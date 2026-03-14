@@ -4,7 +4,6 @@ import subprocess
 from gallama.config import ConfigManager
 from gallama.logger import logger
 from fastapi import HTTPException
-from huggingface_hub import snapshot_download, hf_hub_download
 from pathlib import Path
 from typing import Dict
 from gallama.data_classes import ModelInfo, ModelDownloadSpec
@@ -12,6 +11,18 @@ import httpx
 import zipfile
 import io
 import shutil
+
+
+def _import_huggingface_hub():
+    try:
+        from huggingface_hub import snapshot_download, hf_hub_download
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Model download utilities require the optional dependency `gallama[utils]`.",
+        ) from exc
+
+    return snapshot_download, hf_hub_download
 
 def represent_list(self, data):
     """ Custom representation for lists for writing to yaml file"""
@@ -74,6 +85,8 @@ def update_model_yaml(
 
 
 def download_model_from_hf(model_spec: ModelDownloadSpec):
+    snapshot_download, hf_hub_download = _import_huggingface_hub()
+
     config_manager: ConfigManager = ConfigManager()
     config = config_manager.default_model_list
 
@@ -317,4 +330,3 @@ def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None
         custom_logger.info(log_message)
     else:
         logger.info(log_message)
-

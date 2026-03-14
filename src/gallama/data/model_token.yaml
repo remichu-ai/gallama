@@ -230,3 +230,28 @@ Pixtral:
   video_pad: ''
   leading_prompt_token: 'assistant:\n'
   eos_token_list: ["</s>", "[INST]", "<s>", "[/INST]"]
+
+Qwen2.5-Omni:
+  system_msg_enabled: true
+  tool_enabled: false
+  conversation_start: ''
+  conversation_end: '\n'
+  system_start: '<|im_start|>system\n'
+  system_end: '<|im_end|>\n'
+  user_start: '<|im_start|>user\n'
+  user_end: '<|im_end|>\n'
+  assistant_start: '<|im_start|>assistant\n'
+  assistant_end: '<|im_end|>\n'
+  tool_start: ''
+  tool_end: ''
+  tool_result_start: ''
+  tool_result_end: ''
+  vision_start: '<|vision_bos|>'
+  vision_end: '<|vision_eos|>'
+  audio_start: '<|audio_bos|>'
+  audio_end: '<|audio_eos|>'
+  audio_pad: '<|AUDIO|>'
+  image_pad: '<|IMAGE|>'
+  video_pad: '<|VIDEO|>'
+  leading_prompt_token: '<|im_start|>assistant\n'
+  eos_token_list: ["<|im_end|>", "<|endoftext|>", "<|im_start|>"]

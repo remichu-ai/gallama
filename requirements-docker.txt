@@ -55,3 +55,6 @@ misaki[zh]
 livekit >= 0.20.2
 livekit-protocol
 livekit-agents>=0.12.15
+
+#video processing
+qwen_omni_utils

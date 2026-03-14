@@ -4,8 +4,6 @@ from typing import TypeVar, Optional, Union, Tuple, List
 import numpy as np
 from starlette.websockets import WebSocket
 import base64
-import soundfile as sf
-import aiohttp
 import io
 from gallama.data_classes.realtime_client_proto import (
     ConversationItem,
@@ -509,6 +507,9 @@ class MessageQueues:
     async def _save_debug_audio_files(self, truncated_audio: np.ndarray):
         """Save audio files for debugging when verbose is True."""
         try:
+            import librosa
+            import soundfile as sf
+
             # Save as 16-bit PCM WAV at 16kHz
             debug_path = "/home/remichu/work/ML/gallama/experiment/debug_audio.wav"
             sf.write(debug_path, truncated_audio, self.sample_rate, subtype='PCM_16')
@@ -516,10 +517,13 @@ class MessageQueues:
 
             # Save another copy at 44.1kHz for comparison
             debug_path_441 = "/home/remichu/work/ML/gallama/experiment/debug_audio_44100.wav"
-            import samplerate
 
             # Resample to 44.1kHz
-            audio_441 = samplerate.resample(truncated_audio, 44100 / self.sample_rate, 'sinc_best')
+            audio_441 = librosa.resample(
+                accumulated_chunk,
+                orig_sr=self.sample_rate,
+                target_sr=44100
+            )
             sf.write(debug_path_441, audio_441, 44100, subtype='PCM_16')
             logger.info(f"Saved 44.1kHz version to: {debug_path_441}")
 
@@ -528,6 +532,8 @@ class MessageQueues:
 
     async def _prepare_truncated_audio_buffer(self, audio_data: np.ndarray, audio_end_ms: int) -> tuple[np.ndarray, io.BytesIO]:
         """Prepare truncated audio data and buffer for transcription."""
+        import soundfile as sf
+
         # Convert milliseconds to samples
         end_sample = int((audio_end_ms / 1000) * self.sample_rate)
 
@@ -556,6 +562,8 @@ class MessageQueues:
 
     async def _get_transcription(self, audio_buffer: io.BytesIO) -> str:
         """Get transcription for the truncated audio."""
+        import aiohttp
+
         form_data = aiohttp.FormData()
         form_data.add_field('file', audio_buffer, filename='audio.wav', content_type='audio/wav')
         form_data.add_field('model', 'whisper-1')

@@ -130,7 +130,7 @@ async def periodic_health_check():
             for instance in model_info.instances:
                 try:
                     async with httpx.AsyncClient() as client:
-                        response = await client.get(f"http://localhost:{instance.port}/health", timeout=5.0)
+                        response = await client.get(f"http://localhost:{instance.port}/health", timeout=30.0)
                         if response.status_code != 200:
                             logger.warning(f"Instance {instance.port} of model {model_name} is not healthy")
                             # Implement recovery logic here (e.g., restart the instance)

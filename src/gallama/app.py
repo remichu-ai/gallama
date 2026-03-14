@@ -15,7 +15,6 @@ import json
 from fastapi.responses import JSONResponse
 from gallama.utils import parse_request_body
 from gallama.config.config_manager import ConfigManager
-from gallama.data import ARTIFACT_SYSTEM_PROMPT
 import os
 from contextlib import asynccontextmanager
 from logging import DEBUG
@@ -85,7 +84,7 @@ async def startup_event():
         gen_queue = GenQueue()
         for _model_name, _model in model_manager.llm_dict.items():
             await _model.chat_raw(
-                prompt=f"{ARTIFACT_SYSTEM_PROMPT}\nWrite a 500 words story on Llama",
+                prompt="Write a 500 words story on Llama",
                 # stream=False,
                 max_tokens=50,
                 gen_queue=gen_queue,

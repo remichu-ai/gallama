@@ -6,7 +6,6 @@ import numpy as np
 import websockets
 from starlette.websockets import WebSocket
 from websockets.protocol import State
-import samplerate
 from gallama.data_classes import UsageResponse, ChatCompletionResponse, WSInterTTS, ChoiceDeltaToolCall
 from gallama.data_classes.realtime_client_proto import ResponseCancel,\
     ResponseCreate, SessionConfig
