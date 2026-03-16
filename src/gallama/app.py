@@ -121,6 +121,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # Cleanup code
+        logger.info("Cleaning up loaded models...")
+        model_manager.close_all_models()
         logger.info("Cleaning up ZMQ connections...")
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
@@ -141,6 +143,7 @@ def make_server(args):
     # Add signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         logger.info("Received shutdown signal, cleaning up...")
+        model_manager.close_all_models()
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
                 handler.close()

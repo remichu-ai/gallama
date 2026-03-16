@@ -1,5 +1,6 @@
 from gallama.logger.logger import logger
 import json
+import re
 from .....data_classes.data_class import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
@@ -9,17 +10,18 @@ from .....utils.utils import get_response_tool_uid
 from typing import List, Dict, Optional
 
 
-def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
+def qwen35_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
     """
-    Parse Qwen JSON-style tool call format.
+    Parse Qwen 3.5 XML-style tool call format:
 
-    Example:
-    {"name": "get_weather", "arguments": {"city": "Seoul"}}
-    {"name": "get_weather", "arguments": {"city": "Tokyo"}}
+    <function=tool_name>
+    <parameter=param_key_1>
+    param_value_1
+    </parameter>
+    </function>
     """
+
     results = []
-    decoder = json.JSONDecoder()
-    pos = 0
 
     # Initialize state
     if extra_vars is None:
@@ -33,22 +35,38 @@ def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
         return []
 
     try:
-        while pos < len(tool_text):
-            if tool_text[pos].isspace():
-                pos += 1
-                continue
+        function_pattern = re.compile(
+            r'<function=([^>]+)>\s*(.*?)\s*</function>',
+            re.DOTALL
+        )
 
-            tool, end_pos = decoder.raw_decode(tool_text, pos)
-            pos = end_pos
+        for func_match in function_pattern.finditer(tool_text):
+            tool_name = func_match.group(1).strip()
+            func_body = func_match.group(2)
 
-            logger.info(f"tool: {tool}")
+            param_pattern = re.compile(
+                r'<parameter=([^>]+)>\s*(.*?)\s*</parameter>',
+                re.DOTALL
+            )
+
+            arguments_dict = {}
+            for param_match in param_pattern.finditer(func_body):
+                key = param_match.group(1).strip()
+                value_text = param_match.group(2).strip()
+
+                try:
+                    arguments_dict[key] = json.loads(value_text)
+                except (json.JSONDecodeError, TypeError):
+                    arguments_dict[key] = value_text
+
+            logger.info(f"tool: {tool_name} args: {arguments_dict}")
 
             chunk_data = ChoiceDeltaToolCall(
                 index=extra_vars["state"]["tool_call"],
                 id=get_response_tool_uid(),
                 function=ChoiceDeltaToolCallFunction(
-                    name=tool.get("name"),
-                    arguments=json.dumps(tool.get("arguments", ""))
+                    name=tool_name,
+                    arguments=json.dumps(arguments_dict)
                 ),
                 type="function"
             )
@@ -64,19 +82,19 @@ def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
 def tool_prompt(tool_name: Optional[str] = None):
     if tool_name is None:
-        return '\n<tool_call>\n{"name": "'
+        return '\n<tool_call>\n<function='
     else:
-        return f'\n<tool_call>\n{{"name": "{tool_name}", "arguments": '
+        return f'\n<tool_call>\n<function={tool_name}>\n'
 
 
-qwen3_moe = {
+qwen35 = {
     "tool": TagDefinition(
         start_marker="<tool_call>",
         end_marker="</tool_call>",
         tag_type="tool_calls",
         api_tag="tool_calls",
         role="assistant",
-        post_processor=qwen3_tool_parser,
+        post_processor=qwen35_tool_parser,
         prompt_init=tool_prompt,
         wait_till_complete=True
     ),

@@ -18,6 +18,27 @@ class ModelManager:
         self.config_manager = ConfigManager()
         self.model_ready = False
 
+    def close_all_models(self):
+        seen = set()
+        all_model_dicts = (
+            self.llm_dict,
+            self.tts_dict,
+            self.stt_dict,
+            self.embedding_dict,
+        )
+
+        for model_dict in all_model_dicts:
+            for model in model_dict.values():
+                if id(model) in seen:
+                    continue
+                seen.add(id(model))
+
+                if hasattr(model, "close"):
+                    try:
+                        model.close()
+                    except Exception as exc:
+                        logger.error(f"Failed to close model resource cleanly: {exc}")
+
     def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding"]) -> Optional[Any]:
         # Determine which dictionaries to use based on the type
         if _type == "llm":

@@ -20,10 +20,18 @@ Gallama supports native tool calling. Instead of forcing every model into one sy
 
 Current models with custom native tool parsers:
 
-- `Qwen 3`
-- `GLM-4`
-- `Minimax`
-- `Ministral 3`
+- `Qwen JSON family`
+  Covers `qwen2`, `qwen2_5_vl`
+- `Qwen XML family`
+  Covers `qwen3`, `qwen3_moe`, `qwen3_next`, `qwen3_vl`, `qwen3_vl_moe`, `qwen3_5`, `qwen3_5_moe`, `step3p5`, `nemotron_h`
+- `GPT-OSS Harmony family`
+  Covers `gpt_oss`
+- `GLM-4 family`
+  Covers `glm4`, `glm4_moe`, `glm4v`, `glm4v_moe`
+- `MiniMax family`
+  Covers `minimax`, `minimax_m2`
+- `Ministral / Mistral 3 family`
+  Covers `ministral3`, `mistral3` (including Devstral-style `mistral3` models)
 
 For these models, Gallama expects the model to emit its native tool-call structure, and Gallama parses that structure back into OpenAI-compatible `tool_calls` or Anthropic-compatible `tool_use` blocks.
 

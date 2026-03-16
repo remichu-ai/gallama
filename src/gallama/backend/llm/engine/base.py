@@ -201,6 +201,10 @@ class ModelInterface(ABC):
     def support_format_enforcer(self) -> bool:
         return True
 
+    def close(self):
+        """Optional cleanup hook for backends that manage external resources."""
+        return None
+
     @property
     def video_token_by_backend(self) -> str:
         return ""
