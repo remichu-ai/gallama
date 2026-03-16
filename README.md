@@ -436,7 +436,7 @@ mistral:
 
 Typical keys:
 
-- `backend`: backend name such as `exllama`, `llama_cpp`, `transformers`, `embedding`, `kokoro`, or `gpt_sovits`
+- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `transformers`, `embedding`, `kokoro`, or `gpt_sovits`
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
@@ -475,6 +475,39 @@ codestral_llama_cpp:
   cache_quant: Q4
   quant: 4.0
 ```
+
+Example with a `llama_cpp_server` backend:
+
+```yaml
+codestral_llama_cpp_server:
+  backend: llama_cpp_server
+  model_id: mistralai/Codestral-22B-v0.1
+  prompt_template: Mistral
+  max_seq_len: 32768
+  backend_extra_args:
+    base_url: http://127.0.0.1:8080
+    cache_prompt: true
+    use_server_tokenizer: true
+```
+
+This backend keeps prompt templating in Gallama and uses `llama-server` mainly as a generation engine through `/completion` and `/tokenize`.
+
+Start `llama-server` separately, for example:
+
+```shell
+llama-server -m /path/to/model.gguf --port 8080 --ctx-size 32768
+```
+
+Notes for `llama_cpp_server`:
+
+- `backend_extra_args.base_url` is required.
+- `model_id` is still used by Gallama's prompt engine. If `prompt_template` is omitted, `model_id` must be a valid Hugging Face model/tokenizer identifier or a local tokenizer directory so Gallama can load the chat template.
+- If you want to avoid Hugging Face tokenizer loading, set an explicit `prompt_template` such as `Mistral`, `Llama3`, or another template from `src/gallama/data/model_token.yaml`.
+- Gallama tokenizes prompts through `llama-server` with `add_special=false`, then sends token arrays to `/completion` for text-only requests.
+- Image inputs are supported by switching `/completion` into prompt-object mode with `prompt_string + multimodal_data`.
+- Audio inputs are not supported yet.
+- Direct video input is not sent to `llama-server`, but Gallama can still fall back to converting video frames into images for backends that support images.
+- `use_server_tokenizer` must stay `true` in the current implementation.
 
 Example with TTS voice presets:
 
@@ -518,7 +551,7 @@ Customize the model launch using various parameters. Available parameters for th
 - `cache_size`: Context length for cache text in integers (optional)
 - `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional)
 - `max_seq_len`: Maximum sequence length (optional)
-- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `gpt_sovits`, `kokoro`.
+- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `gpt_sovits`, `kokoro`.
 - `tp`: enable tensor parallel with exllama v2 (experimental). See further below
 
 #### Run Without `model_config.yaml`

@@ -1,5 +1,7 @@
 from gallama.logger.logger import logger
 import json
+import re
+from html import unescape
 from .....data_classes.data_class import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
@@ -7,7 +9,6 @@ from .....data_classes.data_class import (
 )
 from .....utils.utils import get_response_tool_uid
 from typing import List, Dict, Optional
-import xml.etree.ElementTree as ET
 
 
 def minimax_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
@@ -39,38 +40,39 @@ def minimax_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
     if not tool_text or not tool_text.strip():
         return []
 
+    invoke_pattern = re.compile(
+        r'<invoke\s+name="(?P<name>[^"]+)">\s*(?P<body>.*?)\s*</invoke>',
+        re.DOTALL,
+    )
+    parameter_pattern = re.compile(
+        r'<parameter\s+name="(?P<name>[^"]+)">\s*(?P<value>.*?)\s*</parameter>',
+        re.DOTALL,
+    )
+
+    def parse_argument(raw_value: str):
+        value_text = unescape(raw_value.strip())
+        try:
+            return json.loads(value_text)
+        except (json.JSONDecodeError, TypeError):
+            return value_text
+
     try:
-        # 1. Wrap the potentially multi-root XML in a fake root tag
-        #    This allows us to handle "<invoke>...</invoke><invoke>...</invoke>"
-        wrapped_xml = f"<root>{tool_text}</root>"
-        root = ET.fromstring(wrapped_xml)
+        for invoke_match in invoke_pattern.finditer(tool_text):
+            tool_name = invoke_match.group("name").strip()
+            invoke_body = invoke_match.group("body")
 
-        # 2. Iterate through all <invoke> tags found
-        for invoke_item in root.findall('invoke'):
-            tool_name = invoke_item.get("name")
-
-            # 3. Aggregate parameters into a single dictionary
             arguments_dict = {}
-            for param in invoke_item.findall('parameter'):
-                key = param.get("name")
-                value_text = param.text if param.text else ""
-
-                # Attempt to parse the inner text as JSON (e.g., lists, numbers, booleans)
-                # If it's just a raw string not formatted as JSON, keep it as string.
-                try:
-                    arguments_dict[key] = json.loads(value_text)
-                except (json.JSONDecodeError, TypeError):
-                    arguments_dict[key] = value_text
+            for param_match in parameter_pattern.finditer(invoke_body):
+                key = param_match.group("name").strip()
+                arguments_dict[key] = parse_argument(param_match.group("value"))
 
             logger.info(f"tool: {tool_name} args: {arguments_dict}")
 
-            # 4. Construct the response object
             chunk_data = ChoiceDeltaToolCall(
                 index=extra_vars["state"]["tool_call"],
                 id=get_response_tool_uid(),
                 function=ChoiceDeltaToolCallFunction(
                     name=tool_name,
-                    # Convert the aggregated dict back to a JSON string for the response format
                     arguments=json.dumps(arguments_dict)
                 ),
                 type="function"
@@ -78,11 +80,6 @@ def minimax_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
             results.append(chunk_data.model_dump(exclude_unset=True))
             extra_vars["state"]["tool_call"] += 1
-
-    except ET.ParseError as e:
-        # This might happen if the XML is incomplete (streaming mid-tag)
-        # Depending on your logic, you might want to suppress this or raise it.
-        raise e
     except Exception as e:
         raise e
 

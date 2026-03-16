@@ -16,6 +16,7 @@ MODEL_SPECIAL_TAG = {
     "ministral3": ministral3,
     "mistral3": ministral3,
     "step3p5": qwen3_moe,
+    "nemotron_h": qwen3_moe,
 }
 
 # to add on to the tokenizer.eos_token for model that having issue of wrong template

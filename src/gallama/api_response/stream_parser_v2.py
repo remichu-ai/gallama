@@ -12,7 +12,11 @@ class BaseStreamParser(ABC):
         pass
 
     @abstractmethod
-    def parse_full_text(self, text: str) -> List[Tuple[TagDefinition, str]]:
+    def parse_full_text(
+        self,
+        text: str,
+        initial_tag: Union[str, TagDefinition] = None,
+    ) -> List[Tuple[TagDefinition, str]]:
         pass
 
     @abstractmethod
@@ -30,7 +34,11 @@ class DummyParser(BaseStreamParser):
     def process_stream(self, new_data: str) -> List[Tuple[TagDefinition, str]]:
         return [(self.default_tag_type, new_data)]
 
-    def parse_full_text(self, text: str) -> List[Tuple[TagDefinition, str]]:
+    def parse_full_text(
+        self,
+        text: str,
+        initial_tag: Union[str, TagDefinition] = None,
+    ) -> List[Tuple[TagDefinition, str]]:
         return [(self.default_tag_type, text)]
 
     def flush(self) -> List[Tuple[TagDefinition, str]]:

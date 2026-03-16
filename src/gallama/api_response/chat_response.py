@@ -306,11 +306,24 @@ async def chat_completion_response(
     parsed_blocks = []
     if parsed_text:
         for _tag, _text_chunk in parsed_text:
+            try:
+                processed_content = _tag.post_processor(_text_chunk)
+                processed_api_tag = _tag.api_tag
+                processed_role = _tag.role
+                processed_allowed_roles = _tag.allowed_roles
+            except Exception as e:
+                logger.error(f"Error in post-processor: {e}")
+                logger.info("Fall back to text tag")
+                processed_content = _text_chunk
+                processed_api_tag = text_tag.api_tag
+                processed_role = text_tag.role
+                processed_allowed_roles = text_tag.allowed_roles
+
             parsed_blocks.append(ParsedContentBlock(
-                api_tag=_tag.api_tag,
-                role=_tag.role,
-                content=_tag.post_processor(_text_chunk),
-                allowed_roles=_tag.allowed_roles,
+                api_tag=processed_api_tag,
+                role=processed_role,
+                content=processed_content,
+                allowed_roles=processed_allowed_roles,
             ))
 
     # Determine finish reason from content
