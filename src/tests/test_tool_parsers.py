@@ -6,6 +6,7 @@ from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_pars
 from gallama.backend.llm.prompt_engine.by_model.glm4 import glm4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.minimax import minimax_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.ministral3 import ministral3_tool_parser
+from gallama.backend.llm.prompt_engine.pe_transformers import PromptEngineTransformers
 from gallama.backend.llm.prompt_engine.by_model.qwen3 import qwen3_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.qwen35 import qwen35_tool_parser
 from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_SPECIAL_TAG
@@ -28,6 +29,7 @@ def test_model_special_tag_maps_exllamav3_scoped_aliases_to_expected_parsers():
     assert MODEL_SPECIAL_TAG["glm4"] is MODEL_SPECIAL_TAG["glm4_moe"]
     assert MODEL_SPECIAL_TAG["glm4v"] is MODEL_SPECIAL_TAG["glm4v_moe"]
     assert MODEL_SPECIAL_TAG["ministral3"] is MODEL_SPECIAL_TAG["mistral3"]
+    assert MODEL_SPECIAL_TAG["mistral4"] is MODEL_SPECIAL_TAG["mistral3"]
 
 
 def test_default_tool_parser_supports_multiple_json_objects():
@@ -177,3 +179,61 @@ def test_ministral3_tool_parser_supports_multiple_tool_calls():
     assert parsed[1]["index"] == 1
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
+
+
+def test_ministral3_stream_parser_supports_thinking_and_tool_calls():
+    parser = StreamParserByTag(tag_definitions=list(MODEL_SPECIAL_TAG["mistral3"].values()))
+    generated = (
+        "[THINK]Need weather data[/THINK]"
+        "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Seoul\"}"
+        "[TOOL_CALLS]get_weather[ARGS]{\"city\": \"Tokyo\"}</s>"
+    )
+
+    parsed_blocks = parser.parse_full_text(generated)
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["reasoning", "tool_calls"]
+    assert parsed_blocks[0][1] == "Need weather data"
+
+    parsed_tools = parsed_blocks[1][0].post_processor(parsed_blocks[1][1])
+    assert len(parsed_tools) == 2
+    assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
+    assert _arguments(parsed_tools[1]) == {"city": "Tokyo"}
+
+
+class _ReasoningEffortProbeTokenizer:
+    def __init__(self, chat_template, raise_type_error=False):
+        self.chat_template = chat_template
+        self.raise_type_error = raise_type_error
+
+    def apply_chat_template(self, conversation, tokenize=False, add_generation_prompt=False, **kwargs):
+        if self.raise_type_error:
+            raise TypeError("unexpected keyword argument")
+
+        reasoning_effort = kwargs.get("reasoning_effort", "missing")
+        return f"{self.chat_template}|reasoning_effort={reasoning_effort}"
+
+
+def test_transformers_reasoning_effort_probe_detects_supported_template():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    tokenizer = _ReasoningEffortProbeTokenizer("{{ reasoning_effort }}")
+
+    assert engine._template_supports_reasoning_effort(tokenizer) is True
+
+
+def test_transformers_reasoning_effort_probe_rejects_unsupported_template():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+
+    no_template_support = _ReasoningEffortProbeTokenizer("{{ messages }}")
+    assert engine._template_supports_reasoning_effort(no_template_support) is False
+
+    no_runtime_support = _ReasoningEffortProbeTokenizer("{{ reasoning_effort }}", raise_type_error=True)
+    assert engine._template_supports_reasoning_effort(no_runtime_support) is False
+
+
+def test_transformers_thinking_detection_handles_mistral_think_tags():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    engine._transformer_tokenizer = _ReasoningEffortProbeTokenizer(
+        "{% if block['type'] == 'thinking' %}[THINK]{% endif %}"
+    )
+
+    assert engine.check_thinking_model() is True

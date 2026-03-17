@@ -72,6 +72,7 @@ class PromptEngineTransformers:
         self.is_thinking_model = self.check_thinking_model()
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
         self.support_developer_role = self._template_supports_developer_role(self._transformer_tokenizer)
+        self.support_reasoning_effort = self._template_supports_reasoning_effort(self._transformer_tokenizer)
 
 
 
@@ -100,8 +101,18 @@ class PromptEngineTransformers:
         if not template:
             return False
 
-        # Check for the standard HF field or your custom field
-        return "message.reasoning_content" in template or "message.reasoning" in template or "reasoning_content" in template
+        thinking_markers = (
+            "message.reasoning_content",
+            "message.reasoning",
+            "reasoning_content",
+            "reasoning_effort",
+            "[THINK]",
+            "type'] == 'thinking'",
+            'type"] == "thinking"',
+            "type'] == \"thinking\"",
+            'type"] == \'thinking\'',
+        )
+        return any(marker in template for marker in thinking_markers)
 
     def patch_thinking_template(self):
         """
@@ -175,6 +186,46 @@ class PromptEngineTransformers:
             return False
 
         return False
+
+    @lru_cache(maxsize=1)
+    def _template_supports_reasoning_effort(self, tokenizer) -> bool:
+        """
+        Probes whether the tokenizer chat template consumes a custom reasoning_effort
+        kwarg and renders it into the prompt.
+        """
+        template = tokenizer.chat_template
+        if not template or "reasoning_effort" not in template:
+            return False
+
+        probe_msg = [{"role": "user", "content": "PROBE_TEST_REASONING"}]
+
+        try:
+            result_high = tokenizer.apply_chat_template(
+                probe_msg,
+                tokenize=False,
+                add_generation_prompt=False,
+                reasoning_effort="high",
+            )
+            result_none = tokenizer.apply_chat_template(
+                probe_msg,
+                tokenize=False,
+                add_generation_prompt=False,
+                reasoning_effort="none",
+            )
+        except TypeError:
+            logger.debug("Tokenizer apply_chat_template does not accept reasoning_effort kwarg")
+            return False
+        except Exception:
+            logger.debug("Failed to probe whether reasoning_effort is supported")
+            return False
+
+        supports_reasoning_effort = result_high != result_none
+        if supports_reasoning_effort:
+            logger.info("Chat template supports reasoning_effort")
+        else:
+            logger.info("Chat template does not render reasoning_effort")
+
+        return supports_reasoning_effort
 
     def convert_openai_to_hf_format(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -275,16 +326,21 @@ class PromptEngineTransformers:
                         conversation[index]["content"] = _content_str
 
         enable_thinking = query.reasoning_effort is not None
+        template_kwargs = {
+            "conversation": conversation,
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "tools": [_t.model_dump() for _t in query.tools] if query.tools else None,
+            "enable_thinking": enable_thinking,
+        }
+
+        if self.support_reasoning_effort:
+            # Some templates, including recent Mistral variants, only expose a binary
+            # reasoning toggle via reasoning_effort = none|high.
+            template_kwargs["reasoning_effort"] = "high" if enable_thinking else "none"
 
         # 4. Get prompt from transformers
-        prompt = self._transformer_tokenizer.apply_chat_template(
-            conversation=conversation,
-            tokenize=False,
-            # add_generation_prompt=conversation[-1]["role"] == "user",
-            add_generation_prompt=True,
-            tools=[_t.model_dump() for _t in query.tools] if query.tools else None,
-            enable_thinking=enable_thinking
-        )
+        prompt = self._transformer_tokenizer.apply_chat_template(**template_kwargs)
 
         # handling thinking
         starting_tag = TagDefinition(tag_type="text")

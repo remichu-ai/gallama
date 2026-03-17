@@ -12,11 +12,11 @@ MODEL_SPECIAL_TAG = {
     "gpt_oss": gpt_oss,
     "qwen2": qwen3_moe,
     "qwen2_5_vl": qwen3_moe,
-    "qwen3": qwen35,
-    "qwen3_moe":  qwen35,
-    "qwen3_next": qwen35,
-    "qwen3_vl": qwen35,
-    "qwen3_vl_moe": qwen35,
+    "qwen3": qwen3_moe,
+    "qwen3_moe":  qwen3_moe,
+    "qwen3_next": qwen3_moe,
+    "qwen3_vl": qwen3_moe,
+    "qwen3_vl_moe": qwen3_moe,
     "qwen3_5": qwen35,
     "qwen3_5_moe": qwen35,
     "minimax": minimax,
@@ -27,6 +27,7 @@ MODEL_SPECIAL_TAG = {
     "glm4_moe": glm4,
     "ministral3": ministral3,
     "mistral3": ministral3,
+    "mistral4": ministral3,
     "step3p5": qwen35,
     "nemotron_h": qwen35,
 }
@@ -38,7 +39,8 @@ MODEL_EOS_TOKEN = {
     "glm4v":  ["<|user|>", "<|observation|>"],
     "glm4v_moe":  ["<|user|>", "<|observation|>"],
     "glm4_moe":  ["<|user|>", "<|observation|>"],
-    "mistral3": ["</s>"]
+    "mistral3": ["</s>"],
+    "mistral4": ["</s>"]
 }
 
 MODEL_VISION_TOKEN = {
