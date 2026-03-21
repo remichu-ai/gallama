@@ -21,7 +21,7 @@ from pathlib import Path
 from textwrap import dedent
 import uuid
 from transformers import AutoTokenizer, AutoConfig
-from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, MODEL_VISION_TOKEN
+from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, resolve_vision_token
 from ....api_response.stream_parser_v2 import StreamParserByTag
 
 
@@ -64,7 +64,10 @@ class PromptEngineTransformers:
         if MODEL_EOS_TOKEN.get(self.model_type, None) is not None:
             self.eos_token_list.extend(MODEL_EOS_TOKEN[self.model_type])
 
-        self._vision_token = MODEL_VISION_TOKEN.get(self.model_type, None)
+        self._vision_token = resolve_vision_token(
+            model_type=self.model_type,
+            tokenizer=self._transformer_tokenizer,
+        )
 
         # make unique, transformers might return None hence need to exclude
         self.eos_token_list = list(set([_s for _s in self.eos_token_list if _s is not None]))
@@ -90,6 +93,14 @@ class PromptEngineTransformers:
 
     @property
     def vision_token(self):
+        return self._vision_token
+
+    def ensure_vision_token(self):
+        if self._vision_token is None:
+            self._vision_token = resolve_vision_token(
+                model_type=self.model_type,
+                tokenizer=self._transformer_tokenizer,
+            )
         return self._vision_token
 
     def check_thinking_model(self):
@@ -273,6 +284,36 @@ class PromptEngineTransformers:
 
         return hf_messages
 
+    def _append_structured_output_schema_instruction(
+        self,
+        conversation: List[Dict],
+        query: ChatMLQuery,
+    ) -> None:
+        response_format = query.response_format
+        if not response_format or response_format.type != "json_schema":
+            return
+
+        schema_prompt = (
+            "\n\nAnswer using the following schema:\n"
+            f"{json.dumps(response_format.json_schema.schema_, indent=2)}"
+        )
+
+        for message in reversed(conversation):
+            if message.get("role") != "user":
+                continue
+
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = f"{content}{schema_prompt}"
+                return
+
+            if isinstance(content, list):
+                message["content"].append({
+                    "type": "text",
+                    "text": schema_prompt,
+                })
+                return
+
     def get_prompt(
         self,
         query: ChatMLQuery,
@@ -297,6 +338,7 @@ class PromptEngineTransformers:
 
         # patch image format
         conversation = self.convert_openai_to_hf_format(conversation)
+        self._append_structured_output_schema_instruction(conversation, query)
 
         # Before passing messages to tokenizer.apply_chat_template:
         # convert tool call to json string

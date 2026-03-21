@@ -1,1 +1,0 @@
-from .GPT_SoVITS.TTS_infer_pack.TTS import TTS_Config, TTS

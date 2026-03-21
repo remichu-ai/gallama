@@ -9,6 +9,7 @@ from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 
 from gallama.logger.logger import logger
+from gallama.backend.llm.json_schema_utils import normalize_json_schema_for_formatron
 from gallama.data_classes import (
     BaseMessage,
     ModelSpec,
@@ -100,6 +101,7 @@ class ModelExllamaV3(ModelInterface):
             gpus=self.gpus,
             reserve_vram=self._reserve_vram,
             tensor_parallel=self.tensor_parallel,
+            backend_extra_args=self.backend_extra_args,
         )
 
         # # load draft model
@@ -139,7 +141,7 @@ class ModelExllamaV3(ModelInterface):
             # for non cuda env e.g. macbook
             return None
 
-    def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False):
+    def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False, backend_extra_args=None):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id)
 
@@ -147,6 +149,13 @@ class ModelExllamaV3(ModelInterface):
         model = Model.from_config(config)
         tokenizer = Tokenizer.from_config(config)
         processor = None    # placeholder for visual processing tower
+
+        if tensor_parallel and not model.caps.get("supports_tp", False):
+            raise ValueError(
+                f"Tensor parallel is not supported by the installed ExLlama V3 architecture "
+                f"'{config.architecture}' for model '{model_id}'. Disable `tp`, use a different backend, "
+                f"or install an ExLlama V3 build that supports this architecture."
+            )
 
 
         # find the max sequence length
@@ -216,12 +225,19 @@ class ModelExllamaV3(ModelInterface):
             free_vram = [max(0, f-vram_reserve) for f in free_vram]
             gpus = free_vram if free_vram else gpus
 
+        load_kwargs = {
+            "progressbar": True,
+            "use_per_device": gpus if isinstance(gpus, list) else None,
+            "tensor_p": tensor_parallel,
+        }
+
+        tp_backend = (backend_extra_args or {}).get("tp_backend")
+        if tp_backend:
+            logger.info("Tensor parallel backend: " + str(tp_backend))
+            load_kwargs["tp_backend"] = tp_backend
+
         model.load(
-            progressbar = True,
-            use_per_device = gpus if isinstance(gpus, list) else None,
-            # tp_options={"moe_tensor_split": True},
-            tensor_p=tensor_parallel,
-            # tp_backend="nccl",
+            **load_kwargs,
         )
 
         # load vision processor if there is
@@ -237,6 +253,9 @@ class ModelExllamaV3(ModelInterface):
         # if processor is not None, meaning at least image is supported
         if processor:
             self.modalities.add("image")
+            vision_token = self.prompt_eng.ensure_vision_token()
+            if vision_token is None:
+                logger.warning("Vision tower loaded but no vision token could be resolved for prompt templating")
 
         # # check if video is supported
         # if processor and processor.video_preprocess_func:
@@ -479,6 +498,10 @@ class ModelExllamaV3(ModelInterface):
 
         if json_schema_dict is None:
             return []
+
+        # Formatron cannot handle numeric bound metadata like minimum/maximum,
+        # so normalize the schema into a compatible form before building filters.
+        json_schema_dict = normalize_json_schema_for_formatron(json_schema_dict)
 
         if "$schema" not in json_schema_dict:
             json_schema_dict["$schema"] = "http://json-schema.org/draft-07/schema#"

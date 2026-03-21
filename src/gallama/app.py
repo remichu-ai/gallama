@@ -183,8 +183,9 @@ def make_server(args):
     logger.info("Parsed Arguments:" + str(args))  # Debug statement
 
     if args.detached:
-        # send logging to zmq so that it will show in the parent log
-        logger = get_logger(name="child", to_zmq=True, to_console=False)
+        # Reconfigure the shared package logger used across imported modules so
+        # worker logs are forwarded back to the manager via ZMQ.
+        logger = get_logger(name="logger", to_zmq=True, to_console=False)
     else:
         # keep the default logger declared on top
         pass
@@ -252,11 +253,19 @@ def make_server(args):
 
 
 def parse_dict(arg):
-    """Parses a key=value string and returns a dictionary."""
+    """Parses key=value pairs and supports dotted keys for nested dictionaries."""
+
+    def assign_nested_key(target, dotted_key, value):
+        parts = dotted_key.split(".")
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     result = {}
     for pair in arg.split():
-        key, value = pair.split('=')
-        result[key] = value.strip("'")  # Strip single quotes here as well
+        key, value = pair.split('=', 1)
+        assign_nested_key(result, key, value.strip("'"))
     return result
 
 

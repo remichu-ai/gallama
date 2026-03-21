@@ -314,6 +314,10 @@ class ChatMLQuery(BaseModel):
         default=16000,
         alias="max_completion_tokens"
     )
+    thinking_token_budget: Optional[int] = Field(
+        default=None,
+        description="Budget for the preliminary thinking/reasoning pass. Defaults to max(4096, max_tokens * 2)."
+    )
     reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = "medium"
     store: Optional[bool] = Field(
         description="Whether or not to store the output of this chat completion request for use in model distillation or evals products.",
@@ -376,6 +380,21 @@ class ChatMLQuery(BaseModel):
         if v < 0:
             raise ValueError('tool_call_thinking_token must be greater than or equal to 0')
         return v
+
+    @validator('thinking_token_budget')
+    def validate_thinking_token_budget(cls, v):
+        """Validate that thinking_token_budget is greater than or equal to 0 when provided."""
+        if v is not None and v < 0:
+            raise ValueError('thinking_token_budget must be greater than or equal to 0')
+        return v
+
+    @model_validator(mode='after')
+    def set_default_thinking_token_budget(self):
+        """Default the thinking token budget based on max_tokens when omitted."""
+        if self.thinking_token_budget is None:
+            max_tokens = self.max_tokens or 0
+            self.thinking_token_budget = max(4096, max_tokens * 2)
+        return self
 
 
 
@@ -639,7 +658,6 @@ SUPPORTED_BACKENDS = [
     "embedding",
     "faster_whisper",
     "mlx_whisper",
-    "gpt_sovits",
     "kokoro",
     None
 ]
@@ -730,7 +748,7 @@ class ModelSpec(BaseModel):
             return "llm"
         elif backend in ["faster_whisper", "mlx_whisper"]:
             return "stt"
-        elif backend in ["gpt_sovits", "kokoro"]:
+        elif backend in ["kokoro"]:
             return "tts"
         elif backend in ["embedding"]:
             return "embedding"
@@ -781,7 +799,7 @@ class ModelSpec(BaseModel):
         prompt_template = input_dict.get('prompt_template', None)
 
         # concurrent request
-        allowed_concurrency = 50 if backend in ["exllama", "embedding"] else 1  # TODO to look into optimal number for each backend
+        allowed_concurrency = 50 if backend in ["exllama", "exllamav3", "embedding"] else 1  # TODO to look into optimal number for each backend
         max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
 
         backend_extra_args = input_dict.get('backend_extra_args', {})
@@ -880,8 +898,10 @@ class ModelSpec(BaseModel):
         Returns:
             ModelSpec: A new ModelSpec instance with merged configurations
         """
-        # Convert current ModelSpec to dict, excluding None values
-        spec_dict = self.model_dump(exclude_none=True)
+        # Only preserve fields explicitly provided by the caller. Otherwise
+        # ModelSpec defaults like tensor_parallel=False overwrite values coming
+        # from model_config.yaml during merge.
+        spec_dict = self.model_dump(exclude_none=True, exclude_unset=True)
 
         # Merge configurations recursively
         merged_config = ModelSpec.deep_merge_dicts(model_config, spec_dict)

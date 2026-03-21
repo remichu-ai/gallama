@@ -417,7 +417,7 @@ async def validate_message(raw_data: str) -> WSInterTTS:
 @router.websocket("/ws/speech")
 async def websocket_endpoint(websocket: WebSocket):
     model_manager = get_model_manager()
-    model_name = "gpt_sovits"
+    model_name = "kokoro"
     tts = model_manager.get_model(model_name, _type="tts")
     # tts = model_manager.tts_dict.get(model_name)
 

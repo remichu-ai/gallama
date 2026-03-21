@@ -290,7 +290,8 @@ class ModelInterface(ABC):
 
         try:
             prompt, gen_start = prompt_eng.get_prompt(
-                query
+                query,
+                backend=self.backend,
             )
 
             # check if json schema enforced
@@ -359,7 +360,10 @@ class ModelInterface(ABC):
                         # 'formatter': self.formatter,
                         # add endtag of thinking as stop token
                         'stop_words': stop_words,
-                        'max_tokens': query.max_tokens,
+                        # Let the reasoning pass consume the full remaining context budget.
+                        # The final structured/output-constrained pass below still respects
+                        # query.max_tokens.
+                        'max_tokens': None,
                         # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                         # 'banned_strings': banned_strings,
                         'request': request,

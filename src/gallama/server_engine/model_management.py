@@ -7,10 +7,6 @@ from fastapi import HTTPException
 from pathlib import Path
 from typing import Dict
 from gallama.data_classes import ModelInfo, ModelDownloadSpec
-import httpx
-import zipfile
-import io
-import shutil
 
 
 def _import_huggingface_hub():
@@ -154,56 +150,6 @@ def download_model_from_hf(model_spec: ModelDownloadSpec):
             update_model_yaml(
                 model_name=f"{model_name}_llama_cpp",
                 model_path=f"{str(download_dir)}/{filename}",
-                backend=backend,
-                prompt_template=model_config.get('prompt_template', None),
-                backend_extra_args=backend_extra_args,
-                quant=quant,
-                cache_quant=model_config.get('default_cache_quant', None),
-                config_manager=config_manager,
-            )
-        elif backend == "gpt_sovits":
-            # Full repository download
-            snapshot_download(
-                repo_id=repo_id,
-                revision=branch,
-                local_dir=download_dir,
-            )
-
-            # Fetch the China voice URL from the extra_url field in the config
-            if 'extra_url' in repo_info and 'china_voice_url' in repo_info['extra_url']:
-                china_voice_url = repo_info['extra_url']['china_voice_url']
-                logger.info(f"Downloading China voice model from {china_voice_url}...")
-
-                # Download China voice model using httpx
-                with httpx.Client() as client:
-                    response = client.get(china_voice_url)
-                    response.raise_for_status()  # Ensure the download was successful
-
-                    # Unzip the file
-                    with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
-                        zip_ref.extractall(download_dir)
-
-                    # Locate the G2PWModel_1.1 folder
-                    g2pw_folder = os.path.join(download_dir, "G2PWModel_1.1")
-                    if os.path.exists(g2pw_folder):
-                        # Rename the folder to G2PWModel
-                        new_g2pw_folder = os.path.join(download_dir, "G2PWModel")
-                        os.rename(g2pw_folder, new_g2pw_folder)
-
-                        # Move the renamed folder to the /text folder
-                        text_folder = os.path.join(download_dir, "text")
-                        os.makedirs(text_folder, exist_ok=True)
-                        shutil.move(new_g2pw_folder, text_folder)
-
-                logger.info(f"China voice model downloaded and extracted to {text_folder}.")
-            else:
-                logger.warning("No 'china_voice_url' found in 'extra_url' field. Skipping China voice model download.")
-
-            logger.info(f"Download complete. Model saved in {download_dir}")
-
-            update_model_yaml(
-                model_name=model_name,
-                model_path=str(download_dir),
                 backend=backend,
                 prompt_template=model_config.get('prompt_template', None),
                 backend_extra_args=backend_extra_args,

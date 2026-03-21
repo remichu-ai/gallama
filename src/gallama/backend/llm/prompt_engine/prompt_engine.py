@@ -83,3 +83,9 @@ class PromptEngine:
     @property
     def vision_token(self) -> str | None:
         return self._impl.vision_token
+
+    def ensure_vision_token(self) -> str | None:
+        ensure = getattr(self._impl, "ensure_vision_token", None)
+        if ensure is None:
+            return self.vision_token
+        return ensure()

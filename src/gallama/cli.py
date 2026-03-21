@@ -71,12 +71,19 @@ def ensure_config_file():
 
 
 def parse_dict(arg):
-    """Parses a key=value string and returns a dictionary."""
+    """Parses key=value pairs and supports dotted keys for nested dictionaries."""
+
+    def assign_nested_key(target, dotted_key, value):
+        parts = dotted_key.split(".")
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     result = {}
     for pair in arg.split():
-
-        key, value = pair.split('=')
-        result[key] = value.strip("'")  # Strip single quotes here as well
+        key, value = pair.split('=', 1)
+        assign_nested_key(result, key, value.strip("'"))
     return result
 
 

@@ -444,7 +444,7 @@ mistral:
 
 Typical keys:
 
-- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `transformers`, `embedding`, `kokoro`, or `gpt_sovits`
+- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `transformers`, `embedding`, or `kokoro`
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
@@ -452,7 +452,7 @@ Typical keys:
 - `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
 - `quant`: optional metadata for the model quantization you downloaded
 - `eos_token_list`: optional extra EOS tokens for models that need them
-- `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `gpt_sovits`, and similar backends
+- `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `kokoro`, and similar backends
 
 Example with a `transformers` backend:
 
@@ -517,29 +517,6 @@ Notes for `llama_cpp_server`:
 - Direct video input is not sent to `llama-server`, but Gallama can still fall back to converting video frames into images for backends that support images.
 - `use_server_tokenizer` must stay `true` in the current implementation.
 
-Example with TTS voice presets:
-
-```yaml
-gpt_sovits:
-  backend: gpt_sovits
-  model_id: /home/your-user/gallama/models/gpt_sovits
-  backend_extra_args:
-    device: cuda
-    is_half: false
-    version: v2
-    chunk_size_in_s: 0.1
-    bert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-roberta-wwm-ext-large
-    cnhuhbert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-hubert-base
-    t2s_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt
-    vits_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s2G2333k.pth
-  voice:
-    shenhe:
-      language: en
-      ref_audio_path: /path/to/reference.wav
-      ref_audio_transcription: I'm not trying to save the world...
-      speed_factor: 1.1
-```
-
 Notes:
 
 - Use the YAML key itself as the API model name. For example, if the key is `qwen-2.5-32B`, then that is the model string to pass in the client request.
@@ -559,7 +536,7 @@ Customize the model launch using various parameters. Available parameters for th
 - `cache_size`: Context length for cache text in integers (optional)
 - `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional)
 - `max_seq_len`: Maximum sequence length (optional)
-- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `gpt_sovits`, `kokoro`.
+- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `kokoro`.
 - `tp`: enable tensor parallel with exllama v2 (experimental). See further below
 
 #### Run Without `model_config.yaml`

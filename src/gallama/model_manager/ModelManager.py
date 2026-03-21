@@ -123,6 +123,7 @@ class ModelManager:
             _default_model_spec = ModelSpec.from_dict(model_config)
             # Merge configurations that user pass in with default setting of the model
             model_spec = ModelSpec.from_merged_config(model_spec, _default_model_spec.model_dump())
+            logger.info(f"Resolved model_spec from config: {model_spec}")
 
         if not model_spec.model_id:
             raise Exception(f"model_id is required for '{model_name}' when it is not fully defined in model_config.yaml")
@@ -210,16 +211,6 @@ class ModelManager:
                 model_object=stt
             )
 
-        elif model_spec.backend == "gpt_sovits":  # embedding model
-            from gallama.backend.tts import TTS_GPT_SoVITS
-            tts = TTS_GPT_SoVITS(model_spec=model_spec)
-
-            # update dict
-            self._update_model(
-                model_name=model_name,
-                model_spec=model_spec,
-                model_object=tts
-            )
         elif model_spec.backend == "kokoro":  # embedding model
             from gallama.backend.tts import TTSKokoro
             tts = TTSKokoro(model_spec=model_spec)

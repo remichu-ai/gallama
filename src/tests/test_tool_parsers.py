@@ -1,6 +1,7 @@
 import json
 
 from gallama.api_response.stream_parser_v2 import StreamParserByTag
+from gallama.data_classes.data_class import ChatMLQuery
 from gallama.backend.llm.prompt_engine.by_model.default import tool_parser
 from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_parser, gpt_oss
 from gallama.backend.llm.prompt_engine.by_model.glm4 import glm4_tool_parser
@@ -9,7 +10,7 @@ from gallama.backend.llm.prompt_engine.by_model.ministral3 import ministral3_too
 from gallama.backend.llm.prompt_engine.pe_transformers import PromptEngineTransformers
 from gallama.backend.llm.prompt_engine.by_model.qwen3 import qwen3_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.qwen35 import qwen35_tool_parser
-from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_SPECIAL_TAG
+from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_SPECIAL_TAG, resolve_vision_token
 
 
 def _arguments(parsed_call):
@@ -220,6 +221,54 @@ def test_transformers_reasoning_effort_probe_detects_supported_template():
     assert engine._template_supports_reasoning_effort(tokenizer) is True
 
 
+class _VisionProbeToken:
+    def __init__(self, content):
+        self.content = content
+
+
+class _VisionProbeTokenizer:
+    def __init__(self, all_special_tokens=None, special_tokens_map=None, added_tokens_decoder=None):
+        self.all_special_tokens = all_special_tokens or []
+        self.special_tokens_map = special_tokens_map or {}
+        self.added_tokens_decoder = added_tokens_decoder or {}
+
+
+def test_resolve_vision_token_prefers_explicit_model_mapping():
+    tokenizer = _VisionProbeTokenizer(all_special_tokens=["<|image|>"])
+
+    assert resolve_vision_token("glm4v", tokenizer) == "<|begin_of_image|><|image|><|end_of_image|>"
+
+
+def test_resolve_vision_token_infers_sequence_from_tokenizer_metadata():
+    tokenizer = _VisionProbeTokenizer(
+        all_special_tokens=["<|vision_bos|>", "<|IMAGE|>", "<|vision_eos|>"],
+        added_tokens_decoder={
+            1: _VisionProbeToken("<|vision_bos|>"),
+            2: _VisionProbeToken("<|IMAGE|>"),
+            3: _VisionProbeToken("<|vision_eos|>"),
+        },
+    )
+
+    assert resolve_vision_token("unknown_model_type", tokenizer) == "<|vision_bos|><|IMAGE|><|vision_eos|>"
+
+
+def test_transformers_ensure_vision_token_backfills_from_tokenizer_metadata():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    engine.model_type = "unknown_model_type"
+    engine._vision_token = None
+    engine._transformer_tokenizer = _VisionProbeTokenizer(
+        special_tokens_map={
+            "additional_special_tokens": [
+                "<start_of_image>",
+                "<image_soft_token>",
+                "<end_of_image>",
+            ]
+        }
+    )
+
+    assert engine.ensure_vision_token() == "<start_of_image><image_soft_token><end_of_image>"
+
+
 def test_transformers_reasoning_effort_probe_rejects_unsupported_template():
     engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
 
@@ -237,3 +286,63 @@ def test_transformers_thinking_detection_handles_mistral_think_tags():
     )
 
     assert engine.check_thinking_model() is True
+
+
+def test_transformers_appends_structured_output_schema_to_last_user_string_message():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    conversation = [
+        {"role": "user", "content": "First"},
+        {"role": "assistant", "content": "Ack"},
+        {"role": "user", "content": "Please rate this"},
+    ]
+    query = ChatMLQuery.model_validate({
+        "messages": [{"role": "user", "content": "ignored"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "rating",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "rating": {"type": "integer", "minimum": 1, "maximum": 5}
+                    },
+                    "required": ["rating"],
+                },
+            },
+        },
+    })
+
+    engine._append_structured_output_schema_instruction(conversation, query)
+
+    assert conversation[0]["content"] == "First"
+    assert conversation[2]["content"].startswith("Please rate this\n\nAnswer using the following schema:\n")
+    assert '"rating"' in conversation[2]["content"]
+    assert '"minimum": 1' in conversation[2]["content"]
+
+
+def test_transformers_appends_structured_output_schema_to_last_user_list_message():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    conversation = [
+        {"role": "user", "content": [{"type": "text", "text": "Show result"}]}
+    ]
+    query = ChatMLQuery.model_validate({
+        "messages": [{"role": "user", "content": "ignored"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                },
+            },
+        },
+    })
+
+    engine._append_structured_output_schema_instruction(conversation, query)
+
+    assert conversation[0]["content"][0] == {"type": "text", "text": "Show result"}
+    assert conversation[0]["content"][-1]["type"] == "text"
+    assert conversation[0]["content"][-1]["text"].startswith("\n\nAnswer using the following schema:\n")
+    assert '"ok"' in conversation[0]["content"][-1]["text"]

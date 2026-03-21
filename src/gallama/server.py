@@ -55,7 +55,6 @@ manager_app.include_router(router)
 
 
 @manager_app.middleware("http")
-@manager_app.middleware("https")
 async def log_requests(request: Request, call_next):
     try:
         if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
@@ -241,6 +240,17 @@ MAX_CONCURRENT_REQUESTS = 100  # Adjust this value based on your system's capaci
 request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 
+def get_instance_concurrency_limit(instance: ModelInstanceInfo) -> int:
+    limit = getattr(instance, "max_concurrent_requests", 1)
+    return max(1, int(limit))
+
+
+def get_instance_load_key(instance: ModelInstanceInfo) -> tuple[float, int]:
+    active = active_requests[instance.port]
+    limit = get_instance_concurrency_limit(instance)
+    return active / limit, active
+
+
 # # set up logging
 # def start_log_receiver(zmq_url):
 #     context = zmq.Context()
@@ -332,6 +342,13 @@ async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
 
     try:
+        model_config = config_manager.configs.get(model_spec.model_name) or {}
+        if model_config:
+            resolved_model_config = model_config.copy()
+            resolved_model_config.update({"model_name": model_spec.model_name})
+            default_model_spec = ModelSpec.from_dict(resolved_model_config)
+            model_spec = ModelSpec.from_merged_config(model_spec, default_model_spec.model_dump())
+
         # add the entry for the dictionary (where key is the model name)
         if model_spec.model_name not in server_manager.models:
             server_manager.models[model_spec.model_name] = ModelInfo(instances=[])
@@ -343,8 +360,7 @@ async def run_model(model_spec: ModelSpec):
 
         server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
 
-        model_config = config_manager.configs.get(model_spec.model_name) or {}
-        backend = model_spec.backend or model_config.get('backend')
+        backend = model_spec.backend
         if not backend:
             raise ValueError(
                 f"backend is required to start model '{model_spec.model_name}' when it is not defined in model_config.yaml"
@@ -357,6 +373,7 @@ async def run_model(model_spec: ModelSpec):
         env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
         server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
         env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+        server_logger.info(f"Resolved model spec: {model_spec}")
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
@@ -409,7 +426,8 @@ async def run_model(model_spec: ModelSpec):
                 status="running",
                 model_name=model_spec.model_name,
                 model_type=ModelSpec.get_model_type_from_backend(backend),
-                strict=model_spec.strict
+                strict=model_spec.strict,
+                max_concurrent_requests=model_spec.max_concurrent_requests,
             )
             server_manager.models[model_spec.model_name].instances.append(instance_info)
         else:
@@ -468,7 +486,7 @@ async def get_instance_for_model(model: str):
     if not running_instances:
         raise HTTPException(status_code=503, detail=f"No running instances available for model: {model}")
 
-    return min(running_instances, key=lambda inst: active_requests[inst.port])
+    return min(running_instances, key=get_instance_load_key)
 
 
 
@@ -524,8 +542,9 @@ async def load_balanced_router(request: Request, path: str):
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
 
-        # Select the instance with the least active requests
-        instance = min(available_instances, key=lambda inst: active_requests[inst.port])
+        # Select the instance with the lowest normalized load so higher-capacity
+        # instances can absorb more concurrent traffic.
+        instance = min(available_instances, key=get_instance_load_key)
 
         # Increment the active request count for the selected instance
         async with server_manager.active_requests_lock:
@@ -606,11 +625,19 @@ async def main(model_list=None, port=8000, strict_mode=False, log_file: str | No
 
 # this parser is different to app.py
 def parse_dict(arg):
-    """Parses a key=value string and returns a dictionary."""
+    """Parses key=value pairs and supports dotted keys for nested dictionaries."""
+
+    def assign_nested_key(target, dotted_key, value):
+        parts = dotted_key.split(".")
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     result = {}
     for pair in arg.split():
-        key, value = pair.split('=')
-        result[key] = value.strip("'")  # Strip single quotes here as well
+        key, value = pair.split('=', 1)
+        assign_nested_key(result, key, value.strip("'"))
     return result
 
 
