@@ -561,6 +561,13 @@ To also write the same CLI logs to a file:
 gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" `--log-file ./log/gallama.log`
 ```
 
+To control log verbosity:
+
+```shell
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" -v
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" -vv
+```
+
 Useful optional arguments:
 
 - `max_seq_len=32768`
@@ -571,11 +578,14 @@ Useful optional arguments:
 - `strict=True`
 - `max_concurrent_requests=<n>`
 - `--log-file ./log/gallama.log` to mirror CLI logs into a file
+- `-v` to enable debug logging while still truncating large base64 image payloads in API request logs
+- `-vv` to enable maximum verbosity, including full base64 image payloads in API request logs
 
 Notes:
 
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
+- This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 
 #### Speculative Decoding Parameters
 - `draft_model_id`: ID of the draft model (optional)

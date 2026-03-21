@@ -2,7 +2,7 @@ import argparse
 import shutil
 from pathlib import Path
 from gallama.config import ConfigManager
-from gallama.logger.logger import logger, get_logger
+from gallama.logger.logger import logger, get_logger, get_log_level_for_verbosity, set_log_verbosity
 from gallama.server import run_from_script
 from gallama.server_routes import download_model
 from gallama.data_classes.data_class import ModelDownloadSpec, SUPPORTED_BACKENDS
@@ -95,7 +95,14 @@ def run_server(host, port):
 
 def main_cli():
     arg_parser = argparse.ArgumentParser(description="Launch multi model src instance")
-    arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+    arg_parser.add_argument(
+        '-v',
+        "--verbose",
+        dest="global_verbose",
+        action='count',
+        default=0,
+        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+    )
 
     subparsers = arg_parser.add_subparsers(dest="command")
 
@@ -120,7 +127,13 @@ def main_cli():
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     serve_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
-    serve_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+    serve_parser.add_argument(
+        '-v',
+        "--verbose",
+        action='count',
+        default=0,
+        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+    )
 
 
     # Add 'download' subcommand
@@ -134,7 +147,17 @@ def main_cli():
     list_parser.add_argument("type", nargs='?', choices=['available', 'downloaded'], default='downloaded',
                              help="List downloaded model (default) or list available to show the list of model that can be downloaded")
 
+    subparsers.add_parser(
+        "clean",
+        help="Comment out missing local model paths in model_config.yaml",
+    )
+
     args = arg_parser.parse_args()
+    requested_verbosity = max(
+        getattr(args, "global_verbose", 0) or 0,
+        getattr(args, "verbose", 0) or 0,
+    ) + 1
+    set_log_verbosity(requested_verbosity)
 
     global logger
     logger = get_logger(
@@ -147,11 +170,7 @@ def main_cli():
     # ensure config file is there
     ensure_config_file()
 
-    # set logger level
-    if args.verbose:
-        logger.setLevel("DEBUG")
-    else:
-        logger.setLevel("INFO")
+    logger.setLevel(get_log_level_for_verbosity())
 
     if args.command == "run" or args.command is None:
         # if args.model_name and not args.model_id:
@@ -185,6 +204,20 @@ def main_cli():
         elif args.type == "running":
             # Implement logic to list running models
             pass
+
+    elif args.command == "clean":
+        config_manager = ConfigManager()
+        cleaned_models = config_manager.comment_out_missing_models()
+        config_path = config_manager.get_gallama_user_config_file_path
+
+        if cleaned_models:
+            logger.info(f"Commented out {len(cleaned_models)} model entries in {config_path}")
+            for model in cleaned_models:
+                logger.info(
+                    f"Disabled model '{model['model_name']}' because path was not found: {model['model_id']}"
+                )
+        else:
+            logger.info(f"No missing local model paths found in {config_path}")
 
 
 if __name__ == "__main__":

@@ -286,7 +286,7 @@ async def chat_completion_response(
             elif isinstance(item, GenerationStats):
                 gen_stats = item        # Not applicable for completion endpoint
             elif isinstance(item, GenStart):
-                logger.info(f"Stream starts with {item.gen_type}")
+                logger.debug(f"Stream starts with {item.gen_type}")
                 if text_tag != item.gen_type:
                     initial_tag = item.gen_type
 

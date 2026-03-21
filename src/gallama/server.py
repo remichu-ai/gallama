@@ -12,6 +12,7 @@ from gallama.data_classes.data_class import ModelSpec
 from gallama.data_classes import  ModelInstanceInfo,  ModelInfo
 from gallama.server_engine import create_options_response
 from gallama.utils import parse_request_body
+from gallama.utils.utils import format_request_body_for_logging
 from typing import List, Dict
 from gallama.config import ConfigManager
 from gallama.server_engine import forward_request
@@ -20,7 +21,6 @@ import asyncio
 import uvicorn
 import argparse
 from gallama.utils.utils import get_package_file_path
-from logging import DEBUG, INFO
 import os
 import json
 import base64
@@ -37,6 +37,11 @@ from gallama.dependencies_server import (
     start_log_receiver,
     DEFAULT_ZMQ_URL,
     configure_server_logging,
+)
+from gallama.logger.logger import (
+    get_log_level_for_verbosity,
+    is_max_log_verbosity,
+    set_log_verbosity,
 )
 
 
@@ -57,17 +62,17 @@ manager_app.include_router(router)
 @manager_app.middleware("http")
 async def log_requests(request: Request, call_next):
     try:
-        if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
+        if request.url.path in EXCLUDED_ENDPOINTS and request.method in ("POST", "PUT", "PATCH"):
             content_type = request.headers.get("Content-Type", "")
             if "multipart/form-data" in content_type or "application/octet-stream" in content_type:
                 server_logger.debug(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n[Binary content omitted]")
             else:
                 request_content = await request.body()
                 if request_content:
-                    try:
-                        request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        request_content = "[Non-JSON or binary content omitted]"
+                    request_content = format_request_body_for_logging(
+                        request_content,
+                        include_full_base64=is_max_log_verbosity(),
+                    )
                     server_logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
 
         response = await call_next(request)
@@ -656,6 +661,11 @@ def llama_picture():
 
 def run_from_script(args):
     global server_logger
+    requested_verbosity = max(
+        getattr(args, "global_verbose", 0) or 0,
+        getattr(args, "verbose", 0) or 0,
+    ) + 1
+    set_log_verbosity(requested_verbosity)
     configure_server_logging(getattr(args, "log_file", None))
     server_logger = get_server_logger()
 
@@ -683,11 +693,7 @@ def run_from_script(args):
     if model_list:
         server_logger.info("Initial models: " + str(model_list))
 
-    # set server_logger level
-    if args.verbose:
-        server_logger.setLevel(DEBUG)
-    else:
-        server_logger.setLevel(INFO)
+    server_logger.setLevel(get_log_level_for_verbosity())
 
 
     server_logger.info("Parsed Arguments:" + str(args))
@@ -721,7 +727,13 @@ if __name__ == "__main__":
                                  "cache_size is not application to embedding model"
                                  "VRAM is specified in GB. Cache size is integer which is the context length to cache."
                                  "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
-    arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+    arg_parser.add_argument(
+        '-v',
+        "--verbose",
+        action='count',
+        default=0,
+        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+    )
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     arg_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")

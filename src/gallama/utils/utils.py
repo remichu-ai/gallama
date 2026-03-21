@@ -9,8 +9,16 @@ import os
 from io import BytesIO
 from fastapi import Request
 import json
+import re
 from typing import Union, Optional, Tuple
 from gallama.logger import logger
+
+
+BASE64_DATA_URI_PATTERN = re.compile(
+    r"^(data:(?:[-\w.+]+/[-\w.+]+)?;base64,)([A-Za-z0-9+/=\s]+)$",
+    re.DOTALL,
+)
+BASE64_PREVIEW_CHARS = 96
 
 # Lazy import for Exllama
 try:
@@ -111,6 +119,76 @@ def parse_xml_to_dict(xml_string):
     xml_dict = {root.tag: xml_to_dict(root)}
 
     return xml_dict
+
+
+def truncate_base64_data_uri(value: str, preview_chars: int = BASE64_PREVIEW_CHARS) -> str:
+    stripped_value = value.strip()
+    match = BASE64_DATA_URI_PATTERN.match(stripped_value)
+    if not match:
+        return value
+
+    prefix, encoded_data = match.groups()
+    compact_data = "".join(encoded_data.split())
+
+    if len(compact_data) <= preview_chars:
+        return value
+
+    return (
+        f"{prefix}{compact_data[:preview_chars]}"
+        f"...[truncated base64, total={len(compact_data)} chars]"
+    )
+
+
+def sanitize_payload_for_logging(payload, include_full_base64: bool = False):
+    if include_full_base64:
+        return payload
+
+    if isinstance(payload, dict):
+        return {
+            key: sanitize_payload_for_logging(value, include_full_base64=include_full_base64)
+            for key, value in payload.items()
+        }
+
+    if isinstance(payload, list):
+        return [
+            sanitize_payload_for_logging(item, include_full_base64=include_full_base64)
+            for item in payload
+        ]
+
+    if isinstance(payload, str):
+        return truncate_base64_data_uri(payload)
+
+    return payload
+
+
+def format_payload_for_logging(payload, include_full_base64: bool = False) -> str:
+    sanitized_payload = sanitize_payload_for_logging(
+        payload,
+        include_full_base64=include_full_base64,
+    )
+
+    if isinstance(sanitized_payload, (dict, list)):
+        return json.dumps(sanitized_payload, indent=2, ensure_ascii=False)
+
+    return str(sanitized_payload)
+
+
+def format_request_body_for_logging(body, include_full_base64: bool = False) -> str:
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return "[Non-JSON or binary content omitted]"
+
+    if isinstance(body, str):
+        try:
+            parsed_body = json.loads(body)
+        except json.JSONDecodeError:
+            return format_payload_for_logging(body, include_full_base64=include_full_base64)
+        else:
+            return format_payload_for_logging(parsed_body, include_full_base64=include_full_base64)
+
+    return format_payload_for_logging(body, include_full_base64=include_full_base64)
 
 
 def get_package_file_path(file_name: str) -> str:
