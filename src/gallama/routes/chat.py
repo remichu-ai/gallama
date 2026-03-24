@@ -6,16 +6,21 @@ from ..api_response.chat_response import (
     completion_response,
     completion_response_stream,
 )
-from ..dependencies import get_model_manager
+from ..dependencies import get_model_manager, get_response_store
 from ..logger import logger
 from ..data_classes import (
+    BaseMessage,
     ChatMLQuery,
     ToolForce,
     GenerateQuery,
     GenQueue,
     GenQueueDynamic,
-    AnthropicMessagesRequest
+    AnthropicMessagesRequest,
+    ResponsesCreateRequest,
+    ResponsesCreateResponse,
+    response_output_to_assistant_messages,
 )
+from ..response_store import ResponseStoreRecord
 from typing import Literal
 
 import asyncio
@@ -128,6 +133,135 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
     except HTTPException as e:
         logger.error(e)
         return e
+
+
+def _clone_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    return [message.model_copy(deep=True) for message in messages]
+
+
+def _merge_instructions_into_history(
+    history_messages: list[BaseMessage],
+    instructions: str | None,
+) -> list[BaseMessage]:
+    merged_messages = _clone_messages(history_messages)
+    if not instructions:
+        return merged_messages
+
+    if merged_messages and merged_messages[0].role in {"system", "developer"} and isinstance(merged_messages[0].content, str):
+        base_content = merged_messages[0].content or ""
+        merged_messages[0].content = f"{base_content}\n\n{instructions}" if base_content else instructions
+        return merged_messages
+
+    return [BaseMessage(role="system", content=instructions)] + merged_messages
+
+
+@router.post("/responses")
+async def responses(request: Request, query: ResponsesCreateRequest):
+    model_manager = get_model_manager()
+    response_store = get_response_store()
+    gen_queue = GenQueueDynamic()
+    should_store = query.store or query.previous_response_id is not None
+    response_request = query.model_copy(update={"store": should_store})
+
+    previous_messages: list[BaseMessage] = []
+    if query.previous_response_id:
+        previous_record = await response_store.get(query.previous_response_id)
+        if previous_record is None:
+            raise HTTPException(status_code=404, detail=f"Response '{query.previous_response_id}' not found")
+        previous_messages = previous_record.conversation_messages
+
+    current_messages = query.to_input_messages(include_instructions=not previous_messages)
+    effective_messages = (
+        _merge_instructions_into_history(previous_messages, query.instructions) + current_messages
+        if previous_messages
+        else current_messages
+    )
+
+    try:
+        chat_query = validate_api_request(response_request.to_chat_ml_query(messages=effective_messages))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        llm = model_manager.get_model(chat_query.model, _type="llm")
+
+        async def completion_callback(response_obj: ResponsesCreateResponse):
+            if not should_store:
+                return
+            assistant_messages = response_output_to_assistant_messages(response_obj.output)
+            conversation_messages = _clone_messages(effective_messages) + assistant_messages
+            await response_store.put(
+                ResponseStoreRecord(
+                    response_id=response_obj.id,
+                    model=response_obj.model,
+                    request=response_request.model_dump(exclude_none=True, by_alias=True),
+                    response=response_obj,
+                    conversation_messages=conversation_messages,
+                    previous_response_id=response_request.previous_response_id,
+                    store=should_store,
+                )
+            )
+
+        asyncio.create_task(
+            llm.chat(
+                query=chat_query,
+                prompt_eng=llm.prompt_eng,
+                gen_queue=gen_queue,
+                request=request,
+            )
+        )
+
+        formatter_kwargs = {"request_model": response_request}
+
+        if chat_query.stream:
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=chat_query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                    provider="responses",
+                    formatter_kwargs=formatter_kwargs,
+                    completion_callback=completion_callback if should_store else None,
+                )
+            )
+
+        return await chat_completion_response(
+            query=chat_query,
+            gen_queue=gen_queue,
+            model_name=llm.model_name,
+            request=request,
+            tag_definitions=llm.prompt_eng.tag_definitions,
+            provider="responses",
+            formatter_kwargs=formatter_kwargs,
+            completion_callback=completion_callback if should_store else None,
+        )
+    except HTTPException as e:
+        logger.error(e)
+        return e
+
+
+@router.get("/responses/{response_id}")
+async def get_response(response_id: str):
+    response_store = get_response_store()
+    record = await response_store.get(response_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found")
+    return record.response
+
+
+@router.delete("/responses/{response_id}")
+async def delete_response(response_id: str):
+    response_store = get_response_store()
+    record = await response_store.delete(response_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Response '{response_id}' not found")
+    return {
+        "id": response_id,
+        "object": "response.deleted",
+        "deleted": True,
+    }
 
 
 @router.post("/chat/generate")

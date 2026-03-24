@@ -1,10 +1,13 @@
 import re
-from gallama.backend.llm.engine.base import ModelInterface
+from gallama.backend.llm.engine.base import (
+    ModelInterface,
+    is_expected_disconnect_exception,
+    format_exception_summary,
+)
 from typing import Optional, Dict, List, Union, get_args
 import torch
 import asyncio
 from fastapi import Request                 # for type hint
-from importlib.metadata import version      # for checking of exllama version
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 
@@ -38,7 +41,6 @@ try:
         AsyncJob,
         FormatronFilter
     )
-
 except ImportError:
     Model = None
     Config = None
@@ -76,6 +78,46 @@ except ImportError:
 # format enforcement with formatron
 from formatron.formatter import FormatterBuilder
 from formatron.schemas import json_schema
+
+
+def _is_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
+    if not raw_kwargs:
+        return {}
+
+    normalized = dict(raw_kwargs)
+
+    int_keys = {
+        "max_batch_size",
+        "max_chunk_size",
+        "max_q_size",
+        "num_draft_tokens",
+        "recurrent_cache_size",
+        "recurrent_checkpoint_interval",
+    }
+    bool_keys = {
+        "show_visualizer",
+        "enable_defrag",
+    }
+
+    for key in int_keys:
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = int(value)
+
+    for key in bool_keys:
+        value = normalized.get(key)
+        if isinstance(value, str):
+            normalized[key] = _is_truthy(value)
+
+    return normalized
 
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
@@ -164,8 +206,6 @@ class ModelExllamaV3(ModelInterface):
         else:
             # set the self.max_seq_len using model config file as it is None at the moment
             self.max_seq_len = config.config_dict.get("max_position_embeddings", 16384)
-
-        cache = Cache(model, max_num_tokens=self.max_seq_len)
 
         # # a simple dict to help map cache quant
         cache_quant_dict = {
@@ -298,9 +338,15 @@ class ModelExllamaV3(ModelInterface):
                     chunk = GenEnd()
                     for g_queue in gen_queue_list:
                         try:
-                            await g_queue.get_queue().put(chunk)
+                            if not getattr(g_queue, "include_GenEnd", True):
+                                continue
+
+                            if hasattr(g_queue, "get_queue"):
+                                await g_queue.get_queue().put(chunk)
+                            else:
+                                g_queue.put_nowait(chunk)
                         except Exception as e:
-                            logger.error(f"Error putting GenEnd into queue: {str(e)}")
+                            logger.debug(f"Skipping GenEnd queue cleanup after disconnect: {str(e)}")
                     break
 
                 await asyncio.sleep(1)  # simple sleep, no wait_for wrapper
@@ -308,8 +354,15 @@ class ModelExllamaV3(ModelInterface):
         except asyncio.CancelledError:
             logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            if not stop_event or not stop_event.is_set():
-                logger.error(f"Error in check_disconnection: {str(e)}", exc_info=True)
+            if stop_event and stop_event.is_set():
+                logger.debug("Disconnection check exited after stop event")
+            elif is_expected_disconnect_exception(e):
+                logger.debug("Client disconnected while polling request state")
+            else:
+                logger.error(
+                    f"Error in check_disconnection: {format_exception_summary(e)}",
+                    exc_info=True,
+                )
         finally:
             logger.debug("Exiting check_disconnection")
 
@@ -327,16 +380,17 @@ class ModelExllamaV3(ModelInterface):
 
     async def _get_pipeline_async(self):
         """
-        create generator for exllama and also build the tokenizer data for lmfe
-        as ExLlamaV2DynamicGeneratorAsync is async function, it can not be run in the class __init__
+        as AsyncGenerator is async function, it can not be run in the class __init__
         this will be run in the first text generation to ensure that generator is initialized
         """
 
+        generator_kwargs = _normalize_generator_kwargs(self.backend_extra_args)
 
         generator = AsyncGenerator(
             model=self.model,
             cache=self.cache,
             tokenizer=self.tokenizer,
+            **generator_kwargs,
         )
 
         return self.ExllamaV3Pipeline(

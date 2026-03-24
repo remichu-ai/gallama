@@ -7,6 +7,7 @@ import time
 import torch
 import re
 import base64
+from datetime import datetime, timezone
 from PIL import Image
 from ..logger import logger
 from .video import VideoFrame
@@ -629,6 +630,27 @@ class ModelObjectResponse(BaseModel):
     data: List[ModelObject] = []
 
 
+def _default_anthropic_model_created_at() -> str:
+    return datetime.fromtimestamp(1686935002, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class AnthropicModelObject(BaseModel):
+    id: str = Field(description="id of the model")
+    type: Literal["model"] = "model"
+    display_name: str = Field(description="display name of the model")
+    created_at: str = Field(
+        description="RFC 3339 datetime string indicating when the model was created",
+        default_factory=_default_anthropic_model_created_at,
+    )
+
+
+class AnthropicModelListResponse(BaseModel):
+    data: List[AnthropicModelObject] = Field(default_factory=list)
+    first_id: Optional[str] = None
+    has_more: bool = False
+    last_id: Optional[str] = None
+
+
 class Thinking(BaseModel):
     xml: str = Field(description='xml string')
     regex: str = Field(description='regex string to enforce any value', default=None)
@@ -652,6 +674,7 @@ SUPPORTED_BACKENDS = [
     "vllm",
     "llama_cpp",
     "llama_cpp_server",
+    "ik_llama",
     "transformers",
     "mlx_vlm",
     "sglang",
@@ -744,7 +767,7 @@ class ModelSpec(BaseModel):
     def get_model_type_from_backend(cls, backend: str = None):
         if backend is None:
             return None
-        elif backend in ["exllama", "llama_cpp", "llama_cpp_server", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:
+        elif backend in ["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:
             return "llm"
         elif backend in ["faster_whisper", "mlx_whisper"]:
             return "stt"

@@ -444,7 +444,7 @@ mistral:
 
 Typical keys:
 
-- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `transformers`, `embedding`, or `kokoro`
+- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `embedding`, or `kokoro`
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
@@ -517,6 +517,26 @@ Notes for `llama_cpp_server`:
 - Direct video input is not sent to `llama-server`, but Gallama can still fall back to converting video frames into images for backends that support images.
 - `use_server_tokenizer` must stay `true` in the current implementation.
 
+Example with an `ik_llama` backend:
+
+```yaml
+qwen_ik_llama:
+  backend: ik_llama
+  model_id: /home/your-user/models/qwen.gguf
+  prompt_template: Qwen2-VL
+  max_seq_len: 32768
+  backend_extra_args:
+    base_url: http://127.0.0.1:8080
+    cache_prompt: true
+    use_server_tokenizer: true
+```
+
+Notes for `ik_llama`:
+
+- This backend inherits the `llama_cpp_server` integration and uses the same `/completion` and `/tokenize` flow.
+- It automatically applies `backend_extra_args.multimodal_marker: "<__media__>"` for multimodal `/completion` requests unless you override it explicitly.
+- Use `ik_llama` when the base `llama_cpp_server` backend works for text but `ik_llama.cpp` vision requests require the server-side MTMD marker format.
+
 Notes:
 
 - Use the YAML key itself as the API model name. For example, if the key is `qwen-2.5-32B`, then that is the model string to pass in the client request.
@@ -536,7 +556,7 @@ Customize the model launch using various parameters. Available parameters for th
 - `cache_size`: Context length for cache text in integers (optional)
 - `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional)
 - `max_seq_len`: Maximum sequence length (optional)
-- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `kokoro`.
+- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `kokoro`.
 - `tp`: enable tensor parallel with exllama v2 (experimental). See further below
 
 #### Run Without `model_config.yaml`

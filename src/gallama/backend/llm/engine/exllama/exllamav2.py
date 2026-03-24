@@ -1,4 +1,8 @@
-from gallama.backend.llm.engine.base import ModelInterface
+from gallama.backend.llm.engine.base import (
+    ModelInterface,
+    is_expected_disconnect_exception,
+    format_exception_summary,
+)
 from typing import Optional, Dict, List, Union
 import torch
 import asyncio
@@ -299,9 +303,15 @@ class ModelExllama(ModelInterface):
                     chunk = GenEnd()
                     for g_queue in gen_queue_list:
                         try:
-                            await g_queue.get_queue().put(chunk)
+                            if not getattr(g_queue, "include_GenEnd", True):
+                                continue
+
+                            if hasattr(g_queue, "get_queue"):
+                                await g_queue.get_queue().put(chunk)
+                            else:
+                                g_queue.put_nowait(chunk)
                         except Exception as e:
-                            logger.error(f"Error putting GenEnd into queue: {str(e)}")
+                            logger.debug(f"Skipping GenEnd queue cleanup after disconnect: {str(e)}")
 
                     # break the while loop
                     break
@@ -316,9 +326,16 @@ class ModelExllama(ModelInterface):
         except asyncio.CancelledError:
             logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            raise
-            if not stop_event or (stop_event and not stop_event.is_set()):
-                logger.error(f"An error occurred in check_disconnection: {str(e)}", exc_info=True)
+            if stop_event and stop_event.is_set():
+                logger.debug("Disconnection check exited after stop event")
+            elif is_expected_disconnect_exception(e):
+                logger.debug("Client disconnected while polling request state")
+            else:
+                logger.error(
+                    f"Error in check_disconnection: {format_exception_summary(e)}",
+                    exc_info=True,
+                )
+                raise
         finally:
             logger.debug("Exiting check_disconnection")
 

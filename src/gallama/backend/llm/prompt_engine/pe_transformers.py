@@ -323,7 +323,7 @@ class PromptEngineTransformers:
         leading_prompt: str = "",
         thinking_template: str = None,
         thinking_response: str = None,
-        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
+        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
         pydantic_tool_code: str = None,     # the code representation of tool
     ) -> str:
 

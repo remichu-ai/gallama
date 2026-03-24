@@ -3,8 +3,9 @@ import httpx
 import uuid
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from typing import Union
-from gallama.data_classes.data_class import ModelSpec, ModelObjectResponse, ModelObject, ModelDownloadSpec
+from gallama.data_classes.data_class import ModelSpec, ModelDownloadSpec
 from gallama.data_classes import ModelRequest, StopModelByPort
+from gallama.api_response.model_response import build_models_response
 from gallama.server_engine import download_model_from_hf
 from typing import List, Dict
 from gallama.config import ConfigManager
@@ -228,11 +229,7 @@ async def list_available_models():
 async def get_models(request: Request):
     server_manager = get_server_manager()
 
-    data = []
-    for name, model in server_manager.models.items():
-        data.append(ModelObject(id=name))
-
-    return ModelObjectResponse(data=data)
+    return build_models_response(server_manager.models.keys(), request.headers)
 
 
 @router.get("/loading_status")

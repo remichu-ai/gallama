@@ -140,7 +140,7 @@ def main_cli():
     download_parser = subparsers.add_parser("download", help="Download a model from Hugging Face")
     download_parser.add_argument("model_spec", type=str, help="Model specification in the format 'model_name:quant'")
     download_parser.add_argument("--backend", type=str, default=None, choices=SUPPORTED_BACKENDS,
-                                 help="The backend to download model with. One of exllama, llama_cpp, embedding or transformers")
+                                 help="The backend to download the model with. Choose from the supported backends.")
 
     # Modify 'list' subcommand
     list_parser = subparsers.add_parser("list", help="List models")

@@ -1,9 +1,8 @@
 from fastapi import Request, APIRouter
 from gallama.data_classes import (
-    ModelObjectResponse,
-    ModelObject,
     ModelSpec
 )
+from gallama.api_response.model_response import build_models_response
 from ..logger import logger
 from ..dependencies import get_model_manager
 
@@ -25,16 +24,17 @@ def load_model(model_spec: ModelSpec):
 async def get_models(request: Request):
     model_manager = get_model_manager()
 
-    data = []
+    model_ids = []
     for model_name in model_manager.llm_dict.keys():
-        data.append(ModelObject(id=model_name))
+        model_ids.append(model_name)
     for model_name in model_manager.stt_dict.keys():
-        data.append(ModelObject(id=model_name))
+        model_ids.append(model_name)
     for model_name in model_manager.tts_dict.keys():
-        data.append(ModelObject(id=model_name))
+        model_ids.append(model_name)
     for model_name in model_manager.embedding_dict.keys():
-        data.append(ModelObject(id=model_name))
-    return ModelObjectResponse(data=data)
+        model_ids.append(model_name)
+
+    return build_models_response(model_ids, request.headers)
 
 # @router.post("/delete_model")
 # def delete_model(model_name: str):

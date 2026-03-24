@@ -1,4 +1,8 @@
-from ..base import ModelInterface
+from ..base import (
+    ModelInterface,
+    is_expected_disconnect_exception,
+    format_exception_summary,
+)
 from typing import Optional, Dict, List, Union, Any
 import time                                 # for compute of generation time
 import asyncio
@@ -181,7 +185,16 @@ class ModelVLLM(ModelInterface):
         except asyncio.CancelledError:
             logger.debug("Disconnection check was cancelled")
         except Exception as e:
-            raise
+            if stop_event and stop_event.is_set():
+                logger.debug("Disconnection check exited after stop event")
+            elif is_expected_disconnect_exception(e):
+                logger.debug("Client disconnected while polling request state")
+            else:
+                logger.error(
+                    f"Error in check_disconnection: {format_exception_summary(e)}",
+                    exc_info=True,
+                )
+                raise
         finally:
             logger.debug("Exiting check_disconnection")
 

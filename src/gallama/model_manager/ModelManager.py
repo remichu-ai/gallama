@@ -137,13 +137,15 @@ class ModelManager:
 
         # load the model with config from the model_spec and yml. model_spec comes from cli
         logger.info(f"model_spec.backend: {model_spec.backend}")
-        if model_spec.backend in ["exllama", "llama_cpp", "llama_cpp_server", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
+        if model_spec.backend in ["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
             if model_spec.backend == "exllama":
                 from gallama.backend.llm import ModelExllama as ModelClass
             elif model_spec.backend == "llama_cpp":
                 from gallama.backend.llm import ModelLlamaCpp as ModelClass
             elif model_spec.backend == "llama_cpp_server":
                 from gallama.backend.llm import ModelLlamaCppServer as ModelClass
+            elif model_spec.backend == "ik_llama":
+                from gallama.backend.llm import ModelIKLlama as ModelClass
             elif model_spec.backend == "transformers":
                 from gallama.backend.llm import ModelTransformers as ModelClass
             elif model_spec.backend == "mlx_vlm":

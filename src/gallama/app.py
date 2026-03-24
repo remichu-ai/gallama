@@ -61,6 +61,7 @@ async def read_root():
 
 
 @router.options("/v1/chat/completions")
+@router.options("/v1/responses")
 async def options_handler(request: Request):
     return JSONResponse(
         status_code=200,

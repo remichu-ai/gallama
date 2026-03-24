@@ -30,6 +30,7 @@ from gallama.data_classes import (
     QueueContext,
     VideoFrame,
 )
+from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_VISION_TOKEN
 from gallama.logger.logger import logger
 from gallama.utils.utils import get_image
 
@@ -70,6 +71,7 @@ class ModelLlamaCppServer(ModelInterface):
         self.cache_prompt = self.backend_extra_args.get("cache_prompt", True)
         self.use_server_tokenizer = self.backend_extra_args.get("use_server_tokenizer", True)
         self.require_server_healthcheck = self.backend_extra_args.get("require_server_healthcheck", True)
+        self.multimodal_marker = self.backend_extra_args.get("multimodal_marker")
         self.max_seq_len = self.max_seq_len or self.backend_extra_args.get("max_seq_len")
 
         if not self.use_server_tokenizer:
@@ -277,6 +279,63 @@ class ModelLlamaCppServer(ModelInterface):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
+    def _rewrite_multimodal_prompt_string(
+        self,
+        prompt_text: str,
+        multimodal_count: int,
+        vision_token: Optional[str] = None,
+    ) -> str:
+        if not self.multimodal_marker or multimodal_count <= 0:
+            return prompt_text
+
+        rewritten = prompt_text
+        replaced = 0
+        candidate_markers: List[str] = []
+
+        def _append_candidate(value: Optional[str]):
+            if value and value not in candidate_markers:
+                candidate_markers.append(value)
+
+        _append_candidate(vision_token)
+
+        ensure_vision_token = getattr(self.prompt_eng, "ensure_vision_token", None)
+        if callable(ensure_vision_token):
+            _append_candidate(ensure_vision_token())
+
+        for model_vision_token in MODEL_VISION_TOKEN.values():
+            _append_candidate(model_vision_token)
+
+        for pattern in candidate_markers:
+            occurrences = rewritten.count(pattern)
+            if not occurrences:
+                continue
+
+            rewritten = rewritten.replace(pattern, self.multimodal_marker)
+            replaced += occurrences
+
+        if replaced == multimodal_count:
+            return rewritten
+
+        logger.warning(
+            "Configured multimodal_marker=%r but replaced %s prompt marker(s) for %s multimodal input(s)",
+            self.multimodal_marker,
+            replaced,
+            multimodal_count,
+        )
+        return rewritten
+
+    @staticmethod
+    async def _read_error_response_text(response: httpx.Response) -> str:
+        try:
+            await response.aread()
+        except Exception as exc:
+            return f"<failed to read error response body: {exc}>"
+
+        try:
+            return response.text
+        except Exception:
+            return response.content.decode("utf-8", errors="replace")
+
     def close(self):
         if self.server_process is not None and self.server_process.poll() is None:
             logger.info(f"Stopping managed llama.cpp server for {self.model_name}")
@@ -431,6 +490,7 @@ class ModelLlamaCppServer(ModelInterface):
         stop_words: Optional[List[str]],
         json_schema: Optional[dict],
         multimodal_data: Optional[List[str]] = None,
+        vision_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "stream": True,
@@ -441,6 +501,11 @@ class ModelLlamaCppServer(ModelInterface):
         }
 
         if multimodal_data:
+            prompt_text = self._rewrite_multimodal_prompt_string(
+                prompt_text,
+                len(multimodal_data),
+                vision_token=vision_token,
+            )
             payload["prompt"] = {
                 "prompt_string": prompt_text,
                 "multimodal_data": multimodal_data,
@@ -547,7 +612,7 @@ class ModelLlamaCppServer(ModelInterface):
         return_stop_word: bool = True,
         **kwargs,
     ) -> str:
-        del formatter, banned_strings, vision_token
+        del formatter, banned_strings
 
         if video:
             raise HTTPException(status_code=400, detail="llama_cpp_server does not support direct video input")
@@ -596,6 +661,7 @@ class ModelLlamaCppServer(ModelInterface):
             stop_words=stop_conditions,
             json_schema=json_schema,
             multimodal_data=multimodal_data or None,
+            vision_token=vision_token,
         )
 
         full_completion = ""
@@ -612,7 +678,13 @@ class ModelLlamaCppServer(ModelInterface):
                     headers=self._headers(),
                     json=payload,
                 ) as response:
-                    response.raise_for_status()
+                    if response.is_error:
+                        detail = await self._read_error_response_text(response)
+                        logger.error(
+                            f"llama.cpp server error {response.status_code} at {self._url(self.completion_path)} "
+                            f"(multimodal={bool(multimodal_data)}, json_schema={bool(json_schema)}): {detail}"
+                        )
+                        raise HTTPException(status_code=response.status_code, detail=detail)
 
                     async for line in response.aiter_lines():
                         if stop_event and stop_event.is_set():
@@ -645,10 +717,6 @@ class ModelLlamaCppServer(ModelInterface):
                         if stop:
                             final_chunk = chunk
                             break
-            except httpx.HTTPStatusError as exc:
-                detail = exc.response.text
-                logger.error(f"llama.cpp server error {exc.response.status_code}: {detail}")
-                raise HTTPException(status_code=exc.response.status_code, detail=detail) from exc
             except httpx.HTTPError as exc:
                 raise HTTPException(status_code=502, detail=f"Failed to reach llama.cpp server: {exc}") from exc
 
