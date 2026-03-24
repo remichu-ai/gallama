@@ -8,7 +8,7 @@ from ..api_response.chat_response import chat_completion_response_stream
 from ..data_classes.realtime_server_proto import ContentTypeServer, ConversationItemServer, parse_conversation_item, MessageContentServer
 from ..logger import logger
 from ..data_classes.realtime_client_proto import *
-from ..routes.chat import validate_api_request
+from ..request_validation import validate_api_request
 from ..data_classes.data_class import (
     BaseMessage,
     ChatMLQuery,

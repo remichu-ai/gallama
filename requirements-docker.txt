@@ -11,6 +11,7 @@ httpx
 uvicorn
 sentence-transformers
 lm-format-enforcer
+mcp>=1.26.0
 huggingface-hub
 chardet
 sse_starlette

@@ -159,6 +159,138 @@ ANTHROPIC_BASE_URL="http://127.0.0.1:8000/" ANTHROPIC_AUTH_TOKEN="local" claude 
 
 This lets Claude Code talk to your local model through Gallama's Anthropic-compatible API.
 
+## MCP
+Gallama can discover and execute tools from a remote streamable HTTP MCP server on the server side. The request shape depends on which client surface you use:
+
+- OpenAI Chat Completions: add a tool with `"type": "mcp"`
+- OpenAI Responses: add a tool with `"type": "mcp"`
+- Anthropic Messages: define `mcp_servers` and reference them with a `"type": "mcp_toolset"` entry in `tools`
+
+Current limitations:
+
+- MCP currently works only for non-streaming requests
+- `require_approval` is only supported as `"never"` right now
+- Mixing MCP tool calls and normal function tool calls in the same model turn is not supported yet
+
+### OpenAI Chat Completions
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="test",
+)
+
+completion = client.chat.completions.create(
+    model="qwen3",
+    max_tokens=3000,
+    messages=[
+        {
+            "role": "user",
+            "content": "Use the MCP weather tool and tell me the result.",
+        }
+    ],
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+print(completion.choices[0].message.content)
+```
+
+### OpenAI Responses API
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="test",
+)
+
+response = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and tell me the result.",
+    max_output_tokens=300,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+Gallama also prepends MCP trace items to the Responses output, so you will see `mcp_list_tools` and `mcp_call` entries alongside the assistant output.
+
+### Anthropic Messages API
+Gallama accepts an Anthropic-compatible MCP request shape on `/v1/messages`, but this is not a byte-for-byte mirror of Anthropic's current hosted MCP connector beta. In Anthropic's official API, MCP is documented separately under the MCP connector docs and requires a beta header. Gallama's local compatibility layer does not require that beta header.
+
+```python
+import json
+import urllib.request
+
+payload = {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 3000,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Use the MCP weather tool and tell me the result.",
+        }
+    ],
+    "mcp_servers": [
+        {
+            "type": "url",
+            "name": "weather",
+            "url": "http://127.0.0.1:18001/mcp",
+        }
+    ],
+    "tools": [
+        {
+            "type": "mcp_toolset",
+            "mcp_server_name": "weather",
+            "allowed_tools": ["get_weather"],
+        }
+    ],
+}
+
+request = urllib.request.Request(
+    "http://127.0.0.1:8000/v1/messages",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "content-type": "application/json",
+        "x-api-key": "test",
+        "anthropic-version": "2023-06-01",
+    },
+    method="POST",
+)
+
+with urllib.request.urlopen(request) as response:
+    data = json.loads(response.read().decode("utf-8"))
+
+for block in data["content"]:
+    print(block)
+```
+
+When using the Anthropic-compatible endpoint, Gallama returns MCP activity as `mcp_tool_use` and `mcp_tool_result` blocks before the normal text block.
+
+If your MCP server requires auth, include `authorization_token` or `headers` on the MCP server/tool definition.
+
+If you are targeting Anthropic's hosted API instead of Gallama, use Anthropic's MCP connector docs and beta versioning instead of this local Gallama example.
+
+See [`src/tests/test_openai.py`](./src/tests/test_openai.py), [`src/tests/test_anthropic.py`](./src/tests/test_anthropic.py), and [`src/tests/test_responses.py`](./src/tests/test_responses.py) for live end-to-end MCP examples against a dummy MCP server.
+
 ## Function Calling
 Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.
 

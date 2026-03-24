@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from PIL import Image
 from ..logger import logger
 from .video import VideoFrame
+from ..remote_mcp.models import MCPServerConfig
 
 
 class TagEqualityMixin:
@@ -266,6 +267,28 @@ class ToolSpec(BaseModel):
     function: FunctionSpec
 
 
+class MCPToolSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    type: Literal["mcp"] = "mcp"
+    server_label: str
+    server_url: str
+    authorization_token: Optional[str] = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+    allowed_tools: Optional[List[str]] = None
+    require_approval: Optional[Union[str, Dict[str, Any]]] = None
+
+    def to_mcp_server_config(self) -> MCPServerConfig:
+        return MCPServerConfig(
+            name=self.server_label,
+            url=self.server_url,
+            authorization_token=self.authorization_token,
+            headers=self.headers,
+            allowed_tools=self.allowed_tools,
+            require_approval=self.require_approval,
+        )
+
+
 class SingleFunctionDict(BaseModel):
     name: str
 
@@ -307,7 +330,7 @@ class ChatMLQuery(BaseModel):
     temperature: Optional[float] = 0.7
     top_p: float = 0.85
     stream: Optional[bool] = False
-    tools: Optional[List[ToolSpec]] = None
+    tools: Optional[List[Union[ToolSpec, MCPToolSpec]]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
     tool_call_id: Optional[str] = None
     max_tokens: Optional[int] = Field(
@@ -364,6 +387,18 @@ class ChatMLQuery(BaseModel):
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
     parallel_tool_calls: bool = True            # default let the model handle and can not toggle
+
+    def split_tools(self) -> tuple[List[ToolSpec], List[MCPServerConfig]]:
+        function_tools: List[ToolSpec] = []
+        mcp_servers: List[MCPServerConfig] = []
+
+        for tool in self.tools or []:
+            if isinstance(tool, MCPToolSpec):
+                mcp_servers.append(tool.to_mcp_server_config())
+            else:
+                function_tools.append(tool)
+
+        return function_tools, mcp_servers
 
     @validator('regex_pattern', 'regex_prefix_pattern')
     def validate_regex(cls, v):
@@ -995,6 +1030,21 @@ class AnthropicToolResultContent(BaseModel):
     content: Union[str, List[AnthropicTextContent]]
 
 
+class AnthropicMCPToolUseContent(BaseModel):
+    type: Literal["mcp_tool_use"] = "mcp_tool_use"
+    id: str
+    name: str
+    server_name: str
+    input: Dict[str, Any]
+
+
+class AnthropicMCPToolResultContent(BaseModel):
+    type: Literal["mcp_tool_result"] = "mcp_tool_result"
+    tool_use_id: str
+    is_error: bool = False
+    content: Union[str, List[AnthropicTextContent]]
+
+
 class AnthropicToolInputSchema(BaseModel):
     type: str = "object"
     properties: Optional[Dict[str, Any]] = None
@@ -1006,6 +1056,53 @@ class AnthropicTool(BaseModel):
     description: Optional[str] = None
     input_schema: AnthropicToolInputSchema
     strict: Optional[bool] = None
+
+
+class AnthropicMCPServer(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["url"] = "url"
+    url: str
+    name: str
+    authorization_token: Optional[str] = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+
+    def to_mcp_server_config(self, allowed_tools: Optional[List[str]] = None) -> MCPServerConfig:
+        return MCPServerConfig(
+            name=self.name,
+            url=self.url,
+            authorization_token=self.authorization_token,
+            headers=self.headers,
+            allowed_tools=allowed_tools,
+        )
+
+
+class AnthropicMCPToolset(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["mcp_toolset"] = "mcp_toolset"
+    mcp_server_name: str
+    default_config: Optional[Dict[str, Any]] = None
+    configs: Optional[List[Any]] = None
+    allowed_tools: Optional[List[str]] = None
+
+    def get_allowed_tool_names(self) -> Optional[List[str]]:
+        names: List[str] = []
+
+        for value in self.allowed_tools or []:
+            if value:
+                names.append(str(value))
+
+        for config in self.configs or []:
+            if isinstance(config, str):
+                names.append(config)
+            elif isinstance(config, dict):
+                for key in ("name", "tool_name"):
+                    if config.get(key):
+                        names.append(str(config[key]))
+                        break
+
+        return names or None
 
 
 class AnthropicToolChoice(BaseModel):
@@ -1029,6 +1126,21 @@ class AnthropicToolUseBlock(BaseModel):
     input: Dict[str, Any]
 
 
+class AnthropicMCPToolUseBlock(BaseModel):
+    type: Literal["mcp_tool_use"] = "mcp_tool_use"
+    id: str
+    name: str
+    server_name: str
+    input: Dict[str, Any]
+
+
+class AnthropicMCPToolResultBlock(BaseModel):
+    type: Literal["mcp_tool_result"] = "mcp_tool_result"
+    tool_use_id: str
+    is_error: bool = False
+    content: List[AnthropicTextBlock]
+
+
 class AnthropicUsage(BaseModel):
     input_tokens: int
     output_tokens: int
@@ -1041,6 +1153,8 @@ class AnthropicMessage(BaseModel):
         AnthropicImageContent,
         AnthropicToolUseContent,
         AnthropicToolResultContent,
+        AnthropicMCPToolUseContent,
+        AnthropicMCPToolResultContent,
     ]]]
 
 class AnthropicOutputFormat(BaseModel):
@@ -1059,7 +1173,13 @@ class AnthropicMessagesResponse(BaseModel):
     id: str = Field(default_factory=lambda: "msg_" + uuid.uuid4().hex)
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
-    content: List[Union[AnthropicTextBlock, AnthropicThinkingBlock, AnthropicToolUseBlock]]
+    content: List[Union[
+        AnthropicTextBlock,
+        AnthropicThinkingBlock,
+        AnthropicToolUseBlock,
+        AnthropicMCPToolUseBlock,
+        AnthropicMCPToolResultBlock,
+    ]]
     model: str
     stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]] = "end_turn"
     stop_sequence: Optional[str] = None
@@ -1071,7 +1191,7 @@ class AnthropicMessagesRequest(BaseModel):
     max_tokens: int  # required in Claude API
     system: Optional[Union[str, List[AnthropicTextContent]]] = None
     strip_claude_code_billing_header: bool = True
-    tools: Optional[List[AnthropicTool]] = None
+    tools: Optional[List[Union[AnthropicTool, AnthropicMCPToolset]]] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -1080,6 +1200,7 @@ class AnthropicMessagesRequest(BaseModel):
     stop_sequences: Optional[List[str]] = None
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
+    mcp_servers: Optional[List[AnthropicMCPServer]] = None
 
     @staticmethod
     def _is_claude_code_billing_header_text(text: str) -> bool:
@@ -1182,9 +1303,29 @@ class AnthropicMessagesRequest(BaseModel):
                         )
                         tool_calls.append(ToolCall(id=block.id, function=func_call, type="function"))
 
+                    elif block.type == "mcp_tool_use":
+                        func_call = FunctionCall(
+                            name=f"mcp__{block.server_name}__{block.name}",
+                            arguments=json.dumps(block.input)
+                        )
+                        tool_calls.append(ToolCall(id=block.id, function=func_call, type="function"))
+
                     elif block.type == "tool_result":
                         # Anthropic passes tool results inside a "user" message.
                         # OpenAI requires these to be separate "tool" role messages.
+                        content_str = ""
+                        if isinstance(block.content, str):
+                            content_str = block.content
+                        elif isinstance(block.content, list):
+                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
+
+                        tool_results.append(BaseMessage(
+                            role="tool",
+                            tool_call_id=block.tool_use_id,
+                            content=content_str
+                        ))
+
+                    elif block.type == "mcp_tool_result":
                         content_str = ""
                         if isinstance(block.content, str):
                             content_str = block.content
@@ -1219,6 +1360,8 @@ class AnthropicMessagesRequest(BaseModel):
         if self.tools:
             chat_tools = []
             for t in self.tools:
+                if isinstance(t, AnthropicMCPToolset):
+                    continue
                 param_spec = ParameterSpec(
                     type=t.input_schema.type,
                     properties=t.input_schema.properties,
@@ -1230,6 +1373,8 @@ class AnthropicMessagesRequest(BaseModel):
                     parameters=param_spec
                 )
                 chat_tools.append(ToolSpec(type="function", function=func_spec))
+            if not chat_tools:
+                chat_tools = None
 
         # 4. Translate Tool Choice Constraints
         chat_tool_choice = None
@@ -1292,3 +1437,22 @@ class AnthropicMessagesRequest(BaseModel):
         logger.debug(f"converted to ChatMLQuery: {filtered_kwargs}")
 
         return ChatMLQuery(**filtered_kwargs)
+
+    def get_mcp_server_configs(self) -> List[MCPServerConfig]:
+        if not self.mcp_servers:
+            return []
+
+        toolsets_by_server = {
+            toolset.mcp_server_name: toolset
+            for toolset in self.tools or []
+            if isinstance(toolset, AnthropicMCPToolset)
+        }
+
+        configs: List[MCPServerConfig] = []
+        for server in self.mcp_servers:
+            toolset = toolsets_by_server.get(server.name)
+            if toolset is None:
+                continue
+            configs.append(server.to_mcp_server_config(allowed_tools=toolset.get_allowed_tool_names()))
+
+        return configs

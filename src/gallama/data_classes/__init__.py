@@ -9,8 +9,11 @@ from .data_class import (
     BaseMessage,
     ChatMLQuery,
     ToolSpec,
+    MCPToolSpec,
+    ToolCall,
     ToolForce,
     FunctionCall,
+    ParameterSpec,
     ChoiceDeltaToolCall,
     GenerateQuery,
     ModelObjectResponse,
@@ -31,9 +34,12 @@ from .responses_api import (
     ResponsesCreateResponse,
     ResponseInputItem,
     ResponseFunctionTool,
+    ResponseMCPTool,
     ResponseOutputMessage,
     ResponseFunctionCallItem,
     ResponseReasoningItem,
+    ResponseMCPListToolsItem,
+    ResponseMCPCallItem,
     ResponseUsage,
     response_output_to_assistant_messages,
 )
@@ -41,6 +47,7 @@ from .responses_api import (
 # anthropic
 from .data_class import (
     AnthropicMessagesRequest,
+    AnthropicMessagesResponse,
     AnthropicStopReason
 )
 

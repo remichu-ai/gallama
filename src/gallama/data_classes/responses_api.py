@@ -22,6 +22,7 @@ from .data_class import (
     ToolSpec,
     FunctionSpec,
 )
+from ..remote_mcp.models import MCPServerConfig
 
 
 def _make_id(prefix: str) -> str:
@@ -60,6 +61,28 @@ class ResponseFunctionTool(BaseModel):
     description: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
     strict: Optional[bool] = True
+
+
+class ResponseMCPTool(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    type: Literal["mcp"] = "mcp"
+    server_label: str
+    server_url: str
+    authorization_token: Optional[str] = None
+    headers: Dict[str, str] = Field(default_factory=dict)
+    allowed_tools: Optional[List[str]] = None
+    require_approval: Optional[Union[str, Dict[str, Any]]] = None
+
+    def to_mcp_server_config(self) -> MCPServerConfig:
+        return MCPServerConfig(
+            name=self.server_label,
+            url=self.server_url,
+            authorization_token=self.authorization_token,
+            headers=self.headers,
+            allowed_tools=self.allowed_tools,
+            require_approval=self.require_approval,
+        )
 
 
 class ResponseToolChoiceFunction(BaseModel):
@@ -107,7 +130,7 @@ class ResponsesCreateRequest(BaseModel):
     model: str
     input: Union[str, ResponseInputItem, List[Union[str, ResponseInputItem]]]
     instructions: Optional[str] = None
-    tools: Optional[List[ResponseFunctionTool]] = None
+    tools: Optional[List[Union[ResponseFunctionTool, ResponseMCPTool]]] = None
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ResponseToolChoiceFunction]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -150,6 +173,8 @@ class ResponsesCreateRequest(BaseModel):
 
         converted_tools: List[ToolSpec] = []
         for tool in self.tools:
+            if isinstance(tool, ResponseMCPTool):
+                continue
             if tool.type != "function":
                 raise ValueError(
                     f"Unsupported Responses API tool type '{tool.type}'. "
@@ -173,7 +198,14 @@ class ResponsesCreateRequest(BaseModel):
                 )
             )
 
-        return converted_tools
+        return converted_tools or None
+
+    def get_mcp_server_configs(self) -> List[MCPServerConfig]:
+        return [
+            tool.to_mcp_server_config()
+            for tool in self.tools or []
+            if isinstance(tool, ResponseMCPTool)
+        ]
 
     def _convert_tool_choice(self) -> Optional[Union[str, ToolForce]]:
         if self.tool_choice is None:
@@ -280,6 +312,9 @@ class ResponsesCreateRequest(BaseModel):
                 )
             ]
 
+        if item.type in {"mcp_list_tools", "mcp_call"}:
+            return []
+
         if item.type == "reasoning":
             reasoning_parts: List[str] = []
             for part in item.content or []:
@@ -379,6 +414,25 @@ class ResponseReasoningItem(BaseModel):
     status: Literal["in_progress", "completed"] = "completed"
 
 
+class ResponseMCPListToolsItem(BaseModel):
+    id: str = Field(default_factory=lambda: _make_id("mcp"))
+    type: Literal["mcp_list_tools"] = "mcp_list_tools"
+    server_label: str
+    tools: List[Dict[str, Any]] = Field(default_factory=list)
+    error: Optional[Any] = None
+
+
+class ResponseMCPCallItem(BaseModel):
+    id: str = Field(default_factory=lambda: _make_id("mcp"))
+    type: Literal["mcp_call"] = "mcp_call"
+    approval_request_id: Optional[str] = None
+    arguments: str
+    error: Optional[Any] = None
+    name: str
+    output: Optional[str] = None
+    server_label: str
+
+
 class ResponseUsageInputTokensDetails(BaseModel):
     cached_tokens: int = 0
 
@@ -417,7 +471,13 @@ class ResponsesCreateResponse(BaseModel):
     instructions: Optional[str] = None
     max_output_tokens: Optional[int] = None
     model: str
-    output: List[Union[ResponseOutputMessage, ResponseFunctionCallItem, ResponseReasoningItem]] = Field(
+    output: List[Union[
+        ResponseOutputMessage,
+        ResponseFunctionCallItem,
+        ResponseReasoningItem,
+        ResponseMCPListToolsItem,
+        ResponseMCPCallItem,
+    ]] = Field(
         default_factory=list
     )
     parallel_tool_calls: bool = True
@@ -487,6 +547,9 @@ def response_output_to_assistant_messages(
                 text = part.get("text")
                 if text:
                     reasoning_parts.append(text)
+            continue
+
+        if item_type in {"mcp_list_tools", "mcp_call"}:
             continue
 
         if item_type == "message":

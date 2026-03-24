@@ -8,10 +8,11 @@ from ..api_response.chat_response import (
 )
 from ..dependencies import get_model_manager, get_response_store
 from ..logger import logger
+from ..remote_mcp.orchestrator import run_mcp_completion_loop
+from ..request_validation import validate_api_request
 from ..data_classes import (
     BaseMessage,
     ChatMLQuery,
-    ToolForce,
     GenerateQuery,
     GenQueue,
     GenQueueDynamic,
@@ -30,46 +31,6 @@ import asyncio
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 
-def validate_api_request(query: ChatMLQuery):
-    # fixing api call parameter
-    # update temperature to 0.1 because huggingface doesn't accept 0 temperature
-    if query.temperature <= 0:
-        query.temperature = 0.01
-    # tool_choice is set to 'auto' if there is tool
-
-    # set tool_choice if user didn't set it and ensure parameters are correct
-    # if no tool, set tool_choice to none
-    if query.tools:
-        if query.tool_choice is None:
-            if query.tools:
-                query.tool_choice = "auto"
-            else:
-                query.tool_choice = "none"
-        elif query.tool_choice == "none":
-            # wipe out all the tools if any
-            query.tools = None
-        elif isinstance(query.tool_choice, ToolForce):
-            # wipe out all the tool except the tool to be forced 'tool_choice' in api call
-            force_single_tool = []
-            for tool in query.tools:
-                if tool.function.name == query.tool_choice.function.name:
-                    force_single_tool.append(tool)
-
-            if len(force_single_tool) != 1:
-                raise Exception("tool_choice not exist in function list")
-            else:
-                # query.tool_choice = "required"
-                query.tools = force_single_tool
-    else:
-        query.tool_choice = "none"
-
-    # validate that prefix_strings and regex_prefix_pattern  or regex_pattern can not be used together
-    if query.prefix_strings and (query.regex_pattern or query.regex_prefix_pattern):
-        raise HTTPException(status_code=400, detail="refix_strings and regex_pattern, regex_prefix_pattern can not be used together")
-
-    return query
-
-
 @router.post("/messages")
 async def anthropic_message(request: Request, message: AnthropicMessagesRequest):
     if message.strip_claude_code_billing_header:
@@ -77,14 +38,38 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
         if removed:
             logger.info("Removed Claude Code billing header from Anthropic system prompt for prompt caching")
 
-    return await chat_completion(
-        request,
-        message.get_ChatMLQuery(),
-        provider="anthropic"
-    )
+    if message.get_mcp_server_configs():
+        model_manager = get_model_manager()
+        llm = model_manager.get_model(message.model, _type="llm")
+        base_query = message.get_ChatMLQuery()
+        result = await run_mcp_completion_loop(
+            provider="anthropic",
+            base_query=base_query,
+            llm=llm,
+            request=request,
+            conversation_messages=base_query.messages,
+            mcp_servers=message.get_mcp_server_configs(),
+        )
+        return result.response_obj
+
+    return await chat_completion(request, message.get_ChatMLQuery(), provider="anthropic")
 
 @router.post("/chat/completions")
 async def chat_completion(request: Request, query: ChatMLQuery, provider: Literal["openai", "anthropic"]="openai"):
+    function_tools, mcp_servers = query.split_tools()
+    if mcp_servers:
+        model_manager = get_model_manager()
+        llm = model_manager.get_model(query.model, _type="llm")
+        base_query = query.model_copy(deep=True, update={"tools": function_tools})
+        result = await run_mcp_completion_loop(
+            provider=provider,
+            base_query=base_query,
+            llm=llm,
+            request=request,
+            conversation_messages=base_query.messages,
+            mcp_servers=mcp_servers,
+        )
+        return result.response_obj
 
     model_manager = get_model_manager()
     gen_queue = GenQueueDynamic()      # this queue will hold the result for this generation
@@ -178,11 +163,41 @@ async def responses(request: Request, query: ResponsesCreateRequest):
     )
 
     try:
-        chat_query = validate_api_request(response_request.to_chat_ml_query(messages=effective_messages))
+        raw_chat_query = response_request.to_chat_ml_query(messages=effective_messages)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
+        mcp_servers = response_request.get_mcp_server_configs()
+
+        if mcp_servers:
+            llm = model_manager.get_model(raw_chat_query.model, _type="llm")
+            result = await run_mcp_completion_loop(
+                provider="responses",
+                base_query=raw_chat_query,
+                llm=llm,
+                request=request,
+                conversation_messages=effective_messages,
+                mcp_servers=mcp_servers,
+                formatter_kwargs={"request_model": response_request},
+            )
+
+            if should_store:
+                await response_store.put(
+                    ResponseStoreRecord(
+                        response_id=result.response_obj.id,
+                        model=result.response_obj.model,
+                        request=response_request.model_dump(exclude_none=True, by_alias=True),
+                        response=result.response_obj,
+                        conversation_messages=_clone_messages(result.conversation_messages),
+                        previous_response_id=response_request.previous_response_id,
+                        store=should_store,
+                    )
+                )
+
+            return result.response_obj
+
+        chat_query = validate_api_request(raw_chat_query)
         llm = model_manager.get_model(chat_query.model, _type="llm")
 
         async def completion_callback(response_obj: ResponsesCreateResponse):

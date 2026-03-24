@@ -19,6 +19,7 @@ dependencies = [
     "formatron>=0.4.4",
     "httpx",
     "lm-format-enforcer",
+    "mcp>=1.26.0",
     "lxml",
     "packaging",
     "pillow>=10.0.0",
