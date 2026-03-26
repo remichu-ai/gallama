@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gallama"
-version = "0.1.1"
+version = "0.1.2"
 description = "An opinionated Llama Server engine with a focus on agentic tasks"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
@@ -19,6 +19,7 @@ dependencies = [
     "formatron>=0.4.4",
     "httpx",
     "lm-format-enforcer",
+    "mcp>=1.26.0",
     "lxml",
     "packaging",
     "pillow>=10.0.0",
@@ -143,7 +144,7 @@ include = ["gallama*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-"gallama" = ["data/*", "data/*/*", "backend/tts/model/gpt_sovits_source"]
+"gallama" = ["data/*", "data/*/*"]
 
 [tool.setuptools]
 include-package-data = true

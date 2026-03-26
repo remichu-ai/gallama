@@ -1,6 +1,6 @@
 from fastapi import Request
 
-from .api_formatter import OpenAIFormatter, AnthropicFormatter, ParsedContentBlock
+from .api_formatter import OpenAIFormatter, AnthropicFormatter, ResponsesFormatter, ParsedContentBlock
 from .stream_parser_v2 import StreamParserByTag, DummyParser
 from ..data_classes.data_class import (
     ChatMLQuery,
@@ -32,7 +32,7 @@ from ..data_classes.generation_data_class import (
     GenQueueDynamic
 )
 
-from typing import AsyncIterator, List, Dict, Literal, Union
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Literal, Optional, Union
 from ..utils.utils import get_response_uid, get_response_tool_uid
 from ..logger import logger
 from pydantic.json import pydantic_encoder
@@ -103,12 +103,18 @@ async def chat_completion_response_stream(
     gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
-    provider: Literal["openai", "anthropic"],
-    tag_definitions: List[TagDefinition] = None
+    provider: Literal["openai", "anthropic", "responses"],
+    tag_definitions: List[TagDefinition] = None,
+    formatter_kwargs: Optional[Dict[str, Any]] = None,
+    completion_callback: Optional[Callable[[Any], Awaitable[None]]] = None,
 ) -> AsyncIterator[dict]:
-
-    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
-    formatter = formatter_class(model_name=model_name)
+    formatter_kwargs = formatter_kwargs or {}
+    if provider == "openai":
+        formatter = OpenAIFormatter(model_name=model_name, **formatter_kwargs)
+    elif provider == "anthropic":
+        formatter = AnthropicFormatter(model_name=model_name, **formatter_kwargs)
+    else:
+        formatter = ResponsesFormatter(model_name=model_name, **formatter_kwargs)
 
     text_tag = TagDefinition(tag_type="text", api_tag="content")
 
@@ -121,9 +127,16 @@ async def chat_completion_response_stream(
     eos = False
     gen_stats = None
     state = {}
+    last_stream_event_at = time.monotonic()
 
     current_tag = text_tag
     current_text = ""
+
+    async def emit_events(events: List[dict]):
+        nonlocal last_stream_event_at
+        for event in events:
+            last_stream_event_at = time.monotonic()
+            yield event
 
     def process_and_format_chunk(tag: TagDefinition, text: str):
         try:
@@ -143,11 +156,12 @@ async def chat_completion_response_stream(
             raise e
 
     # Emit starting event(s)
-    for event in formatter.stream_start():
+    async for event in emit_events(formatter.stream_start()):
         yield event
 
     while not eos:
         accumulated_text = ""
+        queue_was_empty = False
         try:
             while True:
                 item = gen_queue.get_nowait()
@@ -167,6 +181,11 @@ async def chat_completion_response_stream(
                 elif isinstance(item, GenerationStats):
                     gen_stats = item
         except asyncio.QueueEmpty:
+            queue_was_empty = True
+            now = time.monotonic()
+            if formatter.ping_interval_s is not None and now - last_stream_event_at >= formatter.ping_interval_s:
+                async for event in emit_events(formatter.stream_ping()):
+                    yield event
             await asyncio.sleep(0.01)
 
         if accumulated_text or eos:
@@ -182,44 +201,47 @@ async def chat_completion_response_stream(
                         logger.info(f"new tag: {_tag}")
                         if current_text:
                             # 1. Open block via formatter
-                            for e in formatter.open_block(current_tag.api_tag):
-                                yield e
+                            async for event in emit_events(formatter.open_block(current_tag.api_tag)):
+                                yield event
 
                             # 2. Yield chunks
                             if chunk := process_and_format_chunk(current_tag, current_text):
-                                for c in chunk:
-                                    yield c
+                                async for event in emit_events(chunk):
+                                    yield event
 
                             current_text = ""
 
                         # 3. Close old block via formatter
-                        for e in formatter.close_block():
-                            yield e
+                        async for event in emit_events(formatter.close_block()):
+                            yield event
 
                         current_tag = _tag
 
                     if _tag.wait_till_complete:
                         current_text += _text_chunk
                     else:
-                        for e in formatter.open_block(_tag.api_tag):
-                            yield e
+                        async for event in emit_events(formatter.open_block(_tag.api_tag)):
+                            yield event
 
                         if chunk := process_and_format_chunk(_tag, _text_chunk):
-                            for c in chunk:
-                                yield c
+                            async for event in emit_events(chunk):
+                                yield event
+        elif queue_was_empty and formatter.ping_interval_s is not None:
+            # Keep the SSE connection active during long prefill or tool-thinking gaps.
+            pass
 
         if eos:
             if current_text:
-                for e in formatter.open_block(current_tag.api_tag):
-                    yield e
+                async for event in emit_events(formatter.open_block(current_tag.api_tag)):
+                    yield event
 
                 if chunk := process_and_format_chunk(current_tag, current_text):
-                    for c in chunk:
-                        yield c
+                    async for event in emit_events(chunk):
+                        yield event
 
             # Close final block via formatter
-            for e in formatter.close_block():
-                yield e
+            async for event in emit_events(formatter.close_block()):
+                yield event
 
             logger.info(f"full_response: {full_response}")
 
@@ -230,7 +252,10 @@ async def chat_completion_response_stream(
             else:
                 base_finish_reason = gen_stats.stop_reason if gen_stats else "end_turn"
 
-            if gen_stats and query.stream_options and getattr(query.stream_options, "include_usage", True):
+            include_usage = provider != "openai" or (
+                query.stream_options and getattr(query.stream_options, "include_usage", True)
+            )
+            if gen_stats and include_usage:
                 stream_stop_events = formatter.stream_stop(
                     input_tokens=gen_stats.input_tokens_count,
                     output_tokens=gen_stats.output_tokens_count,
@@ -240,8 +265,23 @@ async def chat_completion_response_stream(
             else:
                 stream_stop_events = formatter.stream_stop(finish_reason=base_finish_reason)
 
-            for event in stream_stop_events:
+            async for event in emit_events(stream_stop_events):
                 yield event
+
+            if completion_callback is not None:
+                try:
+                    response_obj = None
+                    final_response = getattr(formatter, "final_stream_response", None)
+                    if callable(final_response):
+                        response_obj = final_response(
+                            input_tokens=gen_stats.input_tokens_count if gen_stats else None,
+                            output_tokens=gen_stats.output_tokens_count if gen_stats else None,
+                            total_tokens=gen_stats.total_tokens_count if gen_stats else None,
+                        )
+                    if response_obj is not None:
+                        await completion_callback(response_obj)
+                except Exception as e:
+                    logger.error(f"Error in response completion callback: {e}")
 
             if gen_stats:
                 logger.info(format_generation_stats_log(model_name, gen_stats))
@@ -252,12 +292,18 @@ async def chat_completion_response(
     gen_queue: GenQueueDynamic,
     model_name: str,
     request: Request,
-    provider: Literal["openai", "anthropic"],
+    provider: Literal["openai", "anthropic", "responses"],
     tag_definitions: List[TagDefinition] = None,
-) -> ChatCompletionResponse:
-
-    formatter_class = OpenAIFormatter if provider == "openai" else AnthropicFormatter
-    formatter = formatter_class(model_name=model_name)
+    formatter_kwargs: Optional[Dict[str, Any]] = None,
+    completion_callback: Optional[Callable[[Any], Awaitable[None]]] = None,
+) -> Union[ChatCompletionResponse, AnthropicMessagesResponse, Any]:
+    formatter_kwargs = formatter_kwargs or {}
+    if provider == "openai":
+        formatter = OpenAIFormatter(model_name=model_name, **formatter_kwargs)
+    elif provider == "anthropic":
+        formatter = AnthropicFormatter(model_name=model_name, **formatter_kwargs)
+    else:
+        formatter = ResponsesFormatter(model_name=model_name, **formatter_kwargs)
 
     # create streaming pro
     text_tag = TagDefinition(
@@ -286,7 +332,7 @@ async def chat_completion_response(
             elif isinstance(item, GenerationStats):
                 gen_stats = item        # Not applicable for completion endpoint
             elif isinstance(item, GenStart):
-                logger.info(f"Stream starts with {item.gen_type}")
+                logger.debug(f"Stream starts with {item.gen_type}")
                 if text_tag != item.gen_type:
                     initial_tag = item.gen_type
 
@@ -306,11 +352,24 @@ async def chat_completion_response(
     parsed_blocks = []
     if parsed_text:
         for _tag, _text_chunk in parsed_text:
+            try:
+                processed_content = _tag.post_processor(_text_chunk)
+                processed_api_tag = _tag.api_tag
+                processed_role = _tag.role
+                processed_allowed_roles = _tag.allowed_roles
+            except Exception as e:
+                logger.error(f"Error in post-processor: {e}")
+                logger.info("Fall back to text tag")
+                processed_content = _text_chunk
+                processed_api_tag = text_tag.api_tag
+                processed_role = text_tag.role
+                processed_allowed_roles = text_tag.allowed_roles
+
             parsed_blocks.append(ParsedContentBlock(
-                api_tag=_tag.api_tag,
-                role=_tag.role,
-                content=_tag.post_processor(_text_chunk),
-                allowed_roles=_tag.allowed_roles,
+                api_tag=processed_api_tag,
+                role=processed_role,
+                content=processed_content,
+                allowed_roles=processed_allowed_roles,
             ))
 
     # Determine finish reason from content
@@ -338,6 +397,12 @@ async def chat_completion_response(
     # logger.info(f"full_response: {response}")
     if gen_stats:
         logger.info(format_generation_stats_log(model_name, gen_stats))
+
+    if completion_callback is not None:
+        try:
+            await completion_callback(response_obj)
+        except Exception as e:
+            logger.error(f"Error in response completion callback: {e}")
 
     return response_obj
 

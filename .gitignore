@@ -12,5 +12,6 @@
 /experiment/
 sonar-project.properties
 /src/tests/*
+!/src/tests/test_tool_parsers.py
 
 /dist/

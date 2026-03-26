@@ -103,4 +103,12 @@ ministral3 = {
         prompt_init=tool_prompt,
         wait_till_complete=True
     ),
+    "thinking": TagDefinition(
+        start_marker="[THINK]",
+        end_marker="[/THINK]",
+        tag_type="thinking",
+        role="assistant",
+        allowed_roles={"assistant", "tool"},
+        api_tag="reasoning"
+    ),
 }

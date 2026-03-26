@@ -9,6 +9,16 @@ except ImportError:
     ModelLlamaCpp = None
 
 try:
+    from .llamacpp_server import ModelLlamaCppServer
+except ImportError:
+    ModelLlamaCppServer = None
+
+try:
+    from .ik_llama import ModelIKLlama
+except ImportError:
+    ModelIKLlama = None
+
+try:
     from .transformers import ModelTransformers
 except ImportError:
     ModelTransformers = None

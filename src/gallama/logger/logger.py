@@ -25,6 +25,10 @@ logging.root.setLevel(logging.NOTSET)
 
 
 DEFAULT_ZMQ_URL = "tcp://127.0.0.1:5555"  # Using 5559 as a standard port for logging
+LOG_VERBOSITY_ENV_VAR = "LOCAL_OPEN_AI_VERBOSE"
+DEFAULT_LOG_VERBOSITY = 1
+DEBUG_LOG_VERBOSITY = 2
+MAX_LOG_VERBOSITY = 3
 
 
 class PromptLexer(RegexLexer):
@@ -231,6 +235,36 @@ def ensure_dir_exists(file_path):
     return True
 
 
+def normalize_log_verbosity(verbosity: Optional[Union[str, int]]) -> int:
+    try:
+        normalized = int(verbosity)
+    except (TypeError, ValueError):
+        normalized = DEFAULT_LOG_VERBOSITY
+
+    return max(DEFAULT_LOG_VERBOSITY, min(MAX_LOG_VERBOSITY, normalized))
+
+
+def get_log_verbosity(default: int = DEFAULT_LOG_VERBOSITY) -> int:
+    raw_value = os.getenv(LOG_VERBOSITY_ENV_VAR, str(default))
+    return normalize_log_verbosity(raw_value)
+
+
+def set_log_verbosity(verbosity: Optional[Union[str, int]]) -> int:
+    normalized = normalize_log_verbosity(verbosity)
+    os.environ[LOG_VERBOSITY_ENV_VAR] = str(normalized)
+    return normalized
+
+
+def get_log_level_for_verbosity(verbosity: Optional[Union[str, int]] = None) -> int:
+    normalized = get_log_verbosity() if verbosity is None else normalize_log_verbosity(verbosity)
+    return logging.DEBUG if normalized >= DEBUG_LOG_VERBOSITY else logging.INFO
+
+
+def is_max_log_verbosity(verbosity: Optional[Union[str, int]] = None) -> bool:
+    normalized = get_log_verbosity() if verbosity is None else normalize_log_verbosity(verbosity)
+    return normalized >= MAX_LOG_VERBOSITY
+
+
 def setup_logger(config: LogConfig):
     handlers = []
 
@@ -274,14 +308,8 @@ def get_logger(
     to_zmq=True,
     zmq_url=DEFAULT_ZMQ_URL
 ):
-    # Set verbosity
-    logger_verbose = os.getenv('LOCAL_OPEN_AI_VERBOSE', '1')
-
     if not log_level:
-        if logger_verbose == '1':
-            log_level = logging.INFO
-        elif logger_verbose == '2':
-            log_level = logging.DEBUG
+        log_level = get_log_level_for_verbosity()
 
     config = LogConfig(
         LOGGER_NAME=name,

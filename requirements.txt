@@ -13,6 +13,7 @@ httpx
 uvicorn
 sentence-transformers
 lm-format-enforcer
+mcp>=1.26.0
 huggingface-hub
 chardet
 sse_starlette
@@ -87,6 +88,5 @@ qwen_omni_utils
 # cuBLAS
 # https://developer.nvidia.com/cudnn
 # sudo apt-get install portaudio19-dev
-
 
 

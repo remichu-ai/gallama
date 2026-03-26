@@ -21,7 +21,7 @@ from pathlib import Path
 from textwrap import dedent
 import uuid
 from transformers import AutoTokenizer, AutoConfig
-from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, MODEL_VISION_TOKEN
+from .model_special_tag import MODEL_SPECIAL_TAG, MODEL_EOS_TOKEN, resolve_vision_token
 from ....api_response.stream_parser_v2 import StreamParserByTag
 
 
@@ -64,7 +64,10 @@ class PromptEngineTransformers:
         if MODEL_EOS_TOKEN.get(self.model_type, None) is not None:
             self.eos_token_list.extend(MODEL_EOS_TOKEN[self.model_type])
 
-        self._vision_token = MODEL_VISION_TOKEN.get(self.model_type, None)
+        self._vision_token = resolve_vision_token(
+            model_type=self.model_type,
+            tokenizer=self._transformer_tokenizer,
+        )
 
         # make unique, transformers might return None hence need to exclude
         self.eos_token_list = list(set([_s for _s in self.eos_token_list if _s is not None]))
@@ -72,6 +75,7 @@ class PromptEngineTransformers:
         self.is_thinking_model = self.check_thinking_model()
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
         self.support_developer_role = self._template_supports_developer_role(self._transformer_tokenizer)
+        self.support_reasoning_effort = self._template_supports_reasoning_effort(self._transformer_tokenizer)
 
 
 
@@ -91,6 +95,14 @@ class PromptEngineTransformers:
     def vision_token(self):
         return self._vision_token
 
+    def ensure_vision_token(self):
+        if self._vision_token is None:
+            self._vision_token = resolve_vision_token(
+                model_type=self.model_type,
+                tokenizer=self._transformer_tokenizer,
+            )
+        return self._vision_token
+
     def check_thinking_model(self):
         """
         Checks if the loaded tokenizer's chat_template contains logic
@@ -100,8 +112,18 @@ class PromptEngineTransformers:
         if not template:
             return False
 
-        # Check for the standard HF field or your custom field
-        return "message.reasoning_content" in template or "message.reasoning" in template or "reasoning_content" in template
+        thinking_markers = (
+            "message.reasoning_content",
+            "message.reasoning",
+            "reasoning_content",
+            "reasoning_effort",
+            "[THINK]",
+            "type'] == 'thinking'",
+            'type"] == "thinking"',
+            "type'] == \"thinking\"",
+            'type"] == \'thinking\'',
+        )
+        return any(marker in template for marker in thinking_markers)
 
     def patch_thinking_template(self):
         """
@@ -176,6 +198,46 @@ class PromptEngineTransformers:
 
         return False
 
+    @lru_cache(maxsize=1)
+    def _template_supports_reasoning_effort(self, tokenizer) -> bool:
+        """
+        Probes whether the tokenizer chat template consumes a custom reasoning_effort
+        kwarg and renders it into the prompt.
+        """
+        template = tokenizer.chat_template
+        if not template or "reasoning_effort" not in template:
+            return False
+
+        probe_msg = [{"role": "user", "content": "PROBE_TEST_REASONING"}]
+
+        try:
+            result_high = tokenizer.apply_chat_template(
+                probe_msg,
+                tokenize=False,
+                add_generation_prompt=False,
+                reasoning_effort="high",
+            )
+            result_none = tokenizer.apply_chat_template(
+                probe_msg,
+                tokenize=False,
+                add_generation_prompt=False,
+                reasoning_effort="none",
+            )
+        except TypeError:
+            logger.debug("Tokenizer apply_chat_template does not accept reasoning_effort kwarg")
+            return False
+        except Exception:
+            logger.debug("Failed to probe whether reasoning_effort is supported")
+            return False
+
+        supports_reasoning_effort = result_high != result_none
+        if supports_reasoning_effort:
+            logger.info("Chat template supports reasoning_effort")
+        else:
+            logger.info("Chat template does not render reasoning_effort")
+
+        return supports_reasoning_effort
+
     def convert_openai_to_hf_format(self, messages: List[Dict]) -> List[Dict]:
         """
         Converts OpenAI Chat Format to Hugging Face transformers format.
@@ -222,6 +284,36 @@ class PromptEngineTransformers:
 
         return hf_messages
 
+    def _append_structured_output_schema_instruction(
+        self,
+        conversation: List[Dict],
+        query: ChatMLQuery,
+    ) -> None:
+        response_format = query.response_format
+        if not response_format or response_format.type != "json_schema":
+            return
+
+        schema_prompt = (
+            "\n\nAnswer using the following schema:\n"
+            f"{json.dumps(response_format.json_schema.schema_, indent=2)}"
+        )
+
+        for message in reversed(conversation):
+            if message.get("role") != "user":
+                continue
+
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = f"{content}{schema_prompt}"
+                return
+
+            if isinstance(content, list):
+                message["content"].append({
+                    "type": "text",
+                    "text": schema_prompt,
+                })
+                return
+
     def get_prompt(
         self,
         query: ChatMLQuery,
@@ -231,7 +323,7 @@ class PromptEngineTransformers:
         leading_prompt: str = "",
         thinking_template: str = None,
         thinking_response: str = None,
-        backend: Literal["exllama", "llama_cpp", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
+        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "embedding"] = "exllama",    # skip model pseudo token and use exllama placeholder token # TODO - code refractoring
         pydantic_tool_code: str = None,     # the code representation of tool
     ) -> str:
 
@@ -246,6 +338,7 @@ class PromptEngineTransformers:
 
         # patch image format
         conversation = self.convert_openai_to_hf_format(conversation)
+        self._append_structured_output_schema_instruction(conversation, query)
 
         # Before passing messages to tokenizer.apply_chat_template:
         # convert tool call to json string
@@ -275,16 +368,21 @@ class PromptEngineTransformers:
                         conversation[index]["content"] = _content_str
 
         enable_thinking = query.reasoning_effort is not None
+        template_kwargs = {
+            "conversation": conversation,
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "tools": [_t.model_dump() for _t in query.tools] if query.tools else None,
+            "enable_thinking": enable_thinking,
+        }
+
+        if self.support_reasoning_effort:
+            # Some templates, including recent Mistral variants, only expose a binary
+            # reasoning toggle via reasoning_effort = none|high.
+            template_kwargs["reasoning_effort"] = "high" if enable_thinking else "none"
 
         # 4. Get prompt from transformers
-        prompt = self._transformer_tokenizer.apply_chat_template(
-            conversation=conversation,
-            tokenize=False,
-            # add_generation_prompt=conversation[-1]["role"] == "user",
-            add_generation_prompt=True,
-            tools=[_t.model_dump() for _t in query.tools] if query.tools else None,
-            enable_thinking=enable_thinking
-        )
+        prompt = self._transformer_tokenizer.apply_chat_template(**template_kwargs)
 
         # handling thinking
         starting_tag = TagDefinition(tag_type="text")

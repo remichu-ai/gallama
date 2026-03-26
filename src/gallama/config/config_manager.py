@@ -10,6 +10,10 @@ from operator import itemgetter
 import os
 
 
+LOCAL_MODEL_PATH_PATTERN = re.compile(r"^(~|/|\.{1,2}([/\\]|$)|[A-Za-z]:[\\/])")
+TOP_LEVEL_MODEL_KEY_PATTERN = re.compile(r'^([^\s#][^:]*)\s*:\s*(?:#.*)?$')
+
+
 class ConfigManager:
     def __init__(self):
         self.configs: Dict[str, Any] = {}
@@ -50,6 +54,7 @@ class ConfigManager:
     def load_model_configs(self):
         """Load all YAML files (both .yaml and .yml) from the data directory and combine them."""
         config_file = self.get_gallama_user_config_file_path
+        self.configs = {}
         if config_file.exists():
             with open(config_file, 'r') as file:
                 yaml_data = yaml.safe_load(file)
@@ -59,6 +64,102 @@ class ConfigManager:
                     raise ValueError(f'No model config in YAML file found in {config_file}')
         else:
             logger.info(f"Config file not found at {config_file}")
+
+    @staticmethod
+    def is_local_model_path(model_id: str) -> bool:
+        if not model_id:
+            return False
+
+        if LOCAL_MODEL_PATH_PATTERN.match(model_id):
+            return True
+
+        return Path(model_id).exists()
+
+    def find_missing_local_model_paths(self) -> List[Dict[str, str]]:
+        missing_models = []
+
+        for model_name, details in self.configs.items():
+            if not isinstance(details, dict):
+                continue
+
+            model_id = details.get("model_id")
+            if not isinstance(model_id, str) or not model_id.strip():
+                continue
+
+            expanded_path = Path(model_id).expanduser()
+            if self.is_local_model_path(model_id) and not expanded_path.exists():
+                missing_models.append({
+                    "model_name": model_name,
+                    "model_id": model_id,
+                })
+
+        return missing_models
+
+    def comment_out_missing_models(self) -> List[Dict[str, str]]:
+        config_file = self.get_gallama_user_config_file_path
+        if not config_file.exists():
+            logger.info(f"Config file not found at {config_file}")
+            return []
+
+        missing_models = self.find_missing_local_model_paths()
+        if not missing_models:
+            return []
+
+        missing_by_name = {
+            item["model_name"]: item["model_id"]
+            for item in missing_models
+        }
+
+        original_lines = config_file.read_text().splitlines(keepends=True)
+        newline = "\n"
+        if original_lines:
+            if original_lines[0].endswith("\r\n"):
+                newline = "\r\n"
+            elif original_lines[0].endswith("\n"):
+                newline = "\n"
+
+        rewritten_lines: List[str] = []
+        current_model_name: str | None = None
+        current_block: List[str] = []
+
+        def flush_current_block():
+            nonlocal current_block
+            nonlocal current_model_name
+
+            if current_model_name in missing_by_name:
+                rewritten_lines.append(
+                    f"# Disabled by gallama clean: missing model path {missing_by_name[current_model_name]}{newline}"
+                )
+                for line in current_block:
+                    if not line.strip():
+                        rewritten_lines.append(line)
+                    elif line.lstrip().startswith("#"):
+                        rewritten_lines.append(line)
+                    else:
+                        rewritten_lines.append(f"# {line}")
+            else:
+                rewritten_lines.extend(current_block)
+
+            current_block = []
+            current_model_name = None
+
+        for line in original_lines:
+            match = TOP_LEVEL_MODEL_KEY_PATTERN.match(line.rstrip("\r\n"))
+            if match:
+                flush_current_block()
+                current_model_name = match.group(1).strip().strip("'\"")
+                current_block = [line]
+            else:
+                current_block.append(line)
+
+        flush_current_block()
+
+        config_file.write_text("".join(rewritten_lines))
+        try:
+            self.load_model_configs()
+        except ValueError:
+            self.configs = {}
+        return missing_models
 
     def load_default_model_list(self):
         data_dir = self.get_data_dir

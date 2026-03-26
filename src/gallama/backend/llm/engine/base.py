@@ -48,6 +48,17 @@ from ....data_classes import VideoFrameCollection
 
 config_manager = ConfigManager()
 
+
+def is_expected_disconnect_exception(exc: Exception) -> bool:
+    """Return True for request teardown exceptions that should not be logged as errors."""
+    return type(exc).__name__ == "ClientDisconnect"
+
+
+def format_exception_summary(exc: BaseException) -> str:
+    message = str(exc).strip()
+    exc_name = type(exc).__name__
+    return f"{exc_name}: {message}" if message else exc_name
+
 @dataclass
 class ToolCallV2:
     gen_dynamic_queue: List[GenQueueDynamic]
@@ -201,6 +212,10 @@ class ModelInterface(ABC):
     def support_format_enforcer(self) -> bool:
         return True
 
+    def close(self):
+        """Optional cleanup hook for backends that manage external resources."""
+        return None
+
     @property
     def video_token_by_backend(self) -> str:
         return ""
@@ -286,7 +301,8 @@ class ModelInterface(ABC):
 
         try:
             prompt, gen_start = prompt_eng.get_prompt(
-                query
+                query,
+                backend=self.backend,
             )
 
             # check if json schema enforced
@@ -355,7 +371,10 @@ class ModelInterface(ABC):
                         # 'formatter': self.formatter,
                         # add endtag of thinking as stop token
                         'stop_words': stop_words,
-                        'max_tokens': query.max_tokens,
+                        # Let the reasoning pass consume the full remaining context budget.
+                        # The final structured/output-constrained pass below still respects
+                        # query.max_tokens.
+                        'max_tokens': None,
                         # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                         # 'banned_strings': banned_strings,
                         'request': request,

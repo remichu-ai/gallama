@@ -49,7 +49,7 @@ class FormatEnforcer:
 
     @staticmethod
     def get_default_engine(
-        backend: Literal["exllama", "llama_cpp", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
     ) -> FilterEngine:
 
@@ -59,7 +59,7 @@ class FormatEnforcer:
             logger.info(f"guided encoding preference: {preference}")
 
         # formatron does not support llama cpp at the moment
-        if backend == "llama_cpp":
+        if backend in ["llama_cpp", "llama_cpp_server", "ik_llama"]:
             return "lm_enforcer"
         elif backend in ["exllamav3"]:
             return "formatron"
@@ -89,7 +89,7 @@ class FormatEnforcer:
         self,
         regex_pattern: str,
         filter_engine: FilterEngine = None,
-        backend: Literal["exllama", "llama_cpp", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
     ) -> FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter | GuidedDecodingParams:
 
@@ -130,7 +130,7 @@ class FormatEnforcer:
         pydantic_model_lmfe: BaseModel,
         pydantic_model_formatron: ClassSchema,
         filter_engine: FilterEngine = None,
-        backend: Literal["llama_cpp", "exllama", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["llama_cpp", "llama_cpp_server", "ik_llama", "exllama", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
     ) -> JsonSchemaParser | FormatterBuilder | SGLangFormatter | GuidedDecodingParams:
         """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""

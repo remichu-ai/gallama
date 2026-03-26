@@ -12,6 +12,7 @@ from gallama.data_classes.data_class import ModelSpec
 from gallama.data_classes import  ModelInstanceInfo,  ModelInfo
 from gallama.server_engine import create_options_response
 from gallama.utils import parse_request_body
+from gallama.utils.utils import format_request_body_for_logging
 from typing import List, Dict
 from gallama.config import ConfigManager
 from gallama.server_engine import forward_request
@@ -20,7 +21,6 @@ import asyncio
 import uvicorn
 import argparse
 from gallama.utils.utils import get_package_file_path
-from logging import DEBUG, INFO
 import os
 import json
 import base64
@@ -37,6 +37,11 @@ from gallama.dependencies_server import (
     start_log_receiver,
     DEFAULT_ZMQ_URL,
     configure_server_logging,
+)
+from gallama.logger.logger import (
+    get_log_level_for_verbosity,
+    is_max_log_verbosity,
+    set_log_verbosity,
 )
 
 
@@ -55,20 +60,19 @@ manager_app.include_router(router)
 
 
 @manager_app.middleware("http")
-@manager_app.middleware("https")
 async def log_requests(request: Request, call_next):
     try:
-        if request.method in ("POST", "PUT", "PATCH"):  # Methods that typically have a body
+        if request.url.path in EXCLUDED_ENDPOINTS and request.method in ("POST", "PUT", "PATCH"):
             content_type = request.headers.get("Content-Type", "")
             if "multipart/form-data" in content_type or "application/octet-stream" in content_type:
                 server_logger.debug(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n[Binary content omitted]")
             else:
                 request_content = await request.body()
                 if request_content:
-                    try:
-                        request_content = json.dumps(json.loads(request_content.decode("utf-8")), indent=2)
-                    except (UnicodeDecodeError, json.JSONDecodeError):
-                        request_content = "[Non-JSON or binary content omitted]"
+                    request_content = format_request_body_for_logging(
+                        request_content,
+                        include_full_base64=is_max_log_verbosity(),
+                    )
                     server_logger.info(f"API Request:\nMethod: {request.method}\nURL: {request.url}\n{request_content}")
 
         response = await call_next(request)
@@ -241,6 +245,17 @@ MAX_CONCURRENT_REQUESTS = 100  # Adjust this value based on your system's capaci
 request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
 
+def get_instance_concurrency_limit(instance: ModelInstanceInfo) -> int:
+    limit = getattr(instance, "max_concurrent_requests", 1)
+    return max(1, int(limit))
+
+
+def get_instance_load_key(instance: ModelInstanceInfo) -> tuple[float, int]:
+    active = active_requests[instance.port]
+    limit = get_instance_concurrency_limit(instance)
+    return active / limit, active
+
+
 # # set up logging
 # def start_log_receiver(zmq_url):
 #     context = zmq.Context()
@@ -332,6 +347,13 @@ async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
 
     try:
+        model_config = config_manager.configs.get(model_spec.model_name) or {}
+        if model_config:
+            resolved_model_config = model_config.copy()
+            resolved_model_config.update({"model_name": model_spec.model_name})
+            default_model_spec = ModelSpec.from_dict(resolved_model_config)
+            model_spec = ModelSpec.from_merged_config(model_spec, default_model_spec.model_dump())
+
         # add the entry for the dictionary (where key is the model name)
         if model_spec.model_name not in server_manager.models:
             server_manager.models[model_spec.model_name] = ModelInfo(instances=[])
@@ -343,8 +365,7 @@ async def run_model(model_spec: ModelSpec):
 
         server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
 
-        model_config = config_manager.configs.get(model_spec.model_name) or {}
-        backend = model_spec.backend or model_config.get('backend')
+        backend = model_spec.backend
         if not backend:
             raise ValueError(
                 f"backend is required to start model '{model_spec.model_name}' when it is not defined in model_config.yaml"
@@ -357,6 +378,7 @@ async def run_model(model_spec: ModelSpec):
         env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
         server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
         env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+        server_logger.info(f"Resolved model spec: {model_spec}")
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
@@ -409,7 +431,8 @@ async def run_model(model_spec: ModelSpec):
                 status="running",
                 model_name=model_spec.model_name,
                 model_type=ModelSpec.get_model_type_from_backend(backend),
-                strict=model_spec.strict
+                strict=model_spec.strict,
+                max_concurrent_requests=model_spec.max_concurrent_requests,
             )
             server_manager.models[model_spec.model_name].instances.append(instance_info)
         else:
@@ -468,7 +491,7 @@ async def get_instance_for_model(model: str):
     if not running_instances:
         raise HTTPException(status_code=503, detail=f"No running instances available for model: {model}")
 
-    return min(running_instances, key=lambda inst: active_requests[inst.port])
+    return min(running_instances, key=get_instance_load_key)
 
 
 
@@ -524,8 +547,9 @@ async def load_balanced_router(request: Request, path: str):
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
 
-        # Select the instance with the least active requests
-        instance = min(available_instances, key=lambda inst: active_requests[inst.port])
+        # Select the instance with the lowest normalized load so higher-capacity
+        # instances can absorb more concurrent traffic.
+        instance = min(available_instances, key=get_instance_load_key)
 
         # Increment the active request count for the selected instance
         async with server_manager.active_requests_lock:
@@ -606,11 +630,19 @@ async def main(model_list=None, port=8000, strict_mode=False, log_file: str | No
 
 # this parser is different to app.py
 def parse_dict(arg):
-    """Parses a key=value string and returns a dictionary."""
+    """Parses key=value pairs and supports dotted keys for nested dictionaries."""
+
+    def assign_nested_key(target, dotted_key, value):
+        parts = dotted_key.split(".")
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     result = {}
     for pair in arg.split():
-        key, value = pair.split('=')
-        result[key] = value.strip("'")  # Strip single quotes here as well
+        key, value = pair.split('=', 1)
+        assign_nested_key(result, key, value.strip("'"))
     return result
 
 
@@ -629,6 +661,11 @@ def llama_picture():
 
 def run_from_script(args):
     global server_logger
+    requested_verbosity = max(
+        getattr(args, "global_verbose", 0) or 0,
+        getattr(args, "verbose", 0) or 0,
+    ) + 1
+    set_log_verbosity(requested_verbosity)
     configure_server_logging(getattr(args, "log_file", None))
     server_logger = get_server_logger()
 
@@ -656,11 +693,7 @@ def run_from_script(args):
     if model_list:
         server_logger.info("Initial models: " + str(model_list))
 
-    # set server_logger level
-    if args.verbose:
-        server_logger.setLevel(DEBUG)
-    else:
-        server_logger.setLevel(INFO)
+    server_logger.setLevel(get_log_level_for_verbosity())
 
 
     server_logger.info("Parsed Arguments:" + str(args))
@@ -694,7 +727,13 @@ if __name__ == "__main__":
                                  "cache_size is not application to embedding model"
                                  "VRAM is specified in GB. Cache size is integer which is the context length to cache."
                                  "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
-    arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+    arg_parser.add_argument(
+        '-v',
+        "--verbose",
+        action='count',
+        default=0,
+        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+    )
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     arg_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")

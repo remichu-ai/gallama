@@ -12,7 +12,11 @@ class BaseStreamParser(ABC):
         pass
 
     @abstractmethod
-    def parse_full_text(self, text: str) -> List[Tuple[TagDefinition, str]]:
+    def parse_full_text(
+        self,
+        text: str,
+        initial_tag: Union[str, TagDefinition] = None,
+    ) -> List[Tuple[TagDefinition, str]]:
         pass
 
     @abstractmethod
@@ -30,7 +34,11 @@ class DummyParser(BaseStreamParser):
     def process_stream(self, new_data: str) -> List[Tuple[TagDefinition, str]]:
         return [(self.default_tag_type, new_data)]
 
-    def parse_full_text(self, text: str) -> List[Tuple[TagDefinition, str]]:
+    def parse_full_text(
+        self,
+        text: str,
+        initial_tag: Union[str, TagDefinition] = None,
+    ) -> List[Tuple[TagDefinition, str]]:
         return [(self.default_tag_type, text)]
 
     def flush(self) -> List[Tuple[TagDefinition, str]]:
@@ -65,7 +73,10 @@ class StreamParserByTag(BaseStreamParser):
             pattern_parts = []
             for idx, td in enumerate(self.tag_defs):
                 if td.start_marker:
-                    pattern_parts.append(f'(?P<tag_{idx}>{re.escape(td.start_marker)})')
+                    marker_pattern = td.start_marker
+                    if td.marker_type != "regex":
+                        marker_pattern = re.escape(marker_pattern)
+                    pattern_parts.append(f'(?P<tag_{idx}>{marker_pattern})')
             if pattern_parts:
                 self.start_tag_pattern = re.compile('|'.join(pattern_parts))
 
@@ -85,17 +96,30 @@ class StreamParserByTag(BaseStreamParser):
 
     def _find_start_tag_simple(self, text: str) -> Tuple[int, int, Optional[TagDefinition]]:
         best_idx = -1
+        best_end = -1
         best_tag = None
         for td in self.tag_defs:
             if not td.start_marker: continue
-            idx = text.find(td.start_marker)
+            if td.marker_type == "regex":
+                match = re.search(td.start_marker, text)
+                if match:
+                    idx = match.start()
+                    end = match.end()
+                else:
+                    idx = -1
+                    end = -1
+            else:
+                idx = text.find(td.start_marker)
+                end = idx + len(td.start_marker) if idx != -1 else -1
             if idx != -1:
                 if best_idx == -1 or idx < best_idx:
                     best_idx = idx
+                    best_end = end
                     best_tag = td
-                    if best_idx == 0: break
+                    if best_idx == 0:
+                        break
         if best_idx != -1 and best_tag:
-            return best_idx, best_idx + len(best_tag.start_marker), best_tag
+            return best_idx, best_end, best_tag
         return -1, -1, None
 
     def detect_start_tag(self, text: str) -> Tuple[int, int, Optional[TagDefinition]]:

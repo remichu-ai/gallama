@@ -3,8 +3,9 @@ import httpx
 import uuid
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from typing import Union
-from gallama.data_classes.data_class import ModelSpec, ModelObjectResponse, ModelObject, ModelDownloadSpec
+from gallama.data_classes.data_class import ModelSpec, ModelDownloadSpec
 from gallama.data_classes import ModelRequest, StopModelByPort
+from gallama.api_response.model_response import build_models_response
 from gallama.server_engine import download_model_from_hf
 from typing import List, Dict
 from gallama.config import ConfigManager
@@ -12,6 +13,8 @@ import psutil
 import asyncio
 from gallama.server_engine import log_model_status
 from gallama.dependencies_server import get_server_manager, get_logger
+from gallama.logger.logger import is_max_log_verbosity
+from gallama.utils.utils import format_request_body_for_logging
 
 
 logger = get_logger()
@@ -54,7 +57,13 @@ async def add_model(model_request: Union[ModelSpec, List[ModelSpec]], background
 
     task_id = str(uuid.uuid4())
     # Log the incoming request body
-    logger.info(f"Received raw request: {await request.body()}")
+    logger.info(
+        "Received raw request: "
+        + format_request_body_for_logging(
+            await request.body(),
+            include_full_base64=is_max_log_verbosity(),
+        )
+    )
 
 
     logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}")
@@ -220,11 +229,7 @@ async def list_available_models():
 async def get_models(request: Request):
     server_manager = get_server_manager()
 
-    data = []
-    for name, model in server_manager.models.items():
-        data.append(ModelObject(id=name))
-
-    return ModelObjectResponse(data=data)
+    return build_models_response(server_manager.models.keys(), request.headers)
 
 
 @router.get("/loading_status")

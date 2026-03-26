@@ -1,6 +1,5 @@
 from gallama.logger.logger import logger
 import json
-import re
 from .....data_classes.data_class import (
     ChoiceDeltaToolCall,
     ChoiceDeltaToolCallFunction,
@@ -9,24 +8,18 @@ from .....data_classes.data_class import (
 from .....utils.utils import get_response_tool_uid
 from typing import List, Dict, Optional
 
+
 def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
     """
-    Parse Qwen 3 tool call format:
+    Parse Qwen JSON-style tool call format.
 
-    <function=tool_name>
-    <parameter=param_key_1>
-    param_value_1
-    </parameter>
-    <parameter=param_key_2>
-    param_value_2
-    </parameter>
-    </function>
-
-    Multiple <function>...</function> blocks may appear within a single
-    <tool_call>...</tool_call> pair.
+    Example:
+    {"name": "get_weather", "arguments": {"city": "Seoul"}}
+    {"name": "get_weather", "arguments": {"city": "Tokyo"}}
     """
-
     results = []
+    decoder = json.JSONDecoder()
+    pos = 0
 
     # Initialize state
     if extra_vars is None:
@@ -40,41 +33,22 @@ def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
         return []
 
     try:
-        # Find all <function=name>...</function> blocks
-        function_pattern = re.compile(
-            r'<function=([^>]+)>\s*(.*?)\s*</function>',
-            re.DOTALL
-        )
+        while pos < len(tool_text):
+            if tool_text[pos].isspace():
+                pos += 1
+                continue
 
-        for func_match in function_pattern.finditer(tool_text):
-            tool_name = func_match.group(1).strip()
-            func_body = func_match.group(2)
+            tool, end_pos = decoder.raw_decode(tool_text, pos)
+            pos = end_pos
 
-            # Extract all <parameter=key>value</parameter> pairs from the function body
-            param_pattern = re.compile(
-                r'<parameter=([^>]+)>\s*(.*?)\s*</parameter>',
-                re.DOTALL
-            )
-
-            arguments_dict = {}
-            for param_match in param_pattern.finditer(func_body):
-                key = param_match.group(1).strip()
-                value_text = param_match.group(2).strip()
-
-                # Attempt to parse as JSON (handles lists, dicts, numbers, booleans)
-                try:
-                    arguments_dict[key] = json.loads(value_text)
-                except (json.JSONDecodeError, TypeError):
-                    arguments_dict[key] = value_text
-
-            logger.info(f"tool: {tool_name} args: {arguments_dict}")
+            logger.info(f"tool: {tool}")
 
             chunk_data = ChoiceDeltaToolCall(
                 index=extra_vars["state"]["tool_call"],
                 id=get_response_tool_uid(),
                 function=ChoiceDeltaToolCallFunction(
-                    name=tool_name,
-                    arguments=json.dumps(arguments_dict)
+                    name=tool.get("name"),
+                    arguments=json.dumps(tool.get("arguments", ""))
                 ),
                 type="function"
             )
@@ -90,9 +64,9 @@ def qwen3_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
 def tool_prompt(tool_name: Optional[str] = None):
     if tool_name is None:
-        return '\n<tool_call>\n<function='
+        return '\n<tool_call>\n{"name": "'
     else:
-        return f'\n<tool_call>\n<function={tool_name}>\n'
+        return f'\n<tool_call>\n{{"name": "{tool_name}", "arguments": '
 
 
 qwen3_moe = {

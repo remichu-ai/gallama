@@ -20,10 +20,18 @@ Gallama supports native tool calling. Instead of forcing every model into one sy
 
 Current models with custom native tool parsers:
 
-- `Qwen 3`
-- `GLM-4`
-- `Minimax`
-- `Ministral 3`
+- `Qwen JSON family`
+  Covers `qwen2`, `qwen2_5_vl`, `qwen3`, `qwen3_moe`, `qwen3_next`, `qwen3_vl`, `qwen3_vl_moe`
+- `Qwen XML family`
+  Covers `qwen3_5`, `qwen3_5_moe`, `step3p5`, `nemotron_h`
+- `GPT-OSS Harmony family`
+  Covers `gpt_oss`
+- `GLM-4 family`
+  Covers `glm4`, `glm4_moe`, `glm4v`, `glm4v_moe`
+- `MiniMax family`
+  Covers `minimax`, `minimax_m2`
+- `Ministral / Mistral 3 family`
+  Covers `ministral3`, `mistral3` (including Devstral-style `mistral3` models)
 
 For these models, Gallama expects the model to emit its native tool-call structure, and Gallama parses that structure back into OpenAI-compatible `tool_calls` or Anthropic-compatible `tool_use` blocks.
 
@@ -150,6 +158,138 @@ ANTHROPIC_BASE_URL="http://127.0.0.1:8000/" ANTHROPIC_AUTH_TOKEN="local" claude 
 ```
 
 This lets Claude Code talk to your local model through Gallama's Anthropic-compatible API.
+
+## MCP
+Gallama can discover and execute tools from a remote streamable HTTP MCP server on the server side. The request shape depends on which client surface you use:
+
+- OpenAI Chat Completions: add a tool with `"type": "mcp"`
+- OpenAI Responses: add a tool with `"type": "mcp"`
+- Anthropic Messages: define `mcp_servers` and reference them with a `"type": "mcp_toolset"` entry in `tools`
+
+Current limitations:
+
+- MCP currently works only for non-streaming requests
+- `require_approval` is only supported as `"never"` right now
+- Mixing MCP tool calls and normal function tool calls in the same model turn is not supported yet
+
+### OpenAI Chat Completions
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="test",
+)
+
+completion = client.chat.completions.create(
+    model="qwen3",
+    max_tokens=3000,
+    messages=[
+        {
+            "role": "user",
+            "content": "Use the MCP weather tool and tell me the result.",
+        }
+    ],
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+print(completion.choices[0].message.content)
+```
+
+### OpenAI Responses API
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="test",
+)
+
+response = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and tell me the result.",
+    max_output_tokens=300,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+print(response.output_text)
+```
+
+Gallama also prepends MCP trace items to the Responses output, so you will see `mcp_list_tools` and `mcp_call` entries alongside the assistant output.
+
+### Anthropic Messages API
+Gallama accepts an Anthropic-compatible MCP request shape on `/v1/messages`, but this is not a byte-for-byte mirror of Anthropic's current hosted MCP connector beta. In Anthropic's official API, MCP is documented separately under the MCP connector docs and requires a beta header. Gallama's local compatibility layer does not require that beta header.
+
+```python
+import json
+import urllib.request
+
+payload = {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 3000,
+    "messages": [
+        {
+            "role": "user",
+            "content": "Use the MCP weather tool and tell me the result.",
+        }
+    ],
+    "mcp_servers": [
+        {
+            "type": "url",
+            "name": "weather",
+            "url": "http://127.0.0.1:18001/mcp",
+        }
+    ],
+    "tools": [
+        {
+            "type": "mcp_toolset",
+            "mcp_server_name": "weather",
+            "allowed_tools": ["get_weather"],
+        }
+    ],
+}
+
+request = urllib.request.Request(
+    "http://127.0.0.1:8000/v1/messages",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "content-type": "application/json",
+        "x-api-key": "test",
+        "anthropic-version": "2023-06-01",
+    },
+    method="POST",
+)
+
+with urllib.request.urlopen(request) as response:
+    data = json.loads(response.read().decode("utf-8"))
+
+for block in data["content"]:
+    print(block)
+```
+
+When using the Anthropic-compatible endpoint, Gallama returns MCP activity as `mcp_tool_use` and `mcp_tool_result` blocks before the normal text block.
+
+If your MCP server requires auth, include `authorization_token` or `headers` on the MCP server/tool definition.
+
+If you are targeting Anthropic's hosted API instead of Gallama, use Anthropic's MCP connector docs and beta versioning instead of this local Gallama example.
+
+See [`src/tests/test_openai.py`](./src/tests/test_openai.py), [`src/tests/test_anthropic.py`](./src/tests/test_anthropic.py), and [`src/tests/test_responses.py`](./src/tests/test_responses.py) for live end-to-end MCP examples against a dummy MCP server.
 
 ## Function Calling
 Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.
@@ -436,7 +576,7 @@ mistral:
 
 Typical keys:
 
-- `backend`: backend name such as `exllama`, `llama_cpp`, `transformers`, `embedding`, `kokoro`, or `gpt_sovits`
+- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `embedding`, or `kokoro`
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
@@ -444,7 +584,7 @@ Typical keys:
 - `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
 - `quant`: optional metadata for the model quantization you downloaded
 - `eos_token_list`: optional extra EOS tokens for models that need them
-- `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `gpt_sovits`, and similar backends
+- `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `kokoro`, and similar backends
 
 Example with a `transformers` backend:
 
@@ -476,28 +616,58 @@ codestral_llama_cpp:
   quant: 4.0
 ```
 
-Example with TTS voice presets:
+Example with a `llama_cpp_server` backend:
 
 ```yaml
-gpt_sovits:
-  backend: gpt_sovits
-  model_id: /home/your-user/gallama/models/gpt_sovits
+codestral_llama_cpp_server:
+  backend: llama_cpp_server
+  model_id: mistralai/Codestral-22B-v0.1
+  prompt_template: Mistral
+  max_seq_len: 32768
   backend_extra_args:
-    device: cuda
-    is_half: false
-    version: v2
-    chunk_size_in_s: 0.1
-    bert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-roberta-wwm-ext-large
-    cnhuhbert_base_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/chinese-hubert-base
-    t2s_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt
-    vits_weights_path: /home/your-user/gallama/models/gpt_sovits/pretrained_models/gsv-v2final-pretrained/s2G2333k.pth
-  voice:
-    shenhe:
-      language: en
-      ref_audio_path: /path/to/reference.wav
-      ref_audio_transcription: I'm not trying to save the world...
-      speed_factor: 1.1
+    base_url: http://127.0.0.1:8080
+    cache_prompt: true
+    use_server_tokenizer: true
 ```
+
+This backend keeps prompt templating in Gallama and uses `llama-server` mainly as a generation engine through `/completion` and `/tokenize`.
+
+Start `llama-server` separately, for example:
+
+```shell
+llama-server -m /path/to/model.gguf --port 8080 --ctx-size 32768
+```
+
+Notes for `llama_cpp_server`:
+
+- `backend_extra_args.base_url` is required.
+- `model_id` is still used by Gallama's prompt engine. If `prompt_template` is omitted, `model_id` must be a valid Hugging Face model/tokenizer identifier or a local tokenizer directory so Gallama can load the chat template.
+- If you want to avoid Hugging Face tokenizer loading, set an explicit `prompt_template` such as `Mistral`, `Llama3`, or another template from `src/gallama/data/model_token.yaml`.
+- Gallama tokenizes prompts through `llama-server` with `add_special=false`, then sends token arrays to `/completion` for text-only requests.
+- Image inputs are supported by switching `/completion` into prompt-object mode with `prompt_string + multimodal_data`.
+- Audio inputs are not supported yet.
+- Direct video input is not sent to `llama-server`, but Gallama can still fall back to converting video frames into images for backends that support images.
+- `use_server_tokenizer` must stay `true` in the current implementation.
+
+Example with an `ik_llama` backend:
+
+```yaml
+qwen_ik_llama:
+  backend: ik_llama
+  model_id: /home/your-user/models/qwen.gguf
+  prompt_template: Qwen2-VL
+  max_seq_len: 32768
+  backend_extra_args:
+    base_url: http://127.0.0.1:8080
+    cache_prompt: true
+    use_server_tokenizer: true
+```
+
+Notes for `ik_llama`:
+
+- This backend inherits the `llama_cpp_server` integration and uses the same `/completion` and `/tokenize` flow.
+- It automatically applies `backend_extra_args.multimodal_marker: "<__media__>"` for multimodal `/completion` requests unless you override it explicitly.
+- Use `ik_llama` when the base `llama_cpp_server` backend works for text but `ik_llama.cpp` vision requests require the server-side MTMD marker format.
 
 Notes:
 
@@ -518,7 +688,7 @@ Customize the model launch using various parameters. Available parameters for th
 - `cache_size`: Context length for cache text in integers (optional)
 - `cache_quant`: Quantization to use for cache, options are "FP16", "Q4", "Q6", "Q8" (optional)
 - `max_seq_len`: Maximum sequence length (optional)
-- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `gpt_sovits`, `kokoro`.
+- `backend`: Model engine backend. Options include `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `vllm`, `sglang`, `mlx_vlm`, `embedding`, `faster_whisper`, `mlx_whisper`, `kokoro`.
 - `tp`: enable tensor parallel with exllama v2 (experimental). See further below
 
 #### Run Without `model_config.yaml`
@@ -543,6 +713,13 @@ To also write the same CLI logs to a file:
 gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" `--log-file ./log/gallama.log`
 ```
 
+To control log verbosity:
+
+```shell
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" -v
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" -vv
+```
+
 Useful optional arguments:
 
 - `max_seq_len=32768`
@@ -553,11 +730,14 @@ Useful optional arguments:
 - `strict=True`
 - `max_concurrent_requests=<n>`
 - `--log-file ./log/gallama.log` to mirror CLI logs into a file
+- `-v` to enable debug logging while still truncating large base64 image payloads in API request logs
+- `-vv` to enable maximum verbosity, including full base64 image payloads in API request logs
 
 Notes:
 
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
+- This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 
 #### Speculative Decoding Parameters
 - `draft_model_id`: ID of the draft model (optional)

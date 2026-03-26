@@ -18,6 +18,27 @@ class ModelManager:
         self.config_manager = ConfigManager()
         self.model_ready = False
 
+    def close_all_models(self):
+        seen = set()
+        all_model_dicts = (
+            self.llm_dict,
+            self.tts_dict,
+            self.stt_dict,
+            self.embedding_dict,
+        )
+
+        for model_dict in all_model_dicts:
+            for model in model_dict.values():
+                if id(model) in seen:
+                    continue
+                seen.add(id(model))
+
+                if hasattr(model, "close"):
+                    try:
+                        model.close()
+                    except Exception as exc:
+                        logger.error(f"Failed to close model resource cleanly: {exc}")
+
     def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding"]) -> Optional[Any]:
         # Determine which dictionaries to use based on the type
         if _type == "llm":
@@ -102,6 +123,7 @@ class ModelManager:
             _default_model_spec = ModelSpec.from_dict(model_config)
             # Merge configurations that user pass in with default setting of the model
             model_spec = ModelSpec.from_merged_config(model_spec, _default_model_spec.model_dump())
+            logger.info(f"Resolved model_spec from config: {model_spec}")
 
         if not model_spec.model_id:
             raise Exception(f"model_id is required for '{model_name}' when it is not fully defined in model_config.yaml")
@@ -115,11 +137,15 @@ class ModelManager:
 
         # load the model with config from the model_spec and yml. model_spec comes from cli
         logger.info(f"model_spec.backend: {model_spec.backend}")
-        if model_spec.backend in ["exllama", "llama_cpp", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
+        if model_spec.backend in ["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
             if model_spec.backend == "exllama":
                 from gallama.backend.llm import ModelExllama as ModelClass
             elif model_spec.backend == "llama_cpp":
                 from gallama.backend.llm import ModelLlamaCpp as ModelClass
+            elif model_spec.backend == "llama_cpp_server":
+                from gallama.backend.llm import ModelLlamaCppServer as ModelClass
+            elif model_spec.backend == "ik_llama":
+                from gallama.backend.llm import ModelIKLlama as ModelClass
             elif model_spec.backend == "transformers":
                 from gallama.backend.llm import ModelTransformers as ModelClass
             elif model_spec.backend == "mlx_vlm":
@@ -187,16 +213,6 @@ class ModelManager:
                 model_object=stt
             )
 
-        elif model_spec.backend == "gpt_sovits":  # embedding model
-            from gallama.backend.tts import TTS_GPT_SoVITS
-            tts = TTS_GPT_SoVITS(model_spec=model_spec)
-
-            # update dict
-            self._update_model(
-                model_name=model_name,
-                model_spec=model_spec,
-                model_object=tts
-            )
         elif model_spec.backend == "kokoro":  # embedding model
             from gallama.backend.tts import TTSKokoro
             tts = TTSKokoro(model_spec=model_spec)

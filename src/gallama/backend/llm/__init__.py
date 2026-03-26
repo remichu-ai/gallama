@@ -19,6 +19,16 @@ except ImportError:
     ModelLlamaCpp = None
 
 try:
+    from .engine import ModelLlamaCppServer
+except ImportError:
+    ModelLlamaCppServer = None
+
+try:
+    from .engine import ModelIKLlama
+except ImportError:
+    ModelIKLlama = None
+
+try:
     from .engine import ModelTransformers
 except ImportError:
     ModelTransformers = None

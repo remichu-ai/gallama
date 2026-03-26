@@ -17,8 +17,7 @@ from gallama.utils import parse_request_body
 from gallama.config.config_manager import ConfigManager
 import os
 from contextlib import asynccontextmanager
-from logging import DEBUG
-from gallama.logger.logger import get_logger
+from gallama.logger.logger import get_logger, get_log_level_for_verbosity, set_log_verbosity
 import base64
 from gallama.dependencies import get_model_manager
 from gallama.routes import (
@@ -62,6 +61,7 @@ async def read_root():
 
 
 @router.options("/v1/chat/completions")
+@router.options("/v1/responses")
 async def options_handler(request: Request):
     return JSONResponse(
         status_code=200,
@@ -121,6 +121,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # Cleanup code
+        logger.info("Cleaning up loaded models...")
+        model_manager.close_all_models()
         logger.info("Cleaning up ZMQ connections...")
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
@@ -130,6 +132,8 @@ async def lifespan(app: FastAPI):
 def make_server(args):
     global logger
     global draft_spec_dict
+    requested_verbosity = (getattr(args, "verbose", 0) or 0) + 1
+    set_log_verbosity(requested_verbosity)
 
     logger = get_logger(
         log_file=args.log_file or "./log/llm_response.log",
@@ -141,6 +145,7 @@ def make_server(args):
     # Add signal handlers for graceful shutdown
     def signal_handler(signum, frame):
         logger.info("Received shutdown signal, cleaning up...")
+        model_manager.close_all_models()
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
                 handler.close()
@@ -171,17 +176,15 @@ def make_server(args):
         os.environ['MODEL_NAME'] = model_spec.model_name
         os.environ['MODEL_PORT'] = str(args.port)
 
-    # set logger level
-    if args.verbose:
-        logger.setLevel(DEBUG)
-        os.environ["LOCAL_OPEN_AI_VERBOSE"] = '2'   # turn on verbosity for all
+    logger.setLevel(get_log_level_for_verbosity())
 
     args.model_spec = model_spec
     logger.info("Parsed Arguments:" + str(args))  # Debug statement
 
     if args.detached:
-        # send logging to zmq so that it will show in the parent log
-        logger = get_logger(name="child", to_zmq=True, to_console=False)
+        # Reconfigure the shared package logger used across imported modules so
+        # worker logs are forwarded back to the manager via ZMQ.
+        logger = get_logger(name="logger", to_zmq=True, to_console=False)
     else:
         # keep the default logger declared on top
         pass
@@ -249,18 +252,32 @@ def make_server(args):
 
 
 def parse_dict(arg):
-    """Parses a key=value string and returns a dictionary."""
+    """Parses key=value pairs and supports dotted keys for nested dictionaries."""
+
+    def assign_nested_key(target, dotted_key, value):
+        parts = dotted_key.split(".")
+        current = target
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = value
+
     result = {}
     for pair in arg.split():
-        key, value = pair.split('=')
-        result[key] = value.strip("'")  # Strip single quotes here as well
+        key, value = pair.split('=', 1)
+        assign_nested_key(result, key, value.strip("'"))
     return result
 
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="Launch local AI model")
     arg_parser.add_argument("--model-spec", type=str, help="Base64 encoded JSON ModelSpec object")
-    arg_parser.add_argument('-v', "--verbose", action='store_true', help="Turn on more verbose logging")
+    arg_parser.add_argument(
+        '-v',
+        "--verbose",
+        action='count',
+        default=0,
+        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+    )
     arg_parser.add_argument('-d', "--detached", action='store_true', help="Log to ZeroMQ")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
