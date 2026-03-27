@@ -8,7 +8,7 @@ from ..api_response.chat_response import (
 )
 from ..dependencies import get_model_manager, get_response_store
 from ..logger import logger
-from ..remote_mcp.orchestrator import run_mcp_completion_loop
+from ..remote_mcp.orchestrator import MCPStreamController, prepend_mcp_traces_to_response, run_mcp_completion_loop
 from ..request_validation import validate_api_request
 from ..data_classes import (
     BaseMessage,
@@ -42,6 +42,31 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
         model_manager = get_model_manager()
         llm = model_manager.get_model(message.model, _type="llm")
         base_query = message.get_ChatMLQuery()
+        if base_query.stream:
+            gen_queue = GenQueueDynamic()
+            controller = MCPStreamController(
+                provider="anthropic",
+                base_query=base_query,
+                llm=llm,
+                request=request,
+                conversation_messages=base_query.messages,
+                mcp_servers=message.get_mcp_server_configs(),
+            )
+            await controller.start(gen_queue)
+
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=base_query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                    provider="anthropic",
+                    tool_calls_interceptor=controller.intercept_tool_calls,
+                    turn_end_interceptor=controller.handle_turn_end,
+                )
+            )
+
         result = await run_mcp_completion_loop(
             provider="anthropic",
             base_query=base_query,
@@ -61,6 +86,31 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
         model_manager = get_model_manager()
         llm = model_manager.get_model(query.model, _type="llm")
         base_query = query.model_copy(deep=True, update={"tools": function_tools})
+        if base_query.stream:
+            gen_queue = GenQueueDynamic()
+            controller = MCPStreamController(
+                provider=provider,
+                base_query=base_query,
+                llm=llm,
+                request=request,
+                conversation_messages=base_query.messages,
+                mcp_servers=mcp_servers,
+            )
+            await controller.start(gen_queue)
+
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=base_query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                    provider=provider,
+                    tool_calls_interceptor=controller.intercept_tool_calls,
+                    turn_end_interceptor=controller.handle_turn_end,
+                )
+            )
+
         result = await run_mcp_completion_loop(
             provider=provider,
             base_query=base_query,
@@ -172,6 +222,59 @@ async def responses(request: Request, query: ResponsesCreateRequest):
 
         if mcp_servers:
             llm = model_manager.get_model(raw_chat_query.model, _type="llm")
+            formatter_kwargs = {"request_model": response_request}
+
+            if raw_chat_query.stream:
+                controller = MCPStreamController(
+                    provider="responses",
+                    base_query=raw_chat_query,
+                    llm=llm,
+                    request=request,
+                    conversation_messages=effective_messages,
+                    mcp_servers=mcp_servers,
+                    formatter_kwargs=formatter_kwargs,
+                )
+                await controller.start(gen_queue)
+
+                async def mcp_stream_completion_callback(response_obj: ResponsesCreateResponse):
+                    if not should_store:
+                        return
+
+                    stored_response = prepend_mcp_traces_to_response(
+                        "responses",
+                        response_obj,
+                        controller.discovered_tools,
+                        controller.call_traces,
+                    )
+                    assistant_messages = response_output_to_assistant_messages(response_obj.output)
+                    conversation_messages = _clone_messages(controller.working_messages) + assistant_messages
+                    await response_store.put(
+                        ResponseStoreRecord(
+                            response_id=stored_response.id,
+                            model=stored_response.model,
+                            request=response_request.model_dump(exclude_none=True, by_alias=True),
+                            response=stored_response,
+                            conversation_messages=conversation_messages,
+                            previous_response_id=response_request.previous_response_id,
+                            store=should_store,
+                        )
+                    )
+
+                return EventSourceResponse(
+                    chat_completion_response_stream(
+                        query=raw_chat_query,
+                        gen_queue=gen_queue,
+                        model_name=llm.model_name,
+                        request=request,
+                        tag_definitions=llm.prompt_eng.tag_definitions,
+                        provider="responses",
+                        formatter_kwargs=formatter_kwargs,
+                        completion_callback=mcp_stream_completion_callback if should_store else None,
+                        tool_calls_interceptor=controller.intercept_tool_calls,
+                        turn_end_interceptor=controller.handle_turn_end,
+                    )
+                )
+
             result = await run_mcp_completion_loop(
                 provider="responses",
                 base_query=raw_chat_query,
@@ -179,7 +282,7 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                 request=request,
                 conversation_messages=effective_messages,
                 mcp_servers=mcp_servers,
-                formatter_kwargs={"request_model": response_request},
+                formatter_kwargs=formatter_kwargs,
             )
 
             if should_store:

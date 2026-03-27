@@ -1,7 +1,11 @@
 import asyncio
+import json
 import os
 import sys
 import types
+from types import SimpleNamespace
+
+import pytest
 
 
 def _install_test_stubs():
@@ -93,9 +97,14 @@ if SRC_TESTS_DIR not in sys.path:
     sys.path.insert(0, SRC_TESTS_DIR)
 
 from dummy_mcp_server import TEST_TOKEN, TEST_TOOL_NAME, run_dummy_mcp_server
+from gallama.api_response.chat_response import chat_completion_response_stream
 from gallama.data_classes.data_class import AnthropicMessagesRequest, ChatMLQuery
+from gallama.data_classes.data_class import TagDefinition
+from gallama.data_classes.generation_data_class import GenEnd, GenQueue, GenQueueDynamic, GenStart, GenText, GenerationStats
 from gallama.data_classes.responses_api import ResponsesCreateRequest
+from gallama.remote_mcp.models import MCPResolvedTool
 from gallama.remote_mcp.models import MCPServerConfig
+from gallama.remote_mcp.orchestrator import MCPStreamController
 from gallama.remote_mcp.runtime import MCPRuntime
 
 
@@ -212,3 +221,182 @@ def test_mcp_runtime_lists_and_calls_tools_over_streamable_http():
             assert server.count_method("tools/call") >= 1
 
         asyncio.run(_run())
+
+
+def test_chat_completion_stream_can_continue_after_suppressed_tool_calls():
+    synthetic_tool_name = "mcp__demo__get_weather"
+
+    def tool_post_processor(_text: str, _extra_vars: dict | None = None):
+        return [
+            {
+                "id": "call_1",
+                "type": "function",
+                "index": 0,
+                "function": {
+                    "name": synthetic_tool_name,
+                    "arguments": "{\"city\": \"Singapore\"}",
+                },
+            }
+        ]
+
+    async def _run():
+        tool_tag = TagDefinition(
+            tag_type="tool_calls",
+            api_tag="tool_calls",
+            role="assistant",
+            post_processor=tool_post_processor,
+            wait_till_complete=True,
+        )
+        gen_queue = GenQueueDynamic()
+
+        gen_queue.put_nowait(GenStart(gen_type=tool_tag))
+        gen_queue.put_nowait(GenText(content='{"name":"get_weather"}'))
+        gen_queue.put_nowait(GenerationStats(stop_reason="tool_use"))
+        gen_queue.put_nowait(GenEnd())
+
+        intercepted_calls = []
+        continued = False
+
+        async def intercept_tool_calls(tool_calls):
+            intercepted_calls.extend(tool_calls)
+            return True
+
+        async def continue_after_turn():
+            nonlocal continued
+            if continued:
+                return False
+
+            continued = True
+            gen_queue.swap(GenQueue())
+            gen_queue.put_nowait(GenText(content="Final weather answer"))
+            gen_queue.put_nowait(
+                GenerationStats(
+                    stop_reason="end_turn",
+                    input_tokens_count=5,
+                    output_tokens_count=3,
+                )
+            )
+            gen_queue.put_nowait(GenEnd())
+            return True
+
+        events = []
+        async for event in chat_completion_response_stream(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=[tool_tag],
+            tool_calls_interceptor=intercept_tool_calls,
+            turn_end_interceptor=continue_after_turn,
+        ):
+            events.append(event)
+
+        payloads = [event["data"] for event in events]
+        streamed_content = ""
+        for payload in payloads:
+            if payload == "[DONE]":
+                continue
+            data = json.loads(payload)
+            for choice in data.get("choices", []):
+                streamed_content += choice.get("delta", {}).get("content", "")
+
+        assert intercepted_calls
+        assert intercepted_calls[0]["function"]["name"] == synthetic_tool_name
+        assert streamed_content == "Final weather answer"
+        assert all(synthetic_tool_name not in payload for payload in payloads)
+        assert payloads[-1] == "[DONE]"
+
+    asyncio.run(_run())
+
+
+def test_mcp_stream_controller_only_suppresses_full_mcp_tool_turns():
+    async def _chat_stub(**_kwargs):
+        return None
+
+    controller = MCPStreamController(
+        provider="openai",
+        base_query=ChatMLQuery.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+        ),
+        llm=SimpleNamespace(
+            model_name="test-model",
+            prompt_eng=SimpleNamespace(tag_definitions=[]),
+            chat=_chat_stub,
+        ),
+        request=None,
+        conversation_messages=[],
+        mcp_servers=[],
+    )
+
+    controller.resolved_by_synthetic_name = {
+        "mcp__demo__get_weather": (
+            MCPServerConfig(name="demo", url="http://localhost:9000/mcp"),
+            MCPResolvedTool(
+                server_name="demo",
+                tool_name="get_weather",
+                synthetic_name="mcp__demo__get_weather",
+            ),
+        )
+    }
+
+    async def _run():
+        assert await controller.intercept_tool_calls(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__demo__get_weather",
+                        "arguments": "{\"city\":\"Singapore\"}",
+                    },
+                }
+            ]
+        )
+
+        controller.current_turn_has_suppressed_mcp = False
+        assert not await controller.intercept_tool_calls(
+            [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_weather",
+                        "arguments": "{\"city\":\"Singapore\"}",
+                    },
+                }
+            ]
+        )
+
+        with pytest.raises(Exception):
+            await controller.intercept_tool_calls(
+                [
+                    {
+                        "id": "call_3",
+                        "type": "function",
+                        "function": {
+                            "name": "mcp__demo__get_weather",
+                            "arguments": "{\"city\":\"Singapore\"}",
+                        },
+                    },
+                    {
+                        "id": "call_4",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Singapore\"}",
+                        },
+                    },
+                ]
+            )
+
+    asyncio.run(_run())

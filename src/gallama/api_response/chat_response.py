@@ -107,6 +107,8 @@ async def chat_completion_response_stream(
     tag_definitions: List[TagDefinition] = None,
     formatter_kwargs: Optional[Dict[str, Any]] = None,
     completion_callback: Optional[Callable[[Any], Awaitable[None]]] = None,
+    tool_calls_interceptor: Optional[Callable[[Any], Awaitable[bool]]] = None,
+    turn_end_interceptor: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> AsyncIterator[dict]:
     formatter_kwargs = formatter_kwargs or {}
     if provider == "openai":
@@ -128,9 +130,15 @@ async def chat_completion_response_stream(
     gen_stats = None
     state = {}
     last_stream_event_at = time.monotonic()
+    suppressed_tool_calls = False
 
     current_tag = text_tag
     current_text = ""
+
+    def make_stream_parser():
+        if tag_definitions is not None:
+            return StreamParserByTag(tag_definitions=tag_definitions, default_tag_type=text_tag)
+        return DummyParser()
 
     async def emit_events(events: List[dict]):
         nonlocal last_stream_event_at
@@ -138,7 +146,7 @@ async def chat_completion_response_stream(
             last_stream_event_at = time.monotonic()
             yield event
 
-    def process_and_format_chunk(tag: TagDefinition, text: str):
+    def process_chunk(tag: TagDefinition, text: str):
         try:
             extra_args = {"model_name": model_name, "unique_id": formatter.unique_id, "state": state}
             _processed_text = tag.post_processor(text, extra_args)
@@ -149,11 +157,42 @@ async def chat_completion_response_stream(
             logger.info("Fall back to text tag")
             _processed_text, _api_tag, _role = text, text_tag.api_tag, text_tag.role
 
+        return _processed_text, _api_tag, _role
+
+    async def maybe_format_chunk(tag: TagDefinition, text: str):
+        nonlocal suppressed_tool_calls
+
+        processed_text, api_tag, role = process_chunk(tag, text)
+
+        if api_tag == "tool_calls" and tool_calls_interceptor is not None:
+            if await tool_calls_interceptor(processed_text):
+                suppressed_tool_calls = True
+                return []
+
         try:
-            return formatter.stream_chunk(api_tag=_api_tag, text=_processed_text, role=_role)
+            return formatter.stream_chunk(api_tag=api_tag, text=processed_text, role=role)
         except Exception as e:
             logger.error(f"Error in stream_chunk formatting: {e}")
             raise e
+
+    def reset_turn_state():
+        nonlocal full_response
+        nonlocal eos
+        nonlocal gen_stats
+        nonlocal state
+        nonlocal current_tag
+        nonlocal current_text
+        nonlocal suppressed_tool_calls
+        nonlocal stream_parser
+
+        full_response = ""
+        eos = False
+        gen_stats = None
+        state = {}
+        current_tag = text_tag
+        current_text = ""
+        suppressed_tool_calls = False
+        stream_parser = make_stream_parser()
 
     # Emit starting event(s)
     async for event in emit_events(formatter.stream_start()):
@@ -205,7 +244,7 @@ async def chat_completion_response_stream(
                                 yield event
 
                             # 2. Yield chunks
-                            if chunk := process_and_format_chunk(current_tag, current_text):
+                            if chunk := await maybe_format_chunk(current_tag, current_text):
                                 async for event in emit_events(chunk):
                                     yield event
 
@@ -223,7 +262,7 @@ async def chat_completion_response_stream(
                         async for event in emit_events(formatter.open_block(_tag.api_tag)):
                             yield event
 
-                        if chunk := process_and_format_chunk(_tag, _text_chunk):
+                        if chunk := await maybe_format_chunk(_tag, _text_chunk):
                             async for event in emit_events(chunk):
                                 yield event
         elif queue_was_empty and formatter.ping_interval_s is not None:
@@ -235,9 +274,14 @@ async def chat_completion_response_stream(
                 async for event in emit_events(formatter.open_block(current_tag.api_tag)):
                     yield event
 
-                if chunk := process_and_format_chunk(current_tag, current_text):
+                if chunk := await maybe_format_chunk(current_tag, current_text):
                     async for event in emit_events(chunk):
                         yield event
+
+            if suppressed_tool_calls and turn_end_interceptor is not None:
+                if await turn_end_interceptor():
+                    reset_turn_state()
+                    continue
 
             # Close final block via formatter
             async for event in emit_events(formatter.close_block()):
