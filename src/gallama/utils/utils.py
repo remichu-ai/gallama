@@ -1,7 +1,9 @@
 import uuid
 import yaml
 import base64
+import gzip
 import struct
+import zlib
 from lxml import etree
 from pathlib import Path
 from PIL import Image
@@ -12,6 +14,16 @@ import json
 import re
 from typing import Union, Optional, Tuple
 from gallama.logger import logger
+
+try:
+    import brotli
+except ImportError:
+    brotli = None
+
+try:
+    import zstandard as zstd
+except ImportError:
+    zstd = None
 
 
 BASE64_DATA_URI_PATTERN = re.compile(
@@ -191,6 +203,37 @@ def format_request_body_for_logging(body, include_full_base64: bool = False) -> 
     return format_payload_for_logging(body, include_full_base64=include_full_base64)
 
 
+def decode_content_encoded_body(body: bytes, content_encoding: str) -> bytes:
+    if not body or not content_encoding:
+        return body
+
+    decoded_body = body
+    encodings = [encoding.strip().lower() for encoding in content_encoding.split(",") if encoding.strip()]
+
+    for encoding in reversed(encodings):
+        if encoding == "identity":
+            continue
+        if encoding == "gzip":
+            decoded_body = gzip.decompress(decoded_body)
+            continue
+        if encoding == "deflate":
+            decoded_body = zlib.decompress(decoded_body)
+            continue
+        if encoding == "br":
+            if brotli is None:
+                raise ValueError("brotli support is not installed")
+            decoded_body = brotli.decompress(decoded_body)
+            continue
+        if encoding == "zstd":
+            if zstd is None:
+                raise ValueError("zstandard support is not installed")
+            decoded_body = zstd.ZstdDecompressor().decompress(decoded_body)
+            continue
+        raise ValueError(f"Unsupported Content-Encoding: {encoding}")
+
+    return decoded_body
+
+
 def get_package_file_path(file_name: str) -> str:
     """
     Get the absolute path of a file within the gallama package.
@@ -274,6 +317,9 @@ async def parse_request_body(
         if not body:
             return {}, False
 
+        content_encoding = request.headers.get("Content-Encoding", "")
+        decoded_body = decode_content_encoded_body(body, content_encoding)
+
         # Handle multipart form data
         if "multipart/form-data" in content_type:
             return body, True
@@ -281,17 +327,17 @@ async def parse_request_body(
         # Handle JSON content
         if "application/json" in content_type:
             try:
-                return json.loads(body.decode("utf-8")), False
+                return json.loads(decoded_body.decode("utf-8")), False
             except json.JSONDecodeError as e:
                 logger.error(f"JSON decode error: {e}")
-                return body, False
+                return decoded_body, False
 
         # Handle text content
         elif "text/" in content_type:
-            return body.decode("utf-8"), False
+            return decoded_body.decode("utf-8"), False
 
         # For other content types, return raw bytes
-        return body, False
+        return decoded_body, False
 
     except Exception as e:
         logger.error(f"Error parsing request body: {e}", exc_info=True)

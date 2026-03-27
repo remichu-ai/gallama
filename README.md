@@ -168,9 +168,11 @@ Gallama can discover and execute tools from a remote streamable HTTP MCP server 
 
 Current limitations:
 
-- MCP currently works only for non-streaming requests
+- MCP works for both non-streaming and streaming requests
 - `require_approval` is only supported as `"never"` right now
 - Mixing MCP tool calls and normal function tool calls in the same model turn is not supported yet
+
+When you use MCP with streaming, Gallama executes the MCP tool loop on the server side and suppresses the intermediate tool-call turns from the client stream. The client sees the final assistant output stream after the MCP calls have completed.
 
 ### OpenAI Chat Completions
 ```python
@@ -232,6 +234,63 @@ print(response.output_text)
 ```
 
 Gallama also prepends MCP trace items to the Responses output, so you will see `mcp_list_tools` and `mcp_call` entries alongside the assistant output.
+
+Streaming also works on the Responses API:
+
+```python
+stream = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and stream the final answer.",
+    max_output_tokens=300,
+    stream=True,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+for event in stream:
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="")
+```
+
+If you set `store=True`, you can later retrieve the full Responses object, including the MCP trace items. This is useful when you want both streamed text for the live client and the full MCP conversation history afterward.
+
+```python
+created = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and stream the final answer.",
+    max_output_tokens=300,
+    stream=True,
+    store=True,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+response_id = None
+for event in created:
+    if event.type in {"response.created", "response.completed"}:
+        response_id = event.response.id
+
+stored = client.responses.retrieve(response_id)
+for item in stored.output:
+    if item.type in {"mcp_list_tools", "mcp_call"}:
+        print(item)
+```
+
+If you continue a stored Responses conversation with `previous_response_id`, the saved history includes those MCP trace items as part of the recorded response. That means you can inspect prior MCP tool calls later, not just the final assistant text.
 
 ### Anthropic Messages API
 Gallama accepts an Anthropic-compatible MCP request shape on `/v1/messages`, but this is not a byte-for-byte mirror of Anthropic's current hosted MCP connector beta. In Anthropic's official API, MCP is documented separately under the MCP connector docs and requires a beta header. Gallama's local compatibility layer does not require that beta header.
