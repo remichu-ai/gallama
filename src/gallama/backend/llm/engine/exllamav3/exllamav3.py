@@ -1,8 +1,6 @@
 import re
 from gallama.backend.llm.engine.base import (
     ModelInterface,
-    is_expected_disconnect_exception,
-    format_exception_summary,
 )
 from typing import Optional, Dict, List, Union, get_args
 import torch
@@ -13,6 +11,11 @@ import uuid                                 # use for generating id for api retu
 
 from gallama.logger.logger import logger
 from gallama.backend.llm.json_schema_utils import normalize_json_schema_for_formatron
+from gallama.utils.request_disconnect import (
+    format_exception_summary,
+    is_expected_disconnect_exception,
+    is_request_disconnected,
+)
 from gallama.data_classes import (
     BaseMessage,
     ModelSpec,
@@ -331,7 +334,7 @@ class ModelExllamaV3(ModelInterface):
     async def check_disconnection(request, job, gen_queue_list, stop_event=None):
         try:
             while True:
-                if await request.is_disconnected():
+                if await is_request_disconnected(request):
                     logger.info("User disconnected")
                     if job:
                         await job.cancel()

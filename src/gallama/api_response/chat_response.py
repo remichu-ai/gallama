@@ -33,6 +33,7 @@ from ..data_classes.generation_data_class import (
 )
 
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Literal, Optional, Union
+from ..utils.request_disconnect import is_request_disconnected
 from ..utils.utils import get_response_uid, get_response_tool_uid
 from ..logger import logger
 from pydantic.json import pydantic_encoder
@@ -537,7 +538,7 @@ async def completion_response_stream(
             break
         else:
             try:
-                if await asyncio.wait_for(request.is_disconnected(), timeout=0.1):
+                if await asyncio.wait_for(is_request_disconnected(request), timeout=0.1):
                     logger.info("Client disconnected, stopping stream")
                     break
             except asyncio.TimeoutError:

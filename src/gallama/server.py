@@ -25,6 +25,7 @@ import os
 import json
 import base64
 from gallama.server_routes import (
+    responses_ws_router,
     server_management_router,
     realtime_router,
     periodic_health_check,
@@ -32,12 +33,23 @@ from gallama.server_routes import (
 )
 from gallama.server_engine import log_model_status
 from gallama.dependencies_server import (
+    get_responses_websocket_hub,
     get_server_manager,
     get_server_logger,
     start_log_receiver,
     DEFAULT_ZMQ_URL,
     configure_server_logging,
 )
+from gallama.server_engine.responses_ws_bridge import (
+    extract_response_ws_keys,
+    is_codex_responses_transport,
+    stream_responses_request_to_events,
+)
+from gallama.server_engine.request_routing import (
+    prefer_vision_instances,
+    request_requires_vision,
+)
+from gallama.server_engine.model_capabilities import infer_model_modalities_fallback
 from gallama.logger.logger import (
     get_log_level_for_verbosity,
     is_max_log_verbosity,
@@ -46,9 +58,11 @@ from gallama.logger.logger import (
 
 
 server_logger = get_server_logger()
+responses_websocket_hub = get_responses_websocket_hub()
 
 router = APIRouter()
 router.include_router(server_management_router)
+router.include_router(responses_ws_router)
 router.include_router(realtime_router)
 
 
@@ -343,6 +357,23 @@ async def wait_for_model_ready(port, timeout=600):  # 10 minutes timeout
     return False
 
 
+async def get_instance_modalities(port, timeout=5.0) -> List[str]:
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"http://localhost:{port}/status", timeout=timeout)
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:
+        server_logger.debug(f"Failed to fetch modalities for port {port}: {exc}")
+        return []
+
+    modalities = payload.get("modalities", [])
+    if not isinstance(modalities, list):
+        return []
+
+    return [str(modality) for modality in modalities]
+
+
 async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
 
@@ -425,6 +456,21 @@ async def run_model(model_spec: ModelSpec):
         # Wait for the model to become ready
         if await wait_for_model_ready(port):
             server_logger.info(f"Model {model_spec.model_name} on port {port} is ready")
+            modalities = await get_instance_modalities(port)
+            if not modalities:
+                config_record = config_manager.configs.get(model_spec.model_name, {})
+                default_record = config_manager.default_model_list.get(model_spec.model_name, {})
+                modalities = infer_model_modalities_fallback(
+                    model_name=model_spec.model_name,
+                    model_id=model_spec.model_id,
+                    backend=model_spec.backend,
+                    prompt_template=model_spec.prompt_template,
+                    config_records=[config_record, default_record],
+                )
+                if modalities:
+                    server_logger.info(
+                        f"Inferred modalities for {model_spec.model_name} on port {port}: {modalities}"
+                    )
             instance_info = ModelInstanceInfo(
                 port=port,
                 pid=process.pid,
@@ -432,6 +478,7 @@ async def run_model(model_spec: ModelSpec):
                 model_name=model_spec.model_name,
                 model_type=ModelSpec.get_model_type_from_backend(backend),
                 strict=model_spec.strict,
+                modalities=modalities,
                 max_concurrent_requests=model_spec.max_concurrent_requests,
             )
             server_manager.models[model_spec.model_name].instances.append(instance_info)
@@ -511,6 +558,15 @@ async def load_balanced_router(request: Request, path: str):
 
     async with request_semaphore:
         is_embedding = any(subpath["original"] in path for subpath in EMBEDDING_SUBPATHS)
+        if "/audio/transcriptions" in path:
+            model_type = "stt"
+        elif "embeddings" in path:
+            model_type = "embedding"
+        elif "/audio/speech" in path:
+            model_type = "tts"
+        else:
+            model_type = "llm"
+        vision_required = model_type == "llm" and request_requires_vision(body_json)
 
         if not model and strict_mode:
             raise HTTPException(status_code=400, detail="Model must be specified in strict mode")
@@ -529,20 +585,15 @@ async def load_balanced_router(request: Request, path: str):
 
             # If no matching model or no instances found, pick any running instance of the correct type that is not strict
             if not available_instances:
-                # Determine the model type based on the request path
-                if "/audio/transcriptions" in path:
-                    model_type = "stt"
-                elif "embeddings" in path:
-                    model_type = "embedding"
-                elif "/audio/speech" in path:
-                    model_type = "tts"
-                else:
-                    model_type = "llm"
-
                 for model_info in server_manager.models.values():
                     for inst in model_info.instances:
                         if inst.status == "running" and inst.model_type == model_type and not inst.strict:
                             available_instances.append(inst)
+
+                available_instances = prefer_vision_instances(
+                    available_instances,
+                    vision_required=vision_required,
+                )
 
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
@@ -558,6 +609,34 @@ async def load_balanced_router(request: Request, path: str):
         try:
             server_logger.info(f"active_requests: {str(active_requests)}")
             server_logger.info(f"Request routed to model {instance.model_name} instance at port {instance.port}")
+
+            if (
+                request.method == "POST"
+                and request.url.path == "/v1/responses"
+                and isinstance(body_json, dict)
+                and not body_json.get("stream", False)
+                and is_codex_responses_transport(request.headers)
+            ):
+                session_keys = extract_response_ws_keys(request.headers)
+
+                async def publish_event(_event_name, event_payload):
+                    if session_keys:
+                        await responses_websocket_hub.publish(session_keys, event_payload)
+
+                try:
+                    final_response = await stream_responses_request_to_events(
+                        instance=instance,
+                        payload=body_json,
+                        headers=request.headers,
+                        on_event=publish_event,
+                    )
+                except httpx.HTTPStatusError as exc:
+                    raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+
+                if final_response is None:
+                    raise HTTPException(status_code=502, detail="No completed response received from backend stream")
+
+                return JSONResponse(status_code=200, content=final_response)
 
             # Forward the request
             response = await forward_request(request, instance)
@@ -586,7 +665,8 @@ def shutdown(signal, frame):
 
 
 async def start_server(port=8000):
-    config = uvicorn.Config(manager_app, host="0.0.0.0", port=port, log_level="debug")
+    uvicorn_log_level = "debug" if get_log_level_for_verbosity() == 10 else "info"
+    config = uvicorn.Config(manager_app, host="0.0.0.0", port=port, log_level=uvicorn_log_level)
     server = uvicorn.Server(config)
     await server.serve()
 

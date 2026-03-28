@@ -48,17 +48,6 @@ from ....data_classes import VideoFrameCollection
 
 config_manager = ConfigManager()
 
-
-def is_expected_disconnect_exception(exc: Exception) -> bool:
-    """Return True for request teardown exceptions that should not be logged as errors."""
-    return type(exc).__name__ == "ClientDisconnect"
-
-
-def format_exception_summary(exc: BaseException) -> str:
-    message = str(exc).strip()
-    exc_name = type(exc).__name__
-    return f"{exc_name}: {message}" if message else exc_name
-
 @dataclass
 class ToolCallV2:
     gen_dynamic_queue: List[GenQueueDynamic]

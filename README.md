@@ -159,6 +159,86 @@ ANTHROPIC_BASE_URL="http://127.0.0.1:8000/" ANTHROPIC_AUTH_TOKEN="local" claude 
 
 This lets Claude Code talk to your local model through Gallama's Anthropic-compatible API.
 
+### Claude Code With Local MCP Web Search
+If you want Claude Code to use a local MCP server for web search instead of Claude Code's built-in `WebSearch`, you can run the MCP server included in this repo and wrap `claude` with a local helper command.
+
+1. Create a local env file:
+
+```shell
+cp examples/mcp/.env_sample examples/mcp/.env
+```
+
+2. Fill in whichever search providers you want to use:
+
+- `EXA_API_KEY`
+- `TAVILY_API_KEY`
+- `BRAVE_API_KEY`
+
+3. Set `LOCAL_VISION_MODEL` if you also want the `understand_image` MCP tool.
+
+4. Start the MCP server from the repo root:
+
+```shell
+python examples/mcp/server.py
+```
+
+The MCP server exposes:
+
+- `web_search`
+  Uses one unified wrapper over Exa, Tavily, and Brave. In `provider="auto"` mode it rotates across configured providers and returns the `provider` used in the response.
+- `understand_image`
+  Sends image understanding requests to your local OpenAI-compatible vision model.
+
+To run Claude Code against your local Gallama server and inject this MCP server automatically, add a wrapper like this to `~/.zshrc`:
+
+```shell
+claudel() {
+    local model="${CLAUDEL_MODEL:-minimax}"
+    local base_url="${CLAUDEL_BASE_URL:-http://127.0.0.1:8000/}"
+    local auth_token="${CLAUDEL_AUTH_TOKEN:-local}"
+    local mcp_url="${CLAUDEL_MCP_URL:-http://127.0.0.1:18011/mcp}"
+    local enable_mcp="${CLAUDEL_ENABLE_MCP:-1}"
+    local search_tool="${CLAUDEL_MCP_SEARCH_TOOL:-mcp__local-coding-plan__web_search}"
+    local args=(--model "$model")
+
+    if [[ "$enable_mcp" != "0" ]]; then
+        args+=(--mcp-config "{\"mcpServers\":{\"local-coding-plan\":{\"type\":\"http\",\"url\":\"$mcp_url\"}}}")
+        args+=(
+            --disallowedTools "WebSearch"
+            --append-system-prompt "For internet search, use the MCP tool ${search_tool}. Do not use the built-in WebSearch tool."
+        )
+    fi
+
+    ANTHROPIC_BASE_URL="$base_url" \
+    ANTHROPIC_AUTH_TOKEN="$auth_token" \
+    command claude "${args[@]}" "$@"
+}
+```
+
+Reload your shell:
+
+```shell
+source ~/.zshrc
+```
+
+Then run:
+
+```shell
+claudel
+```
+
+Useful wrapper overrides:
+
+- `CLAUDEL_MODEL=qwen2.5-vl-instruct claudel`
+- `CLAUDEL_ENABLE_MCP=0 claudel`
+- `CLAUDEL_MCP_URL=http://127.0.0.1:18011/mcp claudel`
+
+Notes:
+
+- The wrapper leaves your normal `claude` command untouched.
+- `examples/mcp/.env` is ignored by git, so your local API keys stay out of the repo.
+- The MCP server stores monthly provider usage in `examples/mcp/.search_provider_usage.json`, which is also ignored by git.
+
 ## MCP
 Gallama can discover and execute tools from a remote streamable HTTP MCP server on the server side. The request shape depends on which client surface you use:
 

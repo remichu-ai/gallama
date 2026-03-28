@@ -85,6 +85,16 @@ class ResponseMCPTool(BaseModel):
         )
 
 
+class ResponseHostedTool(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    strict: Optional[bool] = None
+
+
 class ResponseToolChoiceFunction(BaseModel):
     type: Literal["function"] = "function"
     name: str
@@ -130,7 +140,7 @@ class ResponsesCreateRequest(BaseModel):
     model: str
     input: Union[str, ResponseInputItem, List[Union[str, ResponseInputItem]]]
     instructions: Optional[str] = None
-    tools: Optional[List[Union[ResponseFunctionTool, ResponseMCPTool]]] = None
+    tools: Optional[List[Union[ResponseFunctionTool, ResponseMCPTool, ResponseHostedTool]]] = None
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ResponseToolChoiceFunction]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -175,11 +185,11 @@ class ResponsesCreateRequest(BaseModel):
         for tool in self.tools:
             if isinstance(tool, ResponseMCPTool):
                 continue
-            if tool.type != "function":
-                raise ValueError(
-                    f"Unsupported Responses API tool type '{tool.type}'. "
-                    "The basic rollout only supports function tools."
-                )
+            if not isinstance(tool, ResponseFunctionTool):
+                # Accept built-in/hosted tool declarations such as web_search so
+                # upstream clients can target Gallama without request validation
+                # failing, even though the local backend only exposes function tools.
+                continue
 
             parameters = tool.parameters or {"type": "object", "properties": {}, "required": []}
             converted_tools.append(

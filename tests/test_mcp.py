@@ -165,6 +165,33 @@ def test_responses_request_extracts_mcp_servers():
     assert request.to_chat_ml_query().tools is None
 
 
+def test_responses_request_tolerates_hosted_builtin_tools():
+    request = ResponsesCreateRequest.model_validate(
+        {
+            "model": "test-model",
+            "input": "Hello",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_weather",
+                    "description": "Lookup weather",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": False,
+                },
+            ],
+        }
+    )
+
+    chat_query = request.to_chat_ml_query()
+
+    assert chat_query.tools is not None
+    assert len(chat_query.tools) == 1
+    assert chat_query.tools[0].function.name == "lookup_weather"
+
+
 def test_anthropic_request_extracts_mcp_servers():
     request = AnthropicMessagesRequest.model_validate(
         {
