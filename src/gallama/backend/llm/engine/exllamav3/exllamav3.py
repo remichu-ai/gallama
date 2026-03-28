@@ -92,10 +92,7 @@ def _is_truthy(value) -> bool:
 
 
 def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
-    if not raw_kwargs:
-        return {}
-
-    normalized = dict(raw_kwargs)
+    normalized = dict(raw_kwargs or {})
 
     int_keys = {
         "max_batch_size",
@@ -119,6 +116,9 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
         value = normalized.get(key)
         if isinstance(value, str):
             normalized[key] = _is_truthy(value)
+
+    if normalized.get("max_chunk_size") is None:
+        normalized["max_chunk_size"] = 4096
 
     return normalized
 
