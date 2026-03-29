@@ -21,6 +21,7 @@ from ..data_classes.data_class import (
     UsageResponse,
 )
 from ..data_classes.responses_api import (
+    ResponseConversation,
     ResponseFunctionCallItem,
     ResponseOutputMessage,
     ResponseOutputText,
@@ -468,11 +469,13 @@ class ResponsesFormatter(BaseAPIFormatter):
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
     ) -> ResponsesCreateResponse:
+        conversation_id = self.request_model.get_conversation_id()
         return ResponsesCreateResponse(
             id=self.unique_id,
             created_at=self.created,
             status=status,
             completed_at=int(time.time()) if status == "completed" else None,
+            conversation=ResponseConversation(id=conversation_id) if conversation_id else None,
             instructions=self.request_model.instructions,
             max_output_tokens=self.request_model.max_output_tokens,
             model=self.model_name,
@@ -512,6 +515,44 @@ class ResponsesFormatter(BaseAPIFormatter):
             arguments=function_payload.get("arguments", "{}"),
             status=status,
         )
+
+    def append_output_items(self, items: List[Any]) -> List[dict]:
+        events: List[dict] = []
+
+        for item in items:
+            output_index = self._output_index
+            added_item = item
+            completed_item = item
+
+            if hasattr(item, "model_copy") and hasattr(item, "status"):
+                added_item = item.model_copy(update={"status": "in_progress"})
+                completed_item = item.model_copy(update={"status": "completed"})
+
+            events.append(
+                self._event(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": output_index,
+                        "item": added_item,
+                    },
+                )
+            )
+            events.append(
+                self._event(
+                    "response.output_item.done",
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": completed_item,
+                    },
+                )
+            )
+
+            self._output_items.append(completed_item)
+            self._output_index += 1
+
+        return events
 
     def stream_start(self) -> List[dict]:
         response = self._response_payload(status="in_progress", output=[])
@@ -573,10 +614,11 @@ class ResponsesFormatter(BaseAPIFormatter):
             ]
 
         if api_tag == "reasoning":
+            reasoning_text = str(text) if text is not None else ""
             if not self._current_items:
                 reasoning_item = ResponseReasoningItem(
                     status="in_progress",
-                    content=[ResponseReasoningText(text=str(text) if text is not None else "")],
+                    content=[ResponseReasoningText(text=reasoning_text)],
                 )
                 self._current_items = [reasoning_item]
                 return [
@@ -587,11 +629,32 @@ class ResponsesFormatter(BaseAPIFormatter):
                             "output_index": self._current_output_start_index,
                             "item": reasoning_item.model_copy(update={"content": []}),
                         },
-                    )
+                    ),
+                    self._event(
+                        "response.reasoning_text.delta",
+                        {
+                            "type": "response.reasoning_text.delta",
+                            "item_id": reasoning_item.id,
+                            "output_index": self._current_output_start_index,
+                            "content_index": 0,
+                            "delta": reasoning_text,
+                        },
+                    ),
                 ]
 
-            self._current_items[0].content[0].text += str(text) if text is not None else ""
-            return []
+            self._current_items[0].content[0].text += reasoning_text
+            return [
+                self._event(
+                    "response.reasoning_text.delta",
+                    {
+                        "type": "response.reasoning_text.delta",
+                        "item_id": self._current_items[0].id,
+                        "output_index": self._current_output_start_index,
+                        "content_index": 0,
+                        "delta": reasoning_text,
+                    },
+                )
+            ]
 
         if api_tag == "tool_calls" and isinstance(text, list):
             if self._current_items:
@@ -657,6 +720,22 @@ class ResponsesFormatter(BaseAPIFormatter):
         else:
             for offset, item in enumerate(self._current_items):
                 item.status = "completed"
+                if self._current_api_tag == "reasoning":
+                    reasoning_text = ""
+                    if item.content:
+                        reasoning_text = item.content[0].text
+                    events.append(
+                        self._event(
+                            "response.reasoning_text.done",
+                            {
+                                "type": "response.reasoning_text.done",
+                                "item_id": item.id,
+                                "output_index": self._current_output_start_index + offset,
+                                "content_index": 0,
+                                "text": reasoning_text,
+                            },
+                        )
+                    )
                 events.append(
                     self._event(
                         "response.output_item.done",

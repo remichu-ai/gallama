@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from fastapi import HTTPException, Request
 
+from ..api_response.api_formatter import ResponsesFormatter
 from ..api_response.chat_response import chat_completion_response
 from ..data_classes import (
     AnthropicMessagesResponse,
@@ -133,14 +134,12 @@ def provider_response_to_assistant_messages(
     return _anthropic_response_to_assistant_messages(response_obj)
 
 
-def _prepend_mcp_traces_to_responses(
-    response_obj: ResponsesCreateResponse,
+def _build_responses_mcp_list_tools_items(
     discovered_tools: Dict[str, List[MCPResolvedTool]],
-    call_traces: List[MCPCallTrace],
-) -> ResponsesCreateResponse:
-    extra_output: List[Any] = []
+) -> List[ResponseMCPListToolsItem]:
+    items: List[ResponseMCPListToolsItem] = []
     for server_name, tools in discovered_tools.items():
-        extra_output.append(
+        items.append(
             ResponseMCPListToolsItem(
                 server_label=server_name,
                 tools=[
@@ -153,18 +152,32 @@ def _prepend_mcp_traces_to_responses(
                 ],
             )
         )
+    return items
 
-    for trace in call_traces:
-        extra_output.append(
-            ResponseMCPCallItem(
-                id=trace.call_id,
-                arguments=trace.arguments_json,
-                error=trace.error.model_dump(mode="json") if trace.error else None,
-                name=trace.tool_name,
-                output=trace.output_text,
-                server_label=trace.server_name,
-            )
+
+def _build_responses_mcp_call_items(call_traces: List[MCPCallTrace]) -> List[ResponseMCPCallItem]:
+    return [
+        ResponseMCPCallItem(
+            id=trace.call_id,
+            arguments=trace.arguments_json,
+            error=trace.error.model_dump(mode="json") if trace.error else None,
+            name=trace.tool_name,
+            output=trace.output_text,
+            server_label=trace.server_name,
         )
+        for trace in call_traces
+    ]
+
+
+def _prepend_mcp_traces_to_responses(
+    response_obj: ResponsesCreateResponse,
+    discovered_tools: Dict[str, List[MCPResolvedTool]],
+    call_traces: List[MCPCallTrace],
+) -> ResponsesCreateResponse:
+    extra_output: List[Any] = [
+        *_build_responses_mcp_list_tools_items(discovered_tools),
+        *_build_responses_mcp_call_items(call_traces),
+    ]
 
     if extra_output:
         response_obj.output = extra_output + list(response_obj.output)
@@ -346,6 +359,8 @@ class MCPStreamController:
         self.resolved_by_synthetic_name: Dict[str, tuple[MCPServerConfig, MCPResolvedTool]] = {}
         self.merged_tools: List[ToolSpec] = []
         self.call_traces: List[MCPCallTrace] = []
+        self.stream_formatter: Optional[ResponsesFormatter] = None
+        self.pending_stream_events: List[dict] = []
 
         self.stream_queue: Optional[GenQueueDynamic] = None
         self.current_query_for_turn: Optional[ChatMLQuery] = None
@@ -368,6 +383,22 @@ class MCPStreamController:
         self.stream_queue = stream_queue
         await self.initialize()
         await self._start_next_turn()
+
+    def attach_formatter(self, formatter: Any) -> None:
+        if self.provider != "responses" or not isinstance(formatter, ResponsesFormatter):
+            return
+
+        self.stream_formatter = formatter
+        self.pending_stream_events.extend(
+            formatter.append_output_items(
+                _build_responses_mcp_list_tools_items(self.discovered_tools)
+            )
+        )
+
+    def drain_stream_events(self) -> List[dict]:
+        events = list(self.pending_stream_events)
+        self.pending_stream_events.clear()
+        return events
 
     async def _start_next_turn(self) -> None:
         if self.turn_count >= self.max_iterations:
@@ -477,6 +508,13 @@ class MCPStreamController:
                     role="tool",
                     tool_call_id=trace.call_id,
                     content=tool_content or "",
+                )
+            )
+
+        if self.provider == "responses" and self.stream_formatter is not None:
+            self.pending_stream_events.extend(
+                self.stream_formatter.append_output_items(
+                    _build_responses_mcp_call_items(executed_traces)
                 )
             )
 

@@ -41,6 +41,7 @@ import time
 import json
 import asyncio
 import uuid
+import logging
 
 
 def format_generation_stats_log(model_name: str, gen_stats: GenerationStats) -> str:
@@ -62,6 +63,14 @@ def format_generation_stats_log(model_name: str, gen_stats: GenerationStats) -> 
         parts.append(f"cached_pages {gen_stats.cached_pages}")
 
     return " | ".join(parts)
+
+
+def format_stream_start_log(gen_type: Union[TagDefinition, str]) -> str:
+    if logger.isEnabledFor(logging.DEBUG):
+        return f"Stream starts with {gen_type}"
+
+    tag_type = getattr(gen_type, "tag_type", gen_type)
+    return f"Stream starts with {tag_type}"
 
 
 async def get_response_from_queue(
@@ -110,6 +119,8 @@ async def chat_completion_response_stream(
     completion_callback: Optional[Callable[[Any], Awaitable[None]]] = None,
     tool_calls_interceptor: Optional[Callable[[Any], Awaitable[bool]]] = None,
     turn_end_interceptor: Optional[Callable[[], Awaitable[bool]]] = None,
+    formatter_ready_callback: Optional[Callable[[Any], None]] = None,
+    extra_events_getter: Optional[Callable[[], List[dict]]] = None,
 ) -> AsyncIterator[dict]:
     formatter_kwargs = formatter_kwargs or {}
     if provider == "openai":
@@ -118,6 +129,9 @@ async def chat_completion_response_stream(
         formatter = AnthropicFormatter(model_name=model_name, **formatter_kwargs)
     else:
         formatter = ResponsesFormatter(model_name=model_name, **formatter_kwargs)
+
+    if formatter_ready_callback is not None:
+        formatter_ready_callback(formatter)
 
     text_tag = TagDefinition(tag_type="text", api_tag="content")
 
@@ -145,6 +159,17 @@ async def chat_completion_response_stream(
         nonlocal last_stream_event_at
         for event in events:
             last_stream_event_at = time.monotonic()
+            yield event
+
+    async def emit_extra_events():
+        if extra_events_getter is None:
+            return
+
+        events = extra_events_getter() or []
+        if not events:
+            return
+
+        async for event in emit_events(events):
             yield event
 
     def process_chunk(tag: TagDefinition, text: str):
@@ -198,6 +223,8 @@ async def chat_completion_response_stream(
     # Emit starting event(s)
     async for event in emit_events(formatter.stream_start()):
         yield event
+    async for event in emit_extra_events():
+        yield event
 
     while not eos:
         accumulated_text = ""
@@ -211,7 +238,7 @@ async def chat_completion_response_stream(
                     eos = True
                     break
                 elif isinstance(item, GenStart):
-                    logger.info(f"Stream starts with {item.gen_type}")
+                    logger.info(format_stream_start_log(item.gen_type))
                     if current_tag != item.gen_type:
                         current_tag = item.gen_type
                         try:
@@ -281,6 +308,8 @@ async def chat_completion_response_stream(
 
             if suppressed_tool_calls and turn_end_interceptor is not None:
                 if await turn_end_interceptor():
+                    async for event in emit_extra_events():
+                        yield event
                     reset_turn_state()
                     continue
 
@@ -377,7 +406,7 @@ async def chat_completion_response(
             elif isinstance(item, GenerationStats):
                 gen_stats = item        # Not applicable for completion endpoint
             elif isinstance(item, GenStart):
-                logger.debug(f"Stream starts with {item.gen_type}")
+                logger.debug(format_stream_start_log(item.gen_type))
                 if text_tag != item.gen_type:
                     initial_tag = item.gen_type
 

@@ -252,7 +252,7 @@ Current limitations:
 - `require_approval` is only supported as `"never"` right now
 - Mixing MCP tool calls and normal function tool calls in the same model turn is not supported yet
 
-When you use MCP with streaming, Gallama executes the MCP tool loop on the server side and suppresses the intermediate tool-call turns from the client stream. The client sees the final assistant output stream after the MCP calls have completed.
+When you use MCP with streaming on the Responses API, Gallama emits MCP trace items in the stream as `response.output_item.added` / `response.output_item.done` events with `mcp_list_tools` and `mcp_call` items before the final assistant text. Streaming Chat Completions still suppresses the intermediate MCP tool-call turns and only streams the final assistant output.
 
 ### OpenAI Chat Completions
 ```python
@@ -335,6 +335,8 @@ stream = client.responses.create(
 )
 
 for event in stream:
+    if event.type == "response.output_item.added" and event.item.type in {"mcp_list_tools", "mcp_call"}:
+        print(event.item)
     if event.type == "response.output_text.delta":
         print(event.delta, end="")
 ```
