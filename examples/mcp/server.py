@@ -158,7 +158,7 @@ def get_settings() -> Settings:
                 "If something is uncertain or unreadable, say so explicitly."
             ),
         ).strip(),
-        mcp_host=os.getenv("MCP_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        mcp_host=os.getenv("MCP_HOST", "0.0.0.0").strip() or "0.0.0.0",
         mcp_port=int(os.getenv("MCP_PORT", "18011")),
         mcp_path=os.getenv("MCP_PATH", "/mcp").strip() or "/mcp",
     )
