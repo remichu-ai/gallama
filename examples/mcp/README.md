@@ -42,7 +42,7 @@ Your local vision server is expected to support OpenAI-compatible `chat/completi
 python examples/mcp/server.py
 ```
 
-It will start a streamable HTTP MCP server at `http://127.0.0.1:18011/mcp` by default.
+It will start a streamable HTTP MCP server at `http://0.0.0.0:18011/mcp` by default.
 
 ## Tool behavior
 
@@ -101,7 +101,7 @@ For Gallama/OpenAI-compatible MCP tool definitions:
 {
   "type": "mcp",
   "server_label": "local-coding-plan",
-  "server_url": "http://127.0.0.1:18011/mcp",
+  "server_url": "http://0.0.0.0:18011/mcp",
   "allowed_tools": ["web_search", "understand_image"],
   "require_approval": "never"
 }

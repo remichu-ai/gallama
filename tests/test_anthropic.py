@@ -434,6 +434,7 @@ def test_tool_result_roundtrip(client: anthropic.Anthropic):
         )
         tool_blocks = [b for b in resp1.content if b.type == "tool_use"]
         assert tool_blocks, "Model did not call tool"
+        assert resp1.stop_reason == "tool_use", f"stop_reason={resp1.stop_reason}"
         tb = tool_blocks[0]
 
         # Step 2 — feed back a fake tool result
@@ -525,6 +526,7 @@ def test_parallel_tool_use(client: anthropic.Anthropic):
         tool_blocks = [b for b in resp.content if b.type == "tool_use"]
         tool_names = {b.name for b in tool_blocks}
         both = {"get_weather", "get_stock_price"} <= tool_names
+        assert resp.stop_reason == "tool_use", f"stop_reason={resp.stop_reason}"
         _report(
             name,
             len(tool_blocks) >= 2,
@@ -555,6 +557,7 @@ def test_parallel_tool_roundtrip(client: anthropic.Anthropic):
         )
         tool_blocks = [b for b in resp1.content if b.type == "tool_use"]
         assert len(tool_blocks) >= 1, "No tool calls"
+        assert resp1.stop_reason == "tool_use", f"stop_reason={resp1.stop_reason}"
 
         # Build tool results for all calls
         fake_results = {
@@ -582,6 +585,7 @@ def test_parallel_tool_roundtrip(client: anthropic.Anthropic):
             ],
         )
         text = "".join(b.text for b in resp2.content if b.type == "text")
+        assert resp2.stop_reason == "end_turn", f"stop_reason={resp2.stop_reason}"
         assert len(text) > 0, "Empty final text"
         _report(name, True, f"Final answer length: {len(text)} chars")
     except Exception as e:
@@ -622,6 +626,7 @@ def test_tool_choice_any(client: anthropic.Anthropic):
         )
         tool_blocks = [b for b in resp.content if b.type == "tool_use"]
         assert len(tool_blocks) >= 1, "Expected at least one tool call with tool_choice=any"
+        assert resp.stop_reason == "tool_use", f"stop_reason={resp.stop_reason}"
         _report(name, True, f"Forced tool: {tool_blocks[0].name}")
     except Exception as e:
         _report(name, False, str(e))
@@ -645,6 +650,7 @@ def test_tool_choice_specific(client: anthropic.Anthropic):
         assert tool_blocks[0].name == "calculator", (
             f"Expected calculator, got {tool_blocks[0].name}"
         )
+        assert resp.stop_reason == "tool_use", f"stop_reason={resp.stop_reason}"
         _report(name, True)
     except Exception as e:
         _report(name, False, str(e))
@@ -673,7 +679,8 @@ def test_streaming_tool_use(client: anthropic.Anthropic):
         final_message = stream.get_final_message()
         tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
         assert tool_blocks, "No tool_use in streamed response"
-        _report(name, True, f"Streamed tool: {tool_blocks[0].name}")
+        assert final_message.stop_reason == "tool_use", f"stop_reason={final_message.stop_reason}"
+        _report(name, True, f"Streamed tool: {tool_blocks[0].name}, stop_reason={final_message.stop_reason}")
     except Exception as e:
         _report(name, False, str(e))
 
