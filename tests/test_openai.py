@@ -515,6 +515,7 @@ def test_tool_result_roundtrip(client: openai.OpenAI):
         resp1 = client.chat.completions.create(**params1)
         tool_calls = _get_tool_calls(resp1)
         assert tool_calls, "Model did not call tool"
+        assert resp1.choices[0].finish_reason == "tool_calls", f"finish_reason={resp1.choices[0].finish_reason}"
         tc = tool_calls[0]
 
         resp2 = client.chat.completions.create(
@@ -601,6 +602,7 @@ def test_parallel_tool_use(client: openai.OpenAI):
         tool_calls = _get_tool_calls(resp)
         tool_names = {tc.function.name for tc in tool_calls}
         both = {"get_weather", "get_stock_price"} <= tool_names
+        assert resp.choices[0].finish_reason == "tool_calls", f"finish_reason={resp.choices[0].finish_reason}"
         detail = f"Tool calls: {len(tool_calls)}, names: {tool_names}" + (" (both present)" if both else " (missing one)")
         passed = len(tool_calls) >= 2
         _report(name, passed, detail)
@@ -624,6 +626,7 @@ def test_parallel_tool_roundtrip(client: openai.OpenAI):
         )
         tool_calls = _get_tool_calls(resp1)
         assert len(tool_calls) >= 1, "No tool calls"
+        assert resp1.choices[0].finish_reason == "tool_calls", f"finish_reason={resp1.choices[0].finish_reason}"
 
         fake_results = {"get_weather": "Cloudy, 18C in Paris", "get_stock_price": "MSFT is trading at $420.50"}
         tool_messages = [
@@ -640,6 +643,7 @@ def test_parallel_tool_roundtrip(client: openai.OpenAI):
             ],
         )
         text = _get_text(resp2)
+        assert resp2.choices[0].finish_reason == "stop", f"finish_reason={resp2.choices[0].finish_reason}"
         assert len(text) > 0, "Empty final text"
         _report(name, True, f"Final answer length: {len(text)} chars")
         _log_response(name, response={"step1": _resp_to_dict(resp1), "step2": _resp_to_dict(resp2)}, passed=True)
@@ -683,6 +687,7 @@ def test_tool_choice_required(client: openai.OpenAI):
         resp = client.chat.completions.create(**params)
         tool_calls = _get_tool_calls(resp)
         assert len(tool_calls) >= 1, "Expected at least one tool call with tool_choice=required"
+        assert resp.choices[0].finish_reason == "tool_calls", f"finish_reason={resp.choices[0].finish_reason}"
         detail = f"Forced tool: {tool_calls[0].function.name}"
         _report(name, True, detail)
         _log_response(name, request_params=params, response=resp, passed=True, detail=detail)
@@ -705,6 +710,7 @@ def test_tool_choice_specific(client: openai.OpenAI):
         tool_calls = _get_tool_calls(resp)
         assert len(tool_calls) >= 1, "No tool call"
         assert tool_calls[0].function.name == "calculator", f"Expected calculator, got {tool_calls[0].function.name}"
+        assert resp.choices[0].finish_reason == "tool_calls", f"finish_reason={resp.choices[0].finish_reason}"
         _report(name, True)
         _log_response(name, request_params=params, response=resp, passed=True)
     except Exception as e:
@@ -726,11 +732,14 @@ def test_streaming_tool_use(client: openai.OpenAI):
     chunks = []
     try:
         tool_calls_by_index: dict[int, dict] = {}
+        finish_reason = None
         stream = client.chat.completions.create(**params)
         for chunk in stream:
             chunks.append(chunk)
             if not chunk.choices:
                 continue
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
             if delta and delta.tool_calls:
                 for tc_delta in delta.tool_calls:
@@ -746,8 +755,9 @@ def test_streaming_tool_use(client: openai.OpenAI):
                             tool_calls_by_index[idx]["arguments"] += tc_delta.function.arguments
 
         assert tool_calls_by_index, "No tool calls in streamed response"
+        assert finish_reason == "tool_calls", f"finish_reason={finish_reason}"
         first = list(tool_calls_by_index.values())[0]
-        detail = f"Streamed tool: {first['name']}"
+        detail = f"Streamed tool: {first['name']}, finish_reason={finish_reason}"
         _report(name, True, detail)
         _log_response(name, request_params=params, stream_chunks=chunks, passed=True, detail=detail)
     except Exception as e:

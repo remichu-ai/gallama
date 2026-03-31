@@ -454,10 +454,14 @@ def test_single_tool_use(client: openai.OpenAI):
         resp = client.responses.create(**params)
         function_calls = _get_function_calls(resp)
         assert function_calls, "No function_call output items found"
+        assert resp.status == "completed", f"Unexpected status: {resp.status}"
+        assert all(_get_value(call, "status") == "completed" for call in function_calls), (
+            f"Unexpected function_call status values: {[_get_value(call, 'status') for call in function_calls]}"
+        )
         call = function_calls[0]
         assert call.name == "get_weather", f"Wrong tool: {call.name}"
         args = json.loads(call.arguments)
-        detail = f"tool={call.name}, args={args}"
+        detail = f"tool={call.name}, args={args}, response_status={resp.status}"
         _report(name, True, detail)
         _log_response(name, request_params=params, response=resp, passed=True, detail=detail)
     except Exception as exc:
@@ -478,6 +482,10 @@ def test_tool_result_roundtrip(client: openai.OpenAI):
         resp1 = client.responses.create(**params1)
         function_calls = _get_function_calls(resp1)
         assert function_calls, "Model did not call a function"
+        assert resp1.status == "completed", f"Unexpected status: {resp1.status}"
+        assert all(_get_value(item, "status") == "completed" for item in function_calls), (
+            f"Unexpected function_call status values: {[_get_value(item, 'status') for item in function_calls]}"
+        )
         call = function_calls[0]
 
         params2 = {
@@ -491,6 +499,8 @@ def test_tool_result_roundtrip(client: openai.OpenAI):
             "max_output_tokens": 300,
         }
         resp2 = client.responses.create(**params2)
+        assert resp2.status == "completed", f"Unexpected status: {resp2.status}"
+        assert not _get_function_calls(resp2), "Final response should not contain unresolved function_call items"
         text = _get_output_text(resp2)
         assert text, "Empty final response"
         _report(name, True, f"Final response length: {len(text)}")
@@ -573,8 +583,12 @@ def test_parallel_tool_use(client: openai.OpenAI):
         resp = client.responses.create(**params)
         function_calls = _get_function_calls(resp)
         tool_names = {call.name for call in function_calls}
+        assert resp.status == "completed", f"Unexpected status: {resp.status}"
+        assert all(_get_value(call, "status") == "completed" for call in function_calls), (
+            f"Unexpected function_call status values: {[_get_value(call, 'status') for call in function_calls]}"
+        )
         passed = {"get_weather", "get_stock_price"} <= tool_names
-        detail = f"Function calls: {len(function_calls)}, names: {sorted(tool_names)}"
+        detail = f"Function calls: {len(function_calls)}, names: {sorted(tool_names)}, response_status={resp.status}"
         _report(name, passed, detail)
         _log_response(name, request_params=params, response=resp, passed=passed, detail=detail)
     except Exception as exc:
