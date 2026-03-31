@@ -119,10 +119,17 @@ class BaseAPIFormatter:
 
 
 class OpenAIFormatter(BaseAPIFormatter):
+    def __init__(self, model_name: str, unique_id: Optional[str] = None):
+        super().__init__(model_name, unique_id)
+        self._has_tool_calls = False
+
     def create_unique_id(self):
         return "cmpl-" + str(uuid.uuid4().hex)
 
     def stream_chunk(self, api_tag: str, text: Any, role: str) -> List[dict]:
+        if api_tag == "tool_calls":
+            self._has_tool_calls = True
+
         if api_tag == "tool_calls" and isinstance(text, list):
             delta = {api_tag: text, "role": role or "assistant"}
         else:
@@ -154,6 +161,9 @@ class OpenAIFormatter(BaseAPIFormatter):
         finish_reason: OpenAIStopReason = "stop",
     ) -> List[dict]:
         events = []
+ 
+        if self._has_tool_calls and finish_reason == "stop":
+            finish_reason = "tool_calls"
 
         finish_chunk = ChatCompletionResponse(
             id=self.unique_id,
