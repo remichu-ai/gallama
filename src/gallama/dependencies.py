@@ -2,10 +2,12 @@ from .model_manager import ModelManager
 from .data_classes import VideoFrameCollection
 from .data_classes.realtime_client_proto import SessionConfig
 from .response_store import ResponseStore
+from .conversation_store import ConversationStore
 
 model_manager = ModelManager()
 video_frames = VideoFrameCollection()
 response_store = ResponseStore()
+conversation_store = ConversationStore()
 record_start_time: float = 0    # track the time when user click start recoridng
 
 clear_history_flag: bool = False  # clear LLM past history
@@ -22,6 +24,9 @@ def get_video_collection():
 
 def get_response_store():
     return response_store
+
+def get_conversation_store():
+    return conversation_store
 
 async def get_session_config():
     return session_config

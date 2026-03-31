@@ -1,7 +1,11 @@
 import asyncio
+import json
 import os
 import sys
 import types
+from types import SimpleNamespace
+
+import pytest
 
 
 def _install_test_stubs():
@@ -93,9 +97,15 @@ if SRC_TESTS_DIR not in sys.path:
     sys.path.insert(0, SRC_TESTS_DIR)
 
 from dummy_mcp_server import TEST_TOKEN, TEST_TOOL_NAME, run_dummy_mcp_server
+from gallama.api_response.api_formatter import ResponsesFormatter
+from gallama.api_response.chat_response import chat_completion_response_stream
 from gallama.data_classes.data_class import AnthropicMessagesRequest, ChatMLQuery
-from gallama.data_classes.responses_api import ResponsesCreateRequest
+from gallama.data_classes.data_class import TagDefinition
+from gallama.data_classes.generation_data_class import GenEnd, GenQueue, GenQueueDynamic, GenStart, GenText, GenerationStats
+from gallama.data_classes.responses_api import ResponseMCPCallItem, ResponseMCPListToolsItem, ResponsesCreateRequest
+from gallama.remote_mcp.models import MCPResolvedTool
 from gallama.remote_mcp.models import MCPServerConfig
+from gallama.remote_mcp.orchestrator import MCPStreamController
 from gallama.remote_mcp.runtime import MCPRuntime
 
 
@@ -156,6 +166,33 @@ def test_responses_request_extracts_mcp_servers():
     assert request.to_chat_ml_query().tools is None
 
 
+def test_responses_request_tolerates_hosted_builtin_tools():
+    request = ResponsesCreateRequest.model_validate(
+        {
+            "model": "test-model",
+            "input": "Hello",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_weather",
+                    "description": "Lookup weather",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": False,
+                },
+            ],
+        }
+    )
+
+    chat_query = request.to_chat_ml_query()
+
+    assert chat_query.tools is not None
+    assert len(chat_query.tools) == 1
+    assert chat_query.tools[0].function.name == "lookup_weather"
+
+
 def test_anthropic_request_extracts_mcp_servers():
     request = AnthropicMessagesRequest.model_validate(
         {
@@ -212,3 +249,344 @@ def test_mcp_runtime_lists_and_calls_tools_over_streamable_http():
             assert server.count_method("tools/call") >= 1
 
         asyncio.run(_run())
+
+
+def test_chat_completion_stream_can_continue_after_suppressed_tool_calls():
+    synthetic_tool_name = "mcp__demo__get_weather"
+
+    def tool_post_processor(_text: str, _extra_vars: dict | None = None):
+        return [
+            {
+                "id": "call_1",
+                "type": "function",
+                "index": 0,
+                "function": {
+                    "name": synthetic_tool_name,
+                    "arguments": "{\"city\": \"Singapore\"}",
+                },
+            }
+        ]
+
+    async def _run():
+        tool_tag = TagDefinition(
+            tag_type="tool_calls",
+            api_tag="tool_calls",
+            role="assistant",
+            post_processor=tool_post_processor,
+            wait_till_complete=True,
+        )
+        gen_queue = GenQueueDynamic()
+
+        gen_queue.put_nowait(GenStart(gen_type=tool_tag))
+        gen_queue.put_nowait(GenText(content='{"name":"get_weather"}'))
+        gen_queue.put_nowait(GenerationStats(stop_reason="tool_use"))
+        gen_queue.put_nowait(GenEnd())
+
+        intercepted_calls = []
+        continued = False
+
+        async def intercept_tool_calls(tool_calls):
+            intercepted_calls.extend(tool_calls)
+            return True
+
+        async def continue_after_turn():
+            nonlocal continued
+            if continued:
+                return False
+
+            continued = True
+            gen_queue.swap(GenQueue())
+            gen_queue.put_nowait(GenText(content="Final weather answer"))
+            gen_queue.put_nowait(
+                GenerationStats(
+                    stop_reason="end_turn",
+                    input_tokens_count=5,
+                    output_tokens_count=3,
+                )
+            )
+            gen_queue.put_nowait(GenEnd())
+            return True
+
+        events = []
+        async for event in chat_completion_response_stream(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=[tool_tag],
+            tool_calls_interceptor=intercept_tool_calls,
+            turn_end_interceptor=continue_after_turn,
+        ):
+            events.append(event)
+
+        payloads = [event["data"] for event in events]
+        streamed_content = ""
+        for payload in payloads:
+            if payload == "[DONE]":
+                continue
+            data = json.loads(payload)
+            for choice in data.get("choices", []):
+                streamed_content += choice.get("delta", {}).get("content", "")
+
+        assert intercepted_calls
+        assert intercepted_calls[0]["function"]["name"] == synthetic_tool_name
+        assert streamed_content == "Final weather answer"
+        assert all(synthetic_tool_name not in payload for payload in payloads)
+        assert payloads[-1] == "[DONE]"
+
+    asyncio.run(_run())
+
+
+def test_responses_stream_can_emit_mcp_trace_items_before_final_text():
+    synthetic_tool_name = "mcp__demo__get_weather"
+
+    def tool_post_processor(_text: str, _extra_vars: dict | None = None):
+        return [
+            {
+                "id": "call_1",
+                "type": "function",
+                "index": 0,
+                "function": {
+                    "name": synthetic_tool_name,
+                    "arguments": "{\"city\": \"Singapore\"}",
+                },
+            }
+        ]
+
+    async def _run():
+        tool_tag = TagDefinition(
+            tag_type="tool_calls",
+            api_tag="tool_calls",
+            role="assistant",
+            post_processor=tool_post_processor,
+            wait_till_complete=True,
+        )
+        gen_queue = GenQueueDynamic()
+
+        gen_queue.put_nowait(GenStart(gen_type=tool_tag))
+        gen_queue.put_nowait(GenText(content='{"name":"get_weather"}'))
+        gen_queue.put_nowait(GenerationStats(stop_reason="tool_use"))
+        gen_queue.put_nowait(GenEnd())
+
+        request_model = ResponsesCreateRequest.model_validate(
+            {
+                "model": "test-model",
+                "input": "Weather?",
+                "stream": True,
+            }
+        )
+
+        formatter_holder = {}
+        pending_events = []
+        continued = False
+
+        def formatter_ready(formatter):
+            assert isinstance(formatter, ResponsesFormatter)
+            formatter_holder["formatter"] = formatter
+            pending_events.extend(
+                formatter.append_output_items(
+                    [
+                        ResponseMCPListToolsItem(
+                            server_label="demo",
+                            tools=[
+                                {
+                                    "name": "get_weather",
+                                    "description": "Get weather",
+                                    "input_schema": {
+                                        "type": "object",
+                                        "properties": {"city": {"type": "string"}},
+                                        "required": ["city"],
+                                    },
+                                }
+                            ],
+                        )
+                    ]
+                )
+            )
+
+        def drain_pending_events():
+            events = list(pending_events)
+            pending_events.clear()
+            return events
+
+        async def intercept_tool_calls(_tool_calls):
+            return True
+
+        async def continue_after_turn():
+            nonlocal continued
+            if continued:
+                return False
+
+            continued = True
+            formatter = formatter_holder["formatter"]
+            pending_events.extend(
+                formatter.append_output_items(
+                    [
+                        ResponseMCPCallItem(
+                            id="mcp_call_1",
+                            arguments='{"city":"Singapore"}',
+                            name="get_weather",
+                            output="Sunny, 31C",
+                            server_label="demo",
+                        )
+                    ]
+                )
+            )
+
+            gen_queue.swap(GenQueue())
+            gen_queue.put_nowait(GenText(content="Final weather answer"))
+            gen_queue.put_nowait(
+                GenerationStats(
+                    stop_reason="end_turn",
+                    input_tokens_count=5,
+                    output_tokens_count=3,
+                    total_tokens_count=8,
+                )
+            )
+            gen_queue.put_nowait(GenEnd())
+            return True
+
+        events = []
+        async for event in chat_completion_response_stream(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="responses",
+            tag_definitions=[tool_tag],
+            formatter_kwargs={"request_model": request_model},
+            formatter_ready_callback=formatter_ready,
+            extra_events_getter=drain_pending_events,
+            tool_calls_interceptor=intercept_tool_calls,
+            turn_end_interceptor=continue_after_turn,
+        ):
+            events.append(event)
+
+        decoded_events = [
+            {"event": event.get("event"), "data": json.loads(event["data"])}
+            for event in events
+        ]
+        added_item_types = [
+            payload["data"]["item"]["type"]
+            for payload in decoded_events
+            if payload["event"] == "response.output_item.added"
+        ]
+        text_deltas = [
+            payload["data"]["delta"]
+            for payload in decoded_events
+            if payload["event"] == "response.output_text.delta"
+        ]
+        completed_payload = next(
+            payload["data"]["response"]
+            for payload in decoded_events
+            if payload["event"] == "response.completed"
+        )
+
+        assert added_item_types[:2] == ["mcp_list_tools", "mcp_call"]
+        assert "".join(text_deltas) == "Final weather answer"
+        assert [item["type"] for item in completed_payload["output"]] == [
+            "mcp_list_tools",
+            "mcp_call",
+            "message",
+        ]
+
+    asyncio.run(_run())
+
+
+def test_mcp_stream_controller_only_suppresses_full_mcp_tool_turns():
+    async def _chat_stub(**_kwargs):
+        return None
+
+    controller = MCPStreamController(
+        provider="openai",
+        base_query=ChatMLQuery.model_validate(
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            }
+        ),
+        llm=SimpleNamespace(
+            model_name="test-model",
+            prompt_eng=SimpleNamespace(tag_definitions=[]),
+            chat=_chat_stub,
+        ),
+        request=None,
+        conversation_messages=[],
+        mcp_servers=[],
+    )
+
+    controller.resolved_by_synthetic_name = {
+        "mcp__demo__get_weather": (
+            MCPServerConfig(name="demo", url="http://localhost:9000/mcp"),
+            MCPResolvedTool(
+                server_name="demo",
+                tool_name="get_weather",
+                synthetic_name="mcp__demo__get_weather",
+            ),
+        )
+    }
+
+    async def _run():
+        assert await controller.intercept_tool_calls(
+            [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__demo__get_weather",
+                        "arguments": "{\"city\":\"Singapore\"}",
+                    },
+                }
+            ]
+        )
+
+        controller.current_turn_has_suppressed_mcp = False
+        assert not await controller.intercept_tool_calls(
+            [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_weather",
+                        "arguments": "{\"city\":\"Singapore\"}",
+                    },
+                }
+            ]
+        )
+
+        with pytest.raises(Exception):
+            await controller.intercept_tool_calls(
+                [
+                    {
+                        "id": "call_3",
+                        "type": "function",
+                        "function": {
+                            "name": "mcp__demo__get_weather",
+                            "arguments": "{\"city\":\"Singapore\"}",
+                        },
+                    },
+                    {
+                        "id": "call_4",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Singapore\"}",
+                        },
+                    },
+                ]
+            )
+
+    asyncio.run(_run())

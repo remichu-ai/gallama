@@ -1,13 +1,16 @@
 from ..base import (
     ModelInterface,
-    is_expected_disconnect_exception,
-    format_exception_summary,
 )
 from typing import Optional, Dict, List, Union, Any
 import time                                 # for compute of generation time
 import asyncio
 from fastapi import Request                 # for type hint
 import transformers
+from gallama.utils.request_disconnect import (
+    format_exception_summary,
+    is_expected_disconnect_exception,
+    is_request_disconnected,
+)
 from gallama.utils.utils import get_image
 from functools import lru_cache
 
@@ -159,7 +162,7 @@ class ModelVLLM(ModelInterface):
         """
         try:
             while True:
-                if await request.is_disconnected():
+                if await is_request_disconnected(request):
                     logger.info("User disconnected")
                     await model.abort(job_id)
 

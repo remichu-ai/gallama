@@ -56,7 +56,14 @@ async def get_models(request: Request):
 async def get_status():
     model_manager = get_model_manager()
     logger.info("Status endpoint called")
-    return {"status": "ready" if model_manager.model_ready else "loading"}
+    modalities = set()
+    for llm in model_manager.llm_dict.values():
+        modalities.update(getattr(llm, "modalities", []) or [])
+
+    return {
+        "status": "ready" if model_manager.model_ready else "loading",
+        "modalities": sorted(modalities),
+    }
 
 # Add a health check endpoint
 @router.get("/health")

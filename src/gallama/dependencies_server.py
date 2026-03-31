@@ -1,4 +1,5 @@
 from gallama.server_engine import ServerManager
+from gallama.server_engine.responses_ws_bridge import ResponsesWebSocketHub
 import time
 from gallama.logger.logger import get_logger
 import logging
@@ -9,12 +10,19 @@ import traceback
 
 
 server_manager = ServerManager()
+responses_websocket_hub = ResponsesWebSocketHub()
 receiver_log_file = None
 
 def get_server_manager():
     if server_manager is None:
         raise RuntimeError("ServerManager not initialized")
     return server_manager
+
+
+def get_responses_websocket_hub():
+    if responses_websocket_hub is None:
+        raise RuntimeError("ResponsesWebSocketHub not initialized")
+    return responses_websocket_hub
 
 
 

@@ -32,6 +32,7 @@ from gallama.data_classes import (
 )
 from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_VISION_TOKEN
 from gallama.logger.logger import logger
+from gallama.utils.request_disconnect import is_request_disconnected
 from gallama.utils.utils import get_image
 
 
@@ -692,7 +693,7 @@ class ModelLlamaCppServer(ModelInterface):
                             await response.aclose()
                             break
 
-                        if request and await request.is_disconnected():
+                        if request and await is_request_disconnected(request):
                             aborted = True
                             await response.aclose()
                             break

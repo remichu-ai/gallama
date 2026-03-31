@@ -1,0 +1,16 @@
+SUPPORTED_BACKENDS = (
+    "exllama",
+    "exllamav3",
+    "vllm",
+    "llama_cpp",
+    "llama_cpp_server",
+    "ik_llama",
+    "transformers",
+    "mlx_vlm",
+    "sglang",
+    "embedding",
+    "faster_whisper",
+    "mlx_whisper",
+    "kokoro",
+    None,
+)

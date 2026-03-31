@@ -3,7 +3,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .data_class import (
     BaseMessage,
@@ -27,6 +27,132 @@ from ..remote_mcp.models import MCPServerConfig
 
 def _make_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _serialize_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _convert_message_content_to_parts(
+    content: Optional[Union[str, List["ResponseInputContentItem"]]],
+) -> tuple[Union[str, List[Any]], Optional[str], Optional[List[ToolCall]]]:
+    if content is None:
+        return "", None, None
+
+    if isinstance(content, str):
+        return content, None, None
+
+    multimodal_content: List[Any] = []
+    reasoning_parts: List[str] = []
+    tool_calls: List[ToolCall] = []
+
+    for part in content:
+        if part.type in {"input_text", "output_text", "text"}:
+            multimodal_content.append(MultiModalTextContent(type="text", text=part.text or ""))
+        elif part.type in {"input_image", "image_url"}:
+            image_payload = part.image_url
+            if isinstance(image_payload, dict):
+                image_payload = image_payload.get("url")
+            image_payload = image_payload or part.file_url
+            if image_payload:
+                multimodal_content.append(
+                    MultiModalImageContent(
+                        type="image_url",
+                        image_url=MultiModalImageContent.ImageDetail(
+                            url=image_payload,
+                            detail=part.detail or "high",
+                        ),
+                    )
+                )
+        elif part.type == "input_audio":
+            audio_data = part.audio
+            if audio_data is None and part.input_audio:
+                audio_data = part.input_audio.get("data") or part.input_audio.get("audio")
+            if audio_data:
+                multimodal_content.append(MultiModalAudioContent(type="audio", audio=audio_data))
+        elif part.type == "function_call":
+            tool_calls.append(
+                ToolCall(
+                    id=part.call_id or part.id or _make_id("call"),
+                    function=FunctionCall(
+                        name=part.name or "",
+                        arguments=part.arguments or "{}",
+                    ),
+                    type="function",
+                )
+            )
+        elif part.type in {"reasoning_text", "summary_text"} and part.text:
+            reasoning_parts.append(part.text)
+        elif part.text is not None:
+            multimodal_content.append(MultiModalTextContent(type="text", text=part.text))
+
+    if multimodal_content and all(isinstance(part, MultiModalTextContent) for part in multimodal_content):
+        message_content: Union[str, List[Any]] = "".join(part.text for part in multimodal_content)
+    else:
+        message_content = multimodal_content or ""
+
+    reasoning = "\n".join(reasoning_parts) if reasoning_parts else None
+    return message_content, reasoning, tool_calls or None
+
+
+def _convert_input_item_to_messages(item: Union[str, "ResponseInputItem"]) -> List[BaseMessage]:
+    if isinstance(item, str):
+        return [BaseMessage(role="user", content=item)]
+
+    if item.type == "function_call_output":
+        return [
+            BaseMessage(
+                role="tool",
+                tool_call_id=item.call_id,
+                content=_serialize_json(item.output),
+            )
+        ]
+
+    if item.type == "function_call":
+        return [
+            BaseMessage(
+                role="assistant",
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id=item.call_id or item.id or _make_id("call"),
+                        function=FunctionCall(
+                            name=item.name or "",
+                            arguments=item.arguments or "{}",
+                        ),
+                        type="function",
+                    )
+                ],
+            )
+        ]
+
+    if item.type in {"mcp_list_tools", "mcp_call"}:
+        return []
+
+    if item.type == "reasoning":
+        reasoning_parts: List[str] = []
+        for part in item.content or []:
+            if part.text:
+                reasoning_parts.append(part.text)
+        for part in item.summary or []:
+            if part.text:
+                reasoning_parts.append(part.text)
+        return [BaseMessage(role="assistant", content="", reasoning="\n".join(reasoning_parts))]
+
+    if item.type != "message" and item.role is None:
+        raise ValueError(f"Unsupported Responses API input item type '{item.type}'")
+
+    message_content, reasoning, tool_calls = _convert_message_content_to_parts(item.content)
+    return [
+        BaseMessage(
+            role=item.role or "user",
+            content=message_content,
+            reasoning=reasoning,
+            tool_calls=tool_calls,
+        )
+    ]
 
 
 class ResponseTextFormatText(BaseModel):
@@ -85,6 +211,16 @@ class ResponseMCPTool(BaseModel):
         )
 
 
+class ResponseHostedTool(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    strict: Optional[bool] = None
+
+
 class ResponseToolChoiceFunction(BaseModel):
     type: Literal["function"] = "function"
     name: str
@@ -124,13 +260,60 @@ class ResponseInputItem(BaseModel):
     summary: Optional[List[ResponseInputContentItem]] = None
 
 
+class ResponseConversationParam(BaseModel):
+    id: str
+
+
+class ResponseConversation(BaseModel):
+    id: str
+
+
+class ConversationResource(BaseModel):
+    id: str = Field(default_factory=lambda: _make_id("conv"))
+    object: Literal["conversation"] = "conversation"
+    created_at: int = Field(default_factory=lambda: int(time.time()))
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationDeletedResource(BaseModel):
+    id: str
+    deleted: bool = True
+    object: Literal["conversation.deleted"] = "conversation.deleted"
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: Optional[List[Union[str, "ResponseInputItem"]]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("items")
+    @classmethod
+    def validate_item_count(cls, value: Optional[List[Union[str, "ResponseInputItem"]]]):
+        if value is not None and len(value) > 20:
+            raise ValueError("You may add up to 20 items at a time.")
+        return value
+
+    def to_messages(self) -> List[BaseMessage]:
+        messages: List[BaseMessage] = []
+        for item in self.items or []:
+            messages.extend(_convert_input_item_to_messages(item))
+        return messages
+
+
+class ConversationUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ResponsesCreateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: str
     input: Union[str, ResponseInputItem, List[Union[str, ResponseInputItem]]]
     instructions: Optional[str] = None
-    tools: Optional[List[Union[ResponseFunctionTool, ResponseMCPTool]]] = None
+    tools: Optional[List[Union[ResponseFunctionTool, ResponseMCPTool, ResponseHostedTool]]] = None
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ResponseToolChoiceFunction]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -139,16 +322,34 @@ class ResponsesCreateRequest(BaseModel):
     store: bool = False
     parallel_tool_calls: bool = True
     previous_response_id: Optional[str] = None
+    conversation: Optional[Union[str, ResponseConversationParam]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     user: Optional[str] = None
     truncation: Optional[str] = "disabled"
     reasoning: Optional[ResponseReasoningConfig] = None
     text: Optional[ResponseTextConfig] = None
 
+    @model_validator(mode="after")
+    def validate_state_source(self) -> "ResponsesCreateRequest":
+        if self.previous_response_id and self.conversation is not None:
+            raise ValueError("`previous_response_id` cannot be used together with `conversation`.")
+        return self
+
+    def get_conversation_id(self) -> Optional[str]:
+        if isinstance(self.conversation, str):
+            return self.conversation
+        if self.conversation is None:
+            return None
+        return self.conversation.id
+
+    def get_conversation_param(self) -> Optional[ResponseConversationParam]:
+        conversation_id = self.get_conversation_id()
+        if conversation_id is None:
+            return None
+        return ResponseConversationParam(id=conversation_id)
+
     def _serialize_json(self, value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        return json.dumps(value, ensure_ascii=False)
+        return _serialize_json(value)
 
     def _convert_text_format(self) -> Optional[Union[ResponseFormat, ResponseFormatJSONSchema]]:
         if self.text is None:
@@ -175,11 +376,11 @@ class ResponsesCreateRequest(BaseModel):
         for tool in self.tools:
             if isinstance(tool, ResponseMCPTool):
                 continue
-            if tool.type != "function":
-                raise ValueError(
-                    f"Unsupported Responses API tool type '{tool.type}'. "
-                    "The basic rollout only supports function tools."
-                )
+            if not isinstance(tool, ResponseFunctionTool):
+                # Accept built-in/hosted tool declarations such as web_search so
+                # upstream clients can target Gallama without request validation
+                # failing, even though the local backend only exposes function tools.
+                continue
 
             parameters = tool.parameters or {"type": "object", "properties": {}, "required": []}
             converted_tools.append(
@@ -223,120 +424,10 @@ class ResponsesCreateRequest(BaseModel):
         self,
         content: Optional[Union[str, List[ResponseInputContentItem]]],
     ) -> tuple[Union[str, List[Any]], Optional[str], Optional[List[ToolCall]]]:
-        if content is None:
-            return "", None, None
-
-        if isinstance(content, str):
-            return content, None, None
-
-        multimodal_content: List[Any] = []
-        reasoning_parts: List[str] = []
-        tool_calls: List[ToolCall] = []
-
-        for part in content:
-            if part.type in {"input_text", "output_text", "text"}:
-                multimodal_content.append(MultiModalTextContent(type="text", text=part.text or ""))
-            elif part.type in {"input_image", "image_url"}:
-                image_payload = part.image_url
-                if isinstance(image_payload, dict):
-                    image_payload = image_payload.get("url")
-                image_payload = image_payload or part.file_url
-                if image_payload:
-                    multimodal_content.append(
-                        MultiModalImageContent(
-                            type="image_url",
-                            image_url=MultiModalImageContent.ImageDetail(
-                                url=image_payload,
-                                detail=part.detail or "high",
-                            ),
-                        )
-                    )
-            elif part.type == "input_audio":
-                audio_data = part.audio
-                if audio_data is None and part.input_audio:
-                    audio_data = part.input_audio.get("data") or part.input_audio.get("audio")
-                if audio_data:
-                    multimodal_content.append(MultiModalAudioContent(type="audio", audio=audio_data))
-            elif part.type == "function_call":
-                tool_calls.append(
-                    ToolCall(
-                        id=part.call_id or part.id or _make_id("call"),
-                        function=FunctionCall(
-                            name=part.name or "",
-                            arguments=part.arguments or "{}",
-                        ),
-                        type="function",
-                    )
-                )
-            elif part.type in {"reasoning_text", "summary_text"} and part.text:
-                reasoning_parts.append(part.text)
-            elif part.text is not None:
-                multimodal_content.append(MultiModalTextContent(type="text", text=part.text))
-
-        if multimodal_content and all(isinstance(part, MultiModalTextContent) for part in multimodal_content):
-            message_content: Union[str, List[Any]] = "".join(part.text for part in multimodal_content)
-        else:
-            message_content = multimodal_content or ""
-
-        reasoning = "\n".join(reasoning_parts) if reasoning_parts else None
-        return message_content, reasoning, tool_calls or None
+        return _convert_message_content_to_parts(content)
 
     def _convert_input_item(self, item: Union[str, ResponseInputItem]) -> List[BaseMessage]:
-        if isinstance(item, str):
-            return [BaseMessage(role="user", content=item)]
-
-        if item.type == "function_call_output":
-            return [
-                BaseMessage(
-                    role="tool",
-                    tool_call_id=item.call_id,
-                    content=self._serialize_json(item.output),
-                )
-            ]
-
-        if item.type == "function_call":
-            return [
-                BaseMessage(
-                    role="assistant",
-                    content="",
-                    tool_calls=[
-                        ToolCall(
-                            id=item.call_id or item.id or _make_id("call"),
-                            function=FunctionCall(
-                                name=item.name or "",
-                                arguments=item.arguments or "{}",
-                            ),
-                            type="function",
-                        )
-                    ],
-                )
-            ]
-
-        if item.type in {"mcp_list_tools", "mcp_call"}:
-            return []
-
-        if item.type == "reasoning":
-            reasoning_parts: List[str] = []
-            for part in item.content or []:
-                if part.text:
-                    reasoning_parts.append(part.text)
-            for part in item.summary or []:
-                if part.text:
-                    reasoning_parts.append(part.text)
-            return [BaseMessage(role="assistant", content="", reasoning="\n".join(reasoning_parts))]
-
-        if item.type != "message" and item.role is None:
-            raise ValueError(f"Unsupported Responses API input item type '{item.type}'")
-
-        message_content, reasoning, tool_calls = self._convert_message_content(item.content)
-        return [
-            BaseMessage(
-                role=item.role or "user",
-                content=message_content,
-                reasoning=reasoning,
-                tool_calls=tool_calls,
-            )
-        ]
+        return _convert_input_item_to_messages(item)
 
     def to_input_messages(self, include_instructions: bool = True) -> List[BaseMessage]:
         messages: List[BaseMessage] = []
@@ -466,6 +557,7 @@ class ResponsesCreateResponse(BaseModel):
     created_at: int = Field(default_factory=lambda: int(time.time()))
     status: Literal["in_progress", "completed"] = "completed"
     completed_at: Optional[int] = None
+    conversation: Optional[ResponseConversation] = None
     error: Optional[Any] = None
     incomplete_details: Optional[Any] = None
     instructions: Optional[str] = None

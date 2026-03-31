@@ -1,7 +1,5 @@
 from gallama.backend.llm.engine.base import (
     ModelInterface,
-    is_expected_disconnect_exception,
-    format_exception_summary,
 )
 from typing import Optional, Dict, List, Union
 import torch
@@ -24,6 +22,11 @@ from gallama.data_classes import (
     QueueContext,
     GenQueueDynamic,
     VideoFrame
+)
+from gallama.utils.request_disconnect import (
+    format_exception_summary,
+    is_expected_disconnect_exception,
+    is_request_disconnected,
 )
 from gallama.utils.utils import get_image
 
@@ -294,7 +297,7 @@ class ModelExllama(ModelInterface):
         """
         try:
             while True:
-                if await request.is_disconnected():
+                if await is_request_disconnected(request):
                     logger.info("User disconnected")
                     if job:
                         await job.cancel()

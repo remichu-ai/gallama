@@ -159,6 +159,86 @@ ANTHROPIC_BASE_URL="http://127.0.0.1:8000/" ANTHROPIC_AUTH_TOKEN="local" claude 
 
 This lets Claude Code talk to your local model through Gallama's Anthropic-compatible API.
 
+### Claude Code With Local MCP Web Search
+If you want Claude Code to use a local MCP server for web search instead of Claude Code's built-in `WebSearch`, you can run the MCP server included in this repo and wrap `claude` with a local helper command.
+
+1. Create a local env file:
+
+```shell
+cp examples/mcp/.env_sample examples/mcp/.env
+```
+
+2. Fill in whichever search providers you want to use:
+
+- `EXA_API_KEY`
+- `TAVILY_API_KEY`
+- `BRAVE_API_KEY`
+
+3. Set `LOCAL_VISION_MODEL` if you also want the `understand_image` MCP tool.
+
+4. Start the MCP server from the repo root:
+
+```shell
+python examples/mcp/server.py
+```
+
+The MCP server exposes:
+
+- `web_search`
+  Uses one unified wrapper over Exa, Tavily, and Brave. In `provider="auto"` mode it rotates across configured providers and returns the `provider` used in the response.
+- `understand_image`
+  Sends image understanding requests to your local OpenAI-compatible vision model.
+
+To run Claude Code against your local Gallama server and inject this MCP server automatically, add a wrapper like this to `~/.zshrc`:
+
+```shell
+claudel() {
+    local model="${CLAUDEL_MODEL:-minimax}"
+    local base_url="${CLAUDEL_BASE_URL:-http://127.0.0.1:8000/}"
+    local auth_token="${CLAUDEL_AUTH_TOKEN:-local}"
+    local mcp_url="${CLAUDEL_MCP_URL:-http://127.0.0.1:18011/mcp}"
+    local enable_mcp="${CLAUDEL_ENABLE_MCP:-1}"
+    local search_tool="${CLAUDEL_MCP_SEARCH_TOOL:-mcp__local-coding-plan__web_search}"
+    local args=(--model "$model")
+
+    if [[ "$enable_mcp" != "0" ]]; then
+        args+=(--mcp-config "{\"mcpServers\":{\"local-coding-plan\":{\"type\":\"http\",\"url\":\"$mcp_url\"}}}")
+        args+=(
+            --disallowedTools "WebSearch"
+            --append-system-prompt "For internet search, use the MCP tool ${search_tool}. Do not use the built-in WebSearch tool."
+        )
+    fi
+
+    ANTHROPIC_BASE_URL="$base_url" \
+    ANTHROPIC_AUTH_TOKEN="$auth_token" \
+    command claude "${args[@]}" "$@"
+}
+```
+
+Reload your shell:
+
+```shell
+source ~/.zshrc
+```
+
+Then run:
+
+```shell
+claudel
+```
+
+Useful wrapper overrides:
+
+- `CLAUDEL_MODEL=qwen2.5-vl-instruct claudel`
+- `CLAUDEL_ENABLE_MCP=0 claudel`
+- `CLAUDEL_MCP_URL=http://127.0.0.1:18011/mcp claudel`
+
+Notes:
+
+- The wrapper leaves your normal `claude` command untouched.
+- `examples/mcp/.env` is ignored by git, so your local API keys stay out of the repo.
+- The MCP server stores monthly provider usage in `examples/mcp/.search_provider_usage.json`, which is also ignored by git.
+
 ## MCP
 Gallama can discover and execute tools from a remote streamable HTTP MCP server on the server side. The request shape depends on which client surface you use:
 
@@ -168,9 +248,11 @@ Gallama can discover and execute tools from a remote streamable HTTP MCP server 
 
 Current limitations:
 
-- MCP currently works only for non-streaming requests
+- MCP works for both non-streaming and streaming requests
 - `require_approval` is only supported as `"never"` right now
 - Mixing MCP tool calls and normal function tool calls in the same model turn is not supported yet
+
+When you use MCP with streaming on the Responses API, Gallama emits MCP trace items in the stream as `response.output_item.added` / `response.output_item.done` events with `mcp_list_tools` and `mcp_call` items before the final assistant text. Streaming Chat Completions still suppresses the intermediate MCP tool-call turns and only streams the final assistant output.
 
 ### OpenAI Chat Completions
 ```python
@@ -232,6 +314,65 @@ print(response.output_text)
 ```
 
 Gallama also prepends MCP trace items to the Responses output, so you will see `mcp_list_tools` and `mcp_call` entries alongside the assistant output.
+
+Streaming also works on the Responses API:
+
+```python
+stream = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and stream the final answer.",
+    max_output_tokens=300,
+    stream=True,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+for event in stream:
+    if event.type == "response.output_item.added" and event.item.type in {"mcp_list_tools", "mcp_call"}:
+        print(event.item)
+    if event.type == "response.output_text.delta":
+        print(event.delta, end="")
+```
+
+If you set `store=True`, you can later retrieve the full Responses object, including the MCP trace items. This is useful when you want both streamed text for the live client and the full MCP conversation history afterward.
+
+```python
+created = client.responses.create(
+    model="qwen3",
+    input="Use the MCP weather tool and stream the final answer.",
+    max_output_tokens=300,
+    stream=True,
+    store=True,
+    tools=[
+        {
+            "type": "mcp",
+            "server_label": "weather",
+            "server_url": "http://127.0.0.1:18001/mcp",
+            "allowed_tools": ["get_weather"],
+            "require_approval": "never",
+        }
+    ],
+)
+
+response_id = None
+for event in created:
+    if event.type in {"response.created", "response.completed"}:
+        response_id = event.response.id
+
+stored = client.responses.retrieve(response_id)
+for item in stored.output:
+    if item.type in {"mcp_list_tools", "mcp_call"}:
+        print(item)
+```
+
+If you continue a stored Responses conversation with `previous_response_id`, the saved history includes those MCP trace items as part of the recorded response. That means you can inspect prior MCP tool calls later, not just the final assistant text.
 
 ### Anthropic Messages API
 Gallama accepts an Anthropic-compatible MCP request shape on `/v1/messages`, but this is not a byte-for-byte mirror of Anthropic's current hosted MCP connector beta. In Anthropic's official API, MCP is documented separately under the MCP connector docs and requires a beta header. Gallama's local compatibility layer does not require that beta header.

@@ -3,7 +3,7 @@ import json
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from gallama.data_classes import ModelInstanceInfo
-from gallama.utils import parse_request_body
+from gallama.utils.utils import decode_content_encoded_body
 from typing import Union, Optional
 import httpx
 
@@ -51,10 +51,16 @@ async def forward_request(
                 body = body.encode('utf-8')
         else:
             content_type = headers.get('content-type', '').lower()
+            content_encoding = headers.get('content-encoding', '')
+            if request._body and content_encoding:
+                body = decode_content_encoded_body(request._body, content_encoding)
+                headers.pop('content-encoding', None)
+            else:
+                body = request._body
+
             if 'application/json' in content_type:
                 # For JSON, ensure we preserve the exact body
-                if request._body:
-                    body = request._body
+                if body:
                     try:
                         # Validate it's proper JSON but use original bytes
                         json.loads(body.decode('utf-8'))
@@ -63,8 +69,6 @@ async def forward_request(
                         raise HTTPException(status_code=400, detail="Invalid JSON")
                 else:
                     body = b'{}'
-            else:
-                body = request._body
 
         # Update Content-Length header to match actual body length
         if body:

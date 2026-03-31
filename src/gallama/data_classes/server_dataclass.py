@@ -17,6 +17,10 @@ class ModelInstanceInfo(BaseModel):
     status: str
     model_type: Literal["stt", "llm", "tts", "embedding"]
     strict: bool = Field(description="whether require api call to match model name or not", default=False)
+    modalities: List[str] = Field(
+        description="modalities reported by the loaded model instance",
+        default_factory=list,
+    )
     max_concurrent_requests: int = Field(
         description="number of concurrent requests the instance is expected to handle",
         default=1,

@@ -12,6 +12,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "accelerate",
+    "brotli",
     "chardet",
     "colorama",
     "datamodel-code-generator",
@@ -37,6 +38,7 @@ dependencies = [
     "transformers",
     "uvicorn",
     "websockets>=14.1",
+    "zstandard",
 ]
 
 [project.optional-dependencies]

@@ -15,6 +15,7 @@ class ResponseStoreRecord(BaseModel):
     response: ResponsesCreateResponse
     conversation_messages: List[BaseMessage] = Field(default_factory=list)
     previous_response_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     created_at: int = Field(default_factory=lambda: int(time.time()))
     store: bool = True
 

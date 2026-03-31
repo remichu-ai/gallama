@@ -6,9 +6,9 @@ from ..api_response.chat_response import (
     completion_response,
     completion_response_stream,
 )
-from ..dependencies import get_model_manager, get_response_store
+from ..dependencies import get_conversation_store, get_model_manager, get_response_store
 from ..logger import logger
-from ..remote_mcp.orchestrator import run_mcp_completion_loop
+from ..remote_mcp.orchestrator import MCPStreamController, prepend_mcp_traces_to_response, run_mcp_completion_loop
 from ..request_validation import validate_api_request
 from ..data_classes import (
     BaseMessage,
@@ -17,6 +17,9 @@ from ..data_classes import (
     GenQueue,
     GenQueueDynamic,
     AnthropicMessagesRequest,
+    ConversationCreateRequest,
+    ConversationDeletedResource,
+    ConversationUpdateRequest,
     ResponsesCreateRequest,
     ResponsesCreateResponse,
     response_output_to_assistant_messages,
@@ -42,6 +45,31 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
         model_manager = get_model_manager()
         llm = model_manager.get_model(message.model, _type="llm")
         base_query = message.get_ChatMLQuery()
+        if base_query.stream:
+            gen_queue = GenQueueDynamic()
+            controller = MCPStreamController(
+                provider="anthropic",
+                base_query=base_query,
+                llm=llm,
+                request=request,
+                conversation_messages=base_query.messages,
+                mcp_servers=message.get_mcp_server_configs(),
+            )
+            await controller.start(gen_queue)
+
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=base_query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                    provider="anthropic",
+                    tool_calls_interceptor=controller.intercept_tool_calls,
+                    turn_end_interceptor=controller.handle_turn_end,
+                )
+            )
+
         result = await run_mcp_completion_loop(
             provider="anthropic",
             base_query=base_query,
@@ -61,6 +89,31 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
         model_manager = get_model_manager()
         llm = model_manager.get_model(query.model, _type="llm")
         base_query = query.model_copy(deep=True, update={"tools": function_tools})
+        if base_query.stream:
+            gen_queue = GenQueueDynamic()
+            controller = MCPStreamController(
+                provider=provider,
+                base_query=base_query,
+                llm=llm,
+                request=request,
+                conversation_messages=base_query.messages,
+                mcp_servers=mcp_servers,
+            )
+            await controller.start(gen_queue)
+
+            return EventSourceResponse(
+                chat_completion_response_stream(
+                    query=base_query,
+                    gen_queue=gen_queue,
+                    model_name=llm.model_name,
+                    request=request,
+                    tag_definitions=llm.prompt_eng.tag_definitions,
+                    provider=provider,
+                    tool_calls_interceptor=controller.intercept_tool_calls,
+                    turn_end_interceptor=controller.handle_turn_end,
+                )
+            )
+
         result = await run_mcp_completion_loop(
             provider=provider,
             base_query=base_query,
@@ -140,13 +193,25 @@ def _merge_instructions_into_history(
     return [BaseMessage(role="system", content=instructions)] + merged_messages
 
 
+def _missing_conversation(conversation_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found")
+
+
 @router.post("/responses")
 async def responses(request: Request, query: ResponsesCreateRequest):
     model_manager = get_model_manager()
+    conversation_store = get_conversation_store()
     response_store = get_response_store()
     gen_queue = GenQueueDynamic()
     should_store = query.store or query.previous_response_id is not None
-    response_request = query.model_copy(update={"store": should_store})
+    conversation_param = query.get_conversation_param()
+    conversation_id = conversation_param.id if conversation_param else None
+    response_request = query.model_copy(
+        update={
+            "store": should_store,
+            "conversation": conversation_param,
+        }
+    )
 
     previous_messages: list[BaseMessage] = []
     if query.previous_response_id:
@@ -154,8 +219,14 @@ async def responses(request: Request, query: ResponsesCreateRequest):
         if previous_record is None:
             raise HTTPException(status_code=404, detail=f"Response '{query.previous_response_id}' not found")
         previous_messages = previous_record.conversation_messages
+    elif conversation_id:
+        conversation_record = await conversation_store.get(conversation_id)
+        if conversation_record is None:
+            raise _missing_conversation(conversation_id)
+        previous_messages = _clone_messages(conversation_record.messages)
 
     current_messages = query.to_input_messages(include_instructions=not previous_messages)
+    conversation_input_messages = query.to_input_messages(include_instructions=False) if conversation_id else []
     effective_messages = (
         _merge_instructions_into_history(previous_messages, query.instructions) + current_messages
         if previous_messages
@@ -169,9 +240,114 @@ async def responses(request: Request, query: ResponsesCreateRequest):
 
     try:
         mcp_servers = response_request.get_mcp_server_configs()
+        parsed_tool_types = [
+            getattr(tool, "type", type(tool).__name__)
+            for tool in (response_request.tools or [])
+        ]
+
+        if parsed_tool_types:
+            logger.info(
+                "Responses request parsed tool types: %s",
+                parsed_tool_types,
+            )
+
+        if mcp_servers:
+            logger.info(
+                "Responses request detected %s MCP server(s): %s",
+                len(mcp_servers),
+                [server.name for server in mcp_servers],
+            )
+
+        async def completion_callback(response_obj: ResponsesCreateResponse):
+            assistant_messages = response_output_to_assistant_messages(response_obj.output)
+            conversation_messages = _clone_messages(effective_messages) + assistant_messages
+
+            if should_store:
+                await response_store.put(
+                    ResponseStoreRecord(
+                        response_id=response_obj.id,
+                        model=response_obj.model,
+                        request=response_request.model_dump(exclude_none=True, by_alias=True),
+                        response=response_obj,
+                        conversation_messages=conversation_messages,
+                        previous_response_id=response_request.previous_response_id,
+                        conversation_id=conversation_id,
+                        store=should_store,
+                    )
+                )
+
+            if conversation_id:
+                updated_record = await conversation_store.append_messages(
+                    conversation_id,
+                    conversation_input_messages + assistant_messages,
+                )
+                if updated_record is None:
+                    logger.warning("Conversation '%s' disappeared before completion persisted", conversation_id)
 
         if mcp_servers:
             llm = model_manager.get_model(raw_chat_query.model, _type="llm")
+            formatter_kwargs = {"request_model": response_request}
+
+            if raw_chat_query.stream:
+                controller = MCPStreamController(
+                    provider="responses",
+                    base_query=raw_chat_query,
+                    llm=llm,
+                    request=request,
+                    conversation_messages=effective_messages,
+                    mcp_servers=mcp_servers,
+                    formatter_kwargs=formatter_kwargs,
+                )
+                await controller.start(gen_queue)
+
+                async def mcp_stream_completion_callback(response_obj: ResponsesCreateResponse):
+                    stored_response = response_obj
+                    if should_store:
+                        assistant_messages = response_output_to_assistant_messages(response_obj.output)
+                        conversation_messages = _clone_messages(controller.working_messages) + assistant_messages
+                        await response_store.put(
+                            ResponseStoreRecord(
+                                response_id=stored_response.id,
+                                model=stored_response.model,
+                                request=response_request.model_dump(exclude_none=True, by_alias=True),
+                                response=stored_response,
+                                conversation_messages=conversation_messages,
+                                previous_response_id=response_request.previous_response_id,
+                                conversation_id=conversation_id,
+                                store=should_store,
+                            )
+                        )
+
+                    if conversation_id:
+                        assistant_messages = response_output_to_assistant_messages(response_obj.output)
+                        updated_record = await conversation_store.append_messages(
+                            conversation_id,
+                            conversation_input_messages + assistant_messages,
+                        )
+                        if updated_record is None:
+                            logger.warning("Conversation '%s' disappeared before completion persisted", conversation_id)
+
+                return EventSourceResponse(
+                    chat_completion_response_stream(
+                        query=raw_chat_query,
+                        gen_queue=gen_queue,
+                        model_name=llm.model_name,
+                        request=request,
+                        tag_definitions=llm.prompt_eng.tag_definitions,
+                        provider="responses",
+                        formatter_kwargs=formatter_kwargs,
+                        formatter_ready_callback=controller.attach_formatter,
+                        completion_callback=(
+                            mcp_stream_completion_callback
+                            if should_store or conversation_id
+                            else None
+                        ),
+                        extra_events_getter=controller.drain_stream_events,
+                        tool_calls_interceptor=controller.intercept_tool_calls,
+                        turn_end_interceptor=controller.handle_turn_end,
+                    )
+                )
+
             result = await run_mcp_completion_loop(
                 provider="responses",
                 base_query=raw_chat_query,
@@ -179,7 +355,7 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                 request=request,
                 conversation_messages=effective_messages,
                 mcp_servers=mcp_servers,
-                formatter_kwargs={"request_model": response_request},
+                formatter_kwargs=formatter_kwargs,
             )
 
             if should_store:
@@ -191,31 +367,24 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                         response=result.response_obj,
                         conversation_messages=_clone_messages(result.conversation_messages),
                         previous_response_id=response_request.previous_response_id,
+                        conversation_id=conversation_id,
                         store=should_store,
                     )
                 )
+
+            if conversation_id:
+                assistant_messages = response_output_to_assistant_messages(result.response_obj.output)
+                updated_record = await conversation_store.append_messages(
+                    conversation_id,
+                    conversation_input_messages + assistant_messages,
+                )
+                if updated_record is None:
+                    logger.warning("Conversation '%s' disappeared before completion persisted", conversation_id)
 
             return result.response_obj
 
         chat_query = validate_api_request(raw_chat_query)
         llm = model_manager.get_model(chat_query.model, _type="llm")
-
-        async def completion_callback(response_obj: ResponsesCreateResponse):
-            if not should_store:
-                return
-            assistant_messages = response_output_to_assistant_messages(response_obj.output)
-            conversation_messages = _clone_messages(effective_messages) + assistant_messages
-            await response_store.put(
-                ResponseStoreRecord(
-                    response_id=response_obj.id,
-                    model=response_obj.model,
-                    request=response_request.model_dump(exclude_none=True, by_alias=True),
-                    response=response_obj,
-                    conversation_messages=conversation_messages,
-                    previous_response_id=response_request.previous_response_id,
-                    store=should_store,
-                )
-            )
 
         asyncio.create_task(
             llm.chat(
@@ -238,7 +407,7 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                     tag_definitions=llm.prompt_eng.tag_definitions,
                     provider="responses",
                     formatter_kwargs=formatter_kwargs,
-                    completion_callback=completion_callback if should_store else None,
+                    completion_callback=completion_callback if should_store or conversation_id else None,
                 )
             )
 
@@ -250,11 +419,48 @@ async def responses(request: Request, query: ResponsesCreateRequest):
             tag_definitions=llm.prompt_eng.tag_definitions,
             provider="responses",
             formatter_kwargs=formatter_kwargs,
-            completion_callback=completion_callback if should_store else None,
+            completion_callback=completion_callback if should_store or conversation_id else None,
         )
     except HTTPException as e:
         logger.error(e)
         return e
+
+
+@router.post("/conversations")
+async def create_conversation(query: ConversationCreateRequest):
+    conversation_store = get_conversation_store()
+    record = await conversation_store.create(
+        metadata=query.metadata,
+        messages=query.to_messages(),
+    )
+    return record.to_resource()
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    conversation_store = get_conversation_store()
+    record = await conversation_store.get(conversation_id)
+    if record is None:
+        raise _missing_conversation(conversation_id)
+    return record.to_resource()
+
+
+@router.post("/conversations/{conversation_id}")
+async def update_conversation(conversation_id: str, query: ConversationUpdateRequest):
+    conversation_store = get_conversation_store()
+    record = await conversation_store.update_metadata(conversation_id, query.metadata)
+    if record is None:
+        raise _missing_conversation(conversation_id)
+    return record.to_resource()
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    conversation_store = get_conversation_store()
+    record = await conversation_store.delete(conversation_id)
+    if record is None:
+        raise _missing_conversation(conversation_id)
+    return ConversationDeletedResource(id=conversation_id)
 
 
 @router.get("/responses/{response_id}")

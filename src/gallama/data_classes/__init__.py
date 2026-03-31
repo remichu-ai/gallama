@@ -30,6 +30,12 @@ from .data_class import (
 )
 
 from .responses_api import (
+    ConversationCreateRequest,
+    ConversationDeletedResource,
+    ConversationResource,
+    ConversationUpdateRequest,
+    ResponseConversation,
+    ResponseConversationParam,
     ResponsesCreateRequest,
     ResponsesCreateResponse,
     ResponseInputItem,

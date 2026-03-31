@@ -1058,6 +1058,15 @@ class AnthropicTool(BaseModel):
     strict: Optional[bool] = None
 
 
+class AnthropicHostedTool(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    name: Optional[str] = None
+    description: Optional[str] = None
+    max_uses: Optional[int] = None
+
+
 class AnthropicMCPServer(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -1191,7 +1200,7 @@ class AnthropicMessagesRequest(BaseModel):
     max_tokens: int  # required in Claude API
     system: Optional[Union[str, List[AnthropicTextContent]]] = None
     strip_claude_code_billing_header: bool = True
-    tools: Optional[List[Union[AnthropicTool, AnthropicMCPToolset]]] = None
+    tools: Optional[List[Union[AnthropicTool, AnthropicMCPToolset, AnthropicHostedTool]]] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -1360,7 +1369,7 @@ class AnthropicMessagesRequest(BaseModel):
         if self.tools:
             chat_tools = []
             for t in self.tools:
-                if isinstance(t, AnthropicMCPToolset):
+                if not isinstance(t, AnthropicTool):
                     continue
                 param_spec = ParameterSpec(
                     type=t.input_schema.type,
