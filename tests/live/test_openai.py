@@ -16,12 +16,23 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 import traceback
 from pathlib import Path
 from typing import Any
 
 import openai
+SCRIPT_DIR = Path(__file__).resolve().parent
+TESTS_DIR = SCRIPT_DIR.parent
+ROOT_DIR = TESTS_DIR.parent
+SRC_DIR = ROOT_DIR / "src"
+
+for path in (ROOT_DIR, SRC_DIR, TESTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
 from helpers.dummy_mcp_server import (
     TEST_TOKEN,
     TEST_USER_PROMPT,
@@ -32,8 +43,6 @@ from helpers.dummy_mcp_server import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-TESTS_DIR = SCRIPT_DIR.parent
 
 MODEL = os.getenv("TEST_MODEL", "gpt-4o")
 LOG_FILE = os.getenv("TEST_LOG_FILE", str(SCRIPT_DIR / "test_responses.json"))

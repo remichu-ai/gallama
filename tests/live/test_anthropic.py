@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 import traceback
 import urllib.error
@@ -28,6 +29,16 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
+SCRIPT_DIR = Path(__file__).resolve().parent
+TESTS_DIR = SCRIPT_DIR.parent
+ROOT_DIR = TESTS_DIR.parent
+SRC_DIR = ROOT_DIR / "src"
+
+for path in (ROOT_DIR, SRC_DIR, TESTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
 from helpers.dummy_mcp_server import (
     TEST_TOKEN,
     TEST_USER_PROMPT,
@@ -39,8 +50,6 @@ from helpers.dummy_mcp_server import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SCRIPT_DIR = Path(__file__).resolve().parent
-TESTS_DIR = SCRIPT_DIR.parent
 
 MODEL = os.getenv("TEST_MODEL", "claude-sonnet-4-20250514")
 THINKING_BUDGET_TOKENS = int(os.getenv("TEST_THINKING_BUDGET", "1024"))

@@ -117,6 +117,8 @@ class PromptEngineTransformers:
             "message.reasoning",
             "reasoning_content",
             "reasoning_effort",
+            "<|think|>",
+            "<|channel>thought",
             "[THINK]",
             "type'] == 'thinking'",
             'type"] == "thinking"',
@@ -124,6 +126,18 @@ class PromptEngineTransformers:
             'type"] == \'thinking\'',
         )
         return any(marker in template for marker in thinking_markers)
+
+    @staticmethod
+    def _has_open_tag(prompt: str, tag: TagDefinition) -> bool:
+        if not tag.start_marker or not tag.end_marker:
+            return False
+
+        start_marker = tag.start_marker.strip()
+        end_marker = tag.end_marker.strip()
+
+        last_start_idx = prompt.rfind(start_marker)
+        last_end_idx = prompt.rfind(end_marker)
+        return last_start_idx != -1 and (last_end_idx == -1 or last_start_idx > last_end_idx)
 
     def patch_thinking_template(self):
         """
@@ -393,31 +407,13 @@ class PromptEngineTransformers:
             logger.info(f"Thinking tag start: {self.thinking_tag.start_marker}")
 
         if self.is_thinking_model and self.thinking_tag:
-            # Handle explicit reasoning effort cleanup (existing logic)
-            if query.reasoning_effort is None and self.thinking_tag and self.thinking_tag.end_marker:
-                # Logic for when reasoning is explicitly disabled/handled via prompt injection
-                # (This line from your original code seemed to force close a tag)
-                prompt += f"\n{self.thinking_tag.end_marker}"
+            is_tag_open = self._has_open_tag(prompt, self.thinking_tag)
 
-            else:
-                # Check for OPEN thinking tag anywhere in the prompt
-                s_marker = self.thinking_tag.start_marker.strip()
-                e_marker = self.thinking_tag.end_marker.strip() if self.thinking_tag.end_marker else ""
-
-                # Find the position of the *last* occurrence of start and end markers
-                last_start_idx = prompt.rfind(s_marker)
-                last_end_idx = prompt.rfind(e_marker) if e_marker else -1
-
-                # Determine if the tag is currently open:
-                # 1. We found a start marker (idx != -1)
-                # 2. AND (We found no end marker OR the start marker appears AFTER the last end marker)
-                is_tag_open = last_start_idx != -1 and (
-                        last_end_idx == -1 or last_start_idx > last_end_idx
-                )
-
-                if is_tag_open:
-                    logger.info("Prompt contains an open thinking tag (start > end)")
-                    # Let streaming know that we are starting inside a thought block
-                    starting_tag = self.thinking_tag
+            if query.reasoning_effort is None:
+                if is_tag_open and self.thinking_tag.end_marker:
+                    prompt += f"\n{self.thinking_tag.end_marker}"
+            elif is_tag_open:
+                logger.info("Prompt contains an open thinking tag (start > end)")
+                starting_tag = self.thinking_tag
 
         return prompt, starting_tag

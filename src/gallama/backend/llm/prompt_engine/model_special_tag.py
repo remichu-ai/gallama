@@ -4,6 +4,7 @@ from .by_model import (
     qwen35,
     minimax,
     glm4,
+    gemma4,
     ministral3
 )
 
@@ -25,6 +26,7 @@ MODEL_SPECIAL_TAG = {
     "glm4v_moe": glm4,
     "glm4v": glm4,
     "glm4_moe": glm4,
+    "gemma4": gemma4,
     "ministral3": ministral3,
     "mistral3": ministral3,
     "mistral4": ministral3,
@@ -39,11 +41,13 @@ MODEL_EOS_TOKEN = {
     "glm4v":  ["<|user|>", "<|observation|>"],
     "glm4v_moe":  ["<|user|>", "<|observation|>"],
     "glm4_moe":  ["<|user|>", "<|observation|>"],
+    "gemma4": ["<turn|>"],
     "mistral3": ["</s>"],
     "mistral4": ["</s>"]
 }
 
 MODEL_VISION_TOKEN = {
+    "gemma4": "<|image|>",
     "qwen2_5_vl": "<|vision_start|><|image_pad|><|vision_end|>",
     "qwen3_vl": "<|vision_start|><|image_pad|><|vision_end|>",
     "qwen3_vl_moe": "<|vision_start|><|image_pad|><|vision_end|>",

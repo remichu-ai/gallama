@@ -3,6 +3,7 @@ import json
 from gallama.api_response.stream_parser_v2 import StreamParserByTag
 from gallama.data_classes.data_class import ChatMLQuery
 from gallama.backend.llm.prompt_engine.by_model.default import tool_parser
+from gallama.backend.llm.prompt_engine.by_model.gemma4 import gemma4_tool_parser, gemma4
 from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_parser, gpt_oss
 from gallama.backend.llm.prompt_engine.by_model.glm4 import glm4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.minimax import minimax_tool_parser
@@ -29,6 +30,7 @@ def test_model_special_tag_maps_exllamav3_scoped_aliases_to_expected_parsers():
     assert MODEL_SPECIAL_TAG["gpt_oss"] is gpt_oss
     assert MODEL_SPECIAL_TAG["glm4"] is MODEL_SPECIAL_TAG["glm4_moe"]
     assert MODEL_SPECIAL_TAG["glm4v"] is MODEL_SPECIAL_TAG["glm4v_moe"]
+    assert MODEL_SPECIAL_TAG["gemma4"] is gemma4
     assert MODEL_SPECIAL_TAG["ministral3"] is MODEL_SPECIAL_TAG["mistral3"]
     assert MODEL_SPECIAL_TAG["mistral4"] is MODEL_SPECIAL_TAG["mistral3"]
 
@@ -148,6 +150,21 @@ def test_glm4_tool_parser_supports_multiple_tool_calls():
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
 
+def test_gemma4_tool_parser_supports_multiple_tool_calls():
+    tool_text = """
+    <|tool_call>call:get_weather{city:<|"|>Seoul<|"|>,days:3}<tool_call|>
+    <|tool_call>call:get_weather{city:<|"|>Tokyo<|"|>,options:{units:<|"|>metric<|"|>,alerts:true}}<tool_call|>
+    """
+
+    parsed = gemma4_tool_parser(tool_text)
+
+    assert len(parsed) == 2
+    assert parsed[0]["index"] == 0
+    assert parsed[1]["index"] == 1
+    assert _arguments(parsed[0]) == {"city": "Seoul", "days": 3}
+    assert _arguments(parsed[1]) == {"city": "Tokyo", "options": {"units": "metric", "alerts": True}}
+
+
 def test_minimax_tool_parser_supports_multiple_tool_calls():
     tool_text = """
     <invoke name="get_weather">
@@ -214,6 +231,15 @@ class _ReasoningEffortProbeTokenizer:
         return f"{self.chat_template}|reasoning_effort={reasoning_effort}"
 
 
+class _TemplateProbeTokenizer:
+    def __init__(self, chat_template, rendered_prompt):
+        self.chat_template = chat_template
+        self.rendered_prompt = rendered_prompt
+
+    def apply_chat_template(self, **kwargs):
+        return self.rendered_prompt
+
+
 def test_transformers_reasoning_effort_probe_detects_supported_template():
     engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
     tokenizer = _ReasoningEffortProbeTokenizer("{{ reasoning_effort }}")
@@ -237,6 +263,10 @@ def test_resolve_vision_token_prefers_explicit_model_mapping():
     tokenizer = _VisionProbeTokenizer(all_special_tokens=["<|image|>"])
 
     assert resolve_vision_token("glm4v", tokenizer) == "<|begin_of_image|><|image|><|end_of_image|>"
+
+
+def test_resolve_vision_token_knows_gemma4_placeholder():
+    assert resolve_vision_token("gemma4", tokenizer=None) == "<|image|>"
 
 
 def test_resolve_vision_token_infers_sequence_from_tokenizer_metadata():
@@ -286,6 +316,34 @@ def test_transformers_thinking_detection_handles_mistral_think_tags():
     )
 
     assert engine.check_thinking_model() is True
+
+
+def test_transformers_get_prompt_does_not_append_extra_closed_gemma4_thought_end_marker():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    engine._transformer_tokenizer = _TemplateProbeTokenizer(
+        chat_template="<|think|><|channel>thought",
+        rendered_prompt="<bos><|turn>model\n<|channel>thought\n<channel|>",
+    )
+    engine.thinking_tag = MODEL_SPECIAL_TAG["gemma4"]["thinking"]
+    engine.is_thinking_model = True
+    engine.support_developer_role = True
+    engine.support_list_content = True
+    engine.support_reasoning_effort = False
+    engine.model_type = "gemma4"
+    engine._vision_token = "<|image|>"
+
+    query = ChatMLQuery.model_validate(
+        {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+            ]
+        }
+    )
+
+    prompt, starting_tag = engine.get_prompt(query=query)
+
+    assert prompt == "<bos><|turn>model\n<|channel>thought\n<channel|>"
+    assert starting_tag.tag_type == "text"
 
 
 def test_transformers_appends_structured_output_schema_to_last_user_string_message():

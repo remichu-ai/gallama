@@ -5,4 +5,5 @@ from .qwen3 import qwen3_moe
 from .qwen35 import qwen35
 from .minimax import minimax
 from .glm4 import glm4
+from .gemma4 import gemma4
 from .ministral3 import ministral3
