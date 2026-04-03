@@ -522,6 +522,7 @@ class ResponseMCPCallItem(BaseModel):
     name: str
     output: Optional[str] = None
     server_label: str
+    status: Literal["in_progress", "completed", "incomplete", "failed"] = "completed"
 
 
 class ResponseUsageInputTokensDetails(BaseModel):

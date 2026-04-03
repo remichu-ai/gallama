@@ -307,7 +307,18 @@ async def chat_completion_response_stream(
                         yield event
 
             if suppressed_tool_calls and turn_end_interceptor is not None:
-                if await turn_end_interceptor():
+                turn_end_task = asyncio.create_task(turn_end_interceptor())
+                while not turn_end_task.done():
+                    async for event in emit_extra_events():
+                        yield event
+
+                    now = time.monotonic()
+                    if formatter.ping_interval_s is not None and now - last_stream_event_at >= formatter.ping_interval_s:
+                        async for event in emit_events(formatter.stream_ping()):
+                            yield event
+                    await asyncio.sleep(0.01)
+
+                if await turn_end_task:
                     async for event in emit_extra_events():
                         yield event
                     reset_turn_state()

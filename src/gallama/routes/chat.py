@@ -65,6 +65,8 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
                     request=request,
                     tag_definitions=llm.prompt_eng.tag_definitions,
                     provider="anthropic",
+                    formatter_ready_callback=controller.attach_formatter,
+                    extra_events_getter=controller.drain_stream_events,
                     tool_calls_interceptor=controller.intercept_tool_calls,
                     turn_end_interceptor=controller.handle_turn_end,
                 )

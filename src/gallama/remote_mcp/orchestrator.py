@@ -1,10 +1,11 @@
 import asyncio
+from collections import deque
 import json
 from typing import Any, Awaitable, Callable, Dict, List, Literal, Optional
 
 from fastapi import HTTPException, Request
 
-from ..api_response.api_formatter import ResponsesFormatter
+from ..api_response.api_formatter import AnthropicFormatter, ResponsesFormatter
 from ..api_response.chat_response import chat_completion_response
 from ..data_classes import (
     AnthropicMessagesResponse,
@@ -32,7 +33,8 @@ from ..data_classes.data_class import (
 )
 from ..remote_mcp.models import MCPCallTrace, MCPResolvedTool, MCPServerConfig
 from ..request_validation import validate_api_request
-from .runtime import MCPRuntime
+from ..logger import logger
+from .runtime import MCPRuntime, MCPRuntimeError
 
 
 def _clone_messages(messages: List[BaseMessage]) -> List[BaseMessage]:
@@ -164,6 +166,7 @@ def _build_responses_mcp_call_items(call_traces: List[MCPCallTrace]) -> List[Res
             name=trace.tool_name,
             output=trace.output_text,
             server_label=trace.server_name,
+            status="failed" if trace.error else "completed",
         )
         for trace in call_traces
     ]
@@ -244,14 +247,24 @@ async def _prepare_mcp_tools(
                 detail=f"MCP require_approval for server '{server.name}' is not supported yet",
             )
 
-        server_tools = await runtime.list_tools(server)
+        try:
+            server_tools = await runtime.list_tools(server)
+        except MCPRuntimeError as exc:
+            logger.warning(
+                "MCP server unavailable during tool discovery; skipping server '%s' at %s: %s",
+                server.name,
+                server.url,
+                exc,
+            )
+            continue
+
         discovered_tools[server.name] = server_tools
         for tool in server_tools:
             resolved_by_synthetic_name[tool.synthetic_name] = (server, tool)
             merged_tools.append(_mcp_tool_spec(tool))
 
-    if not merged_tools:
-        raise HTTPException(status_code=400, detail="No tools available after MCP discovery")
+    if mcp_servers and not discovered_tools:
+        logger.warning("All configured MCP servers were unavailable; proceeding without MCP tools")
 
     return runtime, discovered_tools, resolved_by_synthetic_name, merged_tools
 
@@ -359,8 +372,8 @@ class MCPStreamController:
         self.resolved_by_synthetic_name: Dict[str, tuple[MCPServerConfig, MCPResolvedTool]] = {}
         self.merged_tools: List[ToolSpec] = []
         self.call_traces: List[MCPCallTrace] = []
-        self.stream_formatter: Optional[ResponsesFormatter] = None
-        self.pending_stream_events: List[dict] = []
+        self.stream_formatter: Optional[Any] = None
+        self.pending_stream_events = deque()
 
         self.stream_queue: Optional[GenQueueDynamic] = None
         self.current_query_for_turn: Optional[ChatMLQuery] = None
@@ -385,19 +398,18 @@ class MCPStreamController:
         await self._start_next_turn()
 
     def attach_formatter(self, formatter: Any) -> None:
-        if self.provider != "responses" or not isinstance(formatter, ResponsesFormatter):
-            return
-
         self.stream_formatter = formatter
-        self.pending_stream_events.extend(
-            formatter.append_output_items(
-                _build_responses_mcp_list_tools_items(self.discovered_tools)
+        if self.provider == "responses" and isinstance(formatter, ResponsesFormatter):
+            self.pending_stream_events.extend(
+                formatter.append_output_items(
+                    _build_responses_mcp_list_tools_items(self.discovered_tools)
+                )
             )
-        )
 
     def drain_stream_events(self) -> List[dict]:
-        events = list(self.pending_stream_events)
-        self.pending_stream_events.clear()
+        events: List[dict] = []
+        while self.pending_stream_events:
+            events.append(self.pending_stream_events.popleft())
         return events
 
     async def _start_next_turn(self) -> None:
@@ -490,12 +502,7 @@ class MCPStreamController:
         if not mcp_tool_calls:
             return False
 
-        executed_traces = await _execute_mcp_tool_calls(
-            runtime=self.runtime,
-            query_for_turn=self.current_query_for_turn,
-            resolved_by_synthetic_name=self.resolved_by_synthetic_name,
-            tool_calls=mcp_tool_calls,
-        )
+        executed_traces = await self._execute_mcp_tool_calls_with_stream_events(mcp_tool_calls)
 
         for trace in executed_traces:
             self.call_traces.append(trace)
@@ -511,15 +518,103 @@ class MCPStreamController:
                 )
             )
 
-        if self.provider == "responses" and self.stream_formatter is not None:
+        await self._start_next_turn()
+        return True
+
+    async def _execute_mcp_tool_calls_with_stream_events(
+        self,
+        tool_calls: List[ToolCall],
+    ) -> List[MCPCallTrace]:
+        if self.runtime is None or self.current_query_for_turn is None:
+            return []
+
+        call_order = [tool_call.id for tool_call in tool_calls]
+        traces_by_call_id: Dict[str, MCPCallTrace] = {}
+
+        async def _run_single(tool_call: ToolCall) -> MCPCallTrace:
+            server, resolved_tool = self.resolved_by_synthetic_name[tool_call.function.name]
+            arguments_json = tool_call.function.arguments or "{}"
+            arguments = json.loads(arguments_json)
+
+            self._queue_mcp_call_started(
+                call_id=tool_call.id,
+                tool_name=resolved_tool.tool_name,
+                server_name=server.name,
+                arguments_json=arguments_json,
+                arguments=arguments,
+            )
+
+            trace = await self.runtime.call_tool(
+                server=server,
+                tool=resolved_tool,
+                arguments=arguments,
+                call_id=tool_call.id,
+            )
+            self._queue_mcp_call_completed(trace)
+            return trace
+
+        if self.current_query_for_turn.parallel_tool_calls and len(tool_calls) > 1:
+            tasks = [asyncio.create_task(_run_single(tool_call)) for tool_call in tool_calls]
+            for completed_task in asyncio.as_completed(tasks):
+                trace = await completed_task
+                traces_by_call_id[trace.call_id] = trace
+        else:
+            for tool_call in tool_calls:
+                trace = await _run_single(tool_call)
+                traces_by_call_id[trace.call_id] = trace
+
+        return [traces_by_call_id[call_id] for call_id in call_order if call_id in traces_by_call_id]
+
+    def _queue_mcp_call_started(
+        self,
+        *,
+        call_id: str,
+        tool_name: str,
+        server_name: str,
+        arguments_json: str,
+        arguments: Dict[str, Any],
+    ) -> None:
+        if self.provider == "responses" and isinstance(self.stream_formatter, ResponsesFormatter):
             self.pending_stream_events.extend(
-                self.stream_formatter.append_output_items(
-                    _build_responses_mcp_call_items(executed_traces)
+                self.stream_formatter.append_mcp_call_started(
+                    call_id=call_id,
+                    arguments=arguments_json,
+                    name=tool_name,
+                    server_label=server_name,
+                )
+            )
+            return
+
+        if self.provider == "anthropic" and isinstance(self.stream_formatter, AnthropicFormatter):
+            self.pending_stream_events.extend(
+                self.stream_formatter.append_mcp_tool_use_block(
+                    call_id=call_id,
+                    name=tool_name,
+                    server_name=server_name,
+                    arguments=arguments,
                 )
             )
 
-        await self._start_next_turn()
-        return True
+    def _queue_mcp_call_completed(self, trace: MCPCallTrace) -> None:
+        if self.provider == "responses" and isinstance(self.stream_formatter, ResponsesFormatter):
+            self.pending_stream_events.extend(
+                self.stream_formatter.append_mcp_call_completed(
+                    call_id=trace.call_id,
+                    output=trace.output_text,
+                    error=trace.error.model_dump(mode="json") if trace.error else None,
+                )
+            )
+            return
+
+        if self.provider == "anthropic" and isinstance(self.stream_formatter, AnthropicFormatter):
+            result_text = trace.output_text or (trace.error.message if trace.error else "")
+            self.pending_stream_events.extend(
+                self.stream_formatter.append_mcp_tool_result_block(
+                    tool_use_id=trace.call_id,
+                    output_text=result_text,
+                    is_error=trace.error is not None,
+                )
+            )
 
     async def completion_callback_with_traces(self, response_obj: Any) -> None:
         response_obj = prepend_mcp_traces_to_response(
