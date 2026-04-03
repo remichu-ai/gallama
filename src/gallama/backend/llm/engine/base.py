@@ -283,6 +283,15 @@ class ModelInterface(ABC):
         This function will route the request to chat with tool or without tool accordingly
         """
 
+        already_reasoning = False  # set to true if reasoning is generate separate e.g. for schema enforcement
+
+        def _combine_thinking_and_max_token():
+            if prompt_eng.is_thinking:
+                return query.thinking_token_budget + query.max_tokens
+
+            # if not thinking model, keep to user max_tokens
+            return query.max_tokens
+
         query = self.validate_video_support(query)
 
         json_schema = None
@@ -363,7 +372,7 @@ class ModelInterface(ABC):
                         # Let the reasoning pass consume the full remaining context budget.
                         # The final structured/output-constrained pass below still respects
                         # query.max_tokens.
-                        'max_tokens': None,
+                        'max_tokens': query.thinking_token_budget,
                         # 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                         # 'banned_strings': banned_strings,
                         'request': request,
@@ -383,6 +392,7 @@ class ModelInterface(ABC):
 
                     # append this to the prompt
                     prompt += partial_response
+                    already_reasoning = True
 
             generation_args = {
                 'temperature': query.temperature,
@@ -390,7 +400,7 @@ class ModelInterface(ABC):
                 'gen_type': GenStart(gen_type=gen_start),
                 # 'formatter': self.formatter,
                 'stop_words': query.stop_words,
-                'max_tokens': query.max_tokens,
+                'max_tokens': query.max_tokens if already_reasoning else _combine_thinking_and_max_token(),
                 'prefix_strings': prefix_strings,  # already generated as part of the prefix string
                 # 'banned_strings': banned_strings,
                 'request': request,
