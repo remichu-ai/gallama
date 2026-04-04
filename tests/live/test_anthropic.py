@@ -367,6 +367,12 @@ def test_max_tokens(client: anthropic.Anthropic):
                     "content": "Write a very long essay about the history of the universe.",
                 }
             ],
+            extra_body={
+                # Force visible-output truncation semantics for reasoning-capable models.
+                "use_thinking": "Skip",
+                "reasoning_effort": None,
+                "thinking_token_budget": 0,
+            },
         )
         assert resp.stop_reason == "max_tokens", (
             f"Expected max_tokens, got: {resp.stop_reason}"

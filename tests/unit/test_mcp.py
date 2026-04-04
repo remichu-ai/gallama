@@ -344,6 +344,76 @@ def test_chat_completion_stream_can_continue_after_suppressed_tool_calls():
     asyncio.run(_run())
 
 
+def test_chat_completion_stream_requests_stop_after_invalid_tool_continuation():
+    def tool_post_processor(_text: str, _extra_vars: dict | None = None):
+        return [
+            {
+                "id": "call_1",
+                "type": "function",
+                "index": 0,
+                "function": {
+                    "name": "get_weather",
+                    "arguments": "{\"city\": \"Singapore\"}",
+                },
+            }
+        ]
+
+    async def _run():
+        tool_tag = TagDefinition(
+            start_marker="<tool>",
+            end_marker="</tool>",
+            include_markers=True,
+            tag_type="tool_calls",
+            api_tag="tool_calls",
+            role="assistant",
+            post_processor=tool_post_processor,
+            wait_till_complete=True,
+            allowed_next_tag=[],
+        )
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(
+            GenText(content="<tool>{\"name\":\"get_weather\"}</tool>\n\nhallucinated answer")
+        )
+        gen_queue.put_nowait(
+            GenerationStats(
+                stop_reason="tool_use",
+                input_tokens_count=5,
+                output_tokens_count=3,
+            )
+        )
+        gen_queue.put_nowait(GenEnd())
+
+        stop_requested = False
+        events = []
+
+        def request_stop():
+            nonlocal stop_requested
+            stop_requested = True
+
+        async for event in chat_completion_response_stream(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "stream": True,
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=[tool_tag],
+            generation_stop_callback=request_stop,
+        ):
+            events.append(event)
+
+        payloads = [event["data"] for event in events]
+        assert stop_requested is True
+        assert all("hallucinated answer" not in payload for payload in payloads)
+
+    asyncio.run(_run())
+
+
 def test_responses_stream_can_emit_mcp_trace_items_before_final_text():
     synthetic_tool_name = "mcp__demo__get_weather"
 

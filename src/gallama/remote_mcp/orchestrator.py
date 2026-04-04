@@ -378,6 +378,7 @@ class MCPStreamController:
         self.stream_queue: Optional[GenQueueDynamic] = None
         self.current_query_for_turn: Optional[ChatMLQuery] = None
         self.current_shadow_task: Optional[asyncio.Task] = None
+        self.current_stop_event: Optional[asyncio.Event] = None
         self.current_turn_has_suppressed_mcp = False
         self.turn_count = 0
 
@@ -425,6 +426,7 @@ class MCPStreamController:
         )
 
         shadow_queue = GenQueueDynamic()
+        self.current_stop_event = asyncio.Event()
         self.current_shadow_task = asyncio.create_task(
             chat_completion_response(
                 query=self.current_query_for_turn,
@@ -446,8 +448,13 @@ class MCPStreamController:
                 prompt_eng=self.llm.prompt_eng,
                 gen_queue=[self.stream_queue, shadow_queue],
                 request=self.request,
+                stop_event=self.current_stop_event,
             )
         )
+
+    def request_stop_current_turn(self) -> None:
+        if self.current_stop_event is not None:
+            self.current_stop_event.set()
 
     async def intercept_tool_calls(self, tool_calls: Any) -> bool:
         if not isinstance(tool_calls, list):

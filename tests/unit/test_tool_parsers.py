@@ -1,7 +1,10 @@
 import json
+import asyncio
 
+from gallama.api_response.chat_response import chat_completion_response, chat_completion_response_stream
 from gallama.api_response.stream_parser_v2 import StreamParserByTag
-from gallama.data_classes.data_class import ChatMLQuery
+from gallama.data_classes.data_class import ChatMLQuery, TagDefinition
+from gallama.data_classes.generation_data_class import GenEnd, GenQueueDynamic, GenText, GenerationStats
 from gallama.backend.llm.prompt_engine.by_model.default import tool_parser
 from gallama.backend.llm.prompt_engine.by_model.gemma4 import gemma4_tool_parser, gemma4
 from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_parser, gpt_oss
@@ -15,7 +18,23 @@ from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_SPECIAL_TA
 
 
 def _arguments(parsed_call):
-    return json.loads(parsed_call["function"]["arguments"])
+    if hasattr(parsed_call, "model_dump"):
+        parsed_call = parsed_call.model_dump(exclude_none=True)
+
+    if "function" in parsed_call:
+        return json.loads(parsed_call["function"]["arguments"])
+
+    return parsed_call["arguments"]
+
+
+def _tool_name(parsed_call):
+    if hasattr(parsed_call, "model_dump"):
+        parsed_call = parsed_call.model_dump(exclude_none=True)
+
+    if "function" in parsed_call:
+        return parsed_call["function"]["name"]
+
+    return parsed_call["name"]
 
 
 def test_model_special_tag_maps_exllamav3_scoped_aliases_to_expected_parsers():
@@ -44,8 +63,8 @@ def test_default_tool_parser_supports_multiple_json_objects():
     parsed = tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -59,8 +78,8 @@ def test_qwen3_json_tool_parser_supports_multiple_tool_calls():
     parsed = qwen3_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -71,7 +90,7 @@ def test_gpt_oss_tool_parser_supports_single_tool_call():
     parsed = gpt_oss_tool_parser(tool_text)
 
     assert len(parsed) == 1
-    assert parsed[0]["index"] == 0
+    assert _tool_name(parsed[0]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
 
 
@@ -108,8 +127,8 @@ def test_qwen35_xml_tool_parser_supports_multiple_tool_calls():
     parsed = qwen35_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -129,7 +148,7 @@ def test_qwen35_xml_tool_parser_supports_nemotron_style_parameters():
     parsed = qwen35_tool_parser(tool_text)
 
     assert len(parsed) == 1
-    assert parsed[0]["function"]["name"] == "get_current_weather"
+    assert _tool_name(parsed[0]) == "get_current_weather"
     assert _arguments(parsed[0]) == {"location": "Boston, MA", "unit": "fahrenheit"}
 
 
@@ -144,8 +163,8 @@ def test_glm4_tool_parser_supports_multiple_tool_calls():
     parsed = glm4_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -159,10 +178,156 @@ def test_gemma4_tool_parser_supports_multiple_tool_calls():
     parsed = gemma4_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul", "days": 3}
     assert _arguments(parsed[1]) == {"city": "Tokyo", "options": {"units": "metric", "alerts": True}}
+
+
+def test_gemma4_stream_parser_withholds_trailing_text_after_tool_call():
+    parser = StreamParserByTag(tag_definitions=list(gemma4.values()))
+    generated = (
+        '<|tool_call>call:get_weather{"city":"Seoul"}<tool_call|>\n\n'
+        'The weather is sunny.'
+    )
+
+    parsed_blocks = parser.parse_full_text(generated)
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["tool_calls"]
+    parsed_tools = parsed_blocks[0][0].post_processor(parsed_blocks[0][1])
+    assert len(parsed_tools) == 1
+    assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
+    assert parser.generation_should_stop is True
+
+
+def test_gemma4_stream_parser_allows_consecutive_tool_calls_only():
+    parser = StreamParserByTag(tag_definitions=list(gemma4.values()))
+    generated = (
+        '<|tool_call>call:get_weather{"city":"Seoul"}<tool_call|>\n\n'
+        '<|tool_call>call:get_weather{"city":"Tokyo"}<tool_call|>'
+    )
+
+    parsed_blocks = parser.parse_full_text(generated)
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["tool_calls"]
+    parsed_tools = parsed_blocks[0][0].post_processor(parsed_blocks[0][1])
+    assert len(parsed_tools) == 2
+    assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
+    assert _arguments(parsed_tools[1]) == {"city": "Tokyo"}
+    assert parser.generation_should_stop is False
+
+
+def test_stream_parser_allowed_next_tag_accepts_tag_definition_entries():
+    next_tag = TagDefinition(
+        start_marker="<next>",
+        end_marker="</next>",
+        tag_type="next_tag",
+        api_tag="content",
+    )
+    first_tag = TagDefinition(
+        start_marker="<tool>",
+        end_marker="</tool>",
+        include_markers=True,
+        tag_type="tool_calls",
+        api_tag="tool_calls",
+        allowed_next_tag=[next_tag],
+    )
+
+    parser = StreamParserByTag(tag_definitions=[first_tag, next_tag])
+    parsed_blocks = parser.parse_full_text("<tool>call</tool>\n<next>ok</next>")
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["tool_calls", "content"]
+    assert parsed_blocks[0][1] == "<tool>call</tool>"
+    assert parsed_blocks[1][1] == "ok"
+    assert parser.generation_should_stop is False
+
+
+def test_stream_parser_allowed_next_tag_accepts_literal_prefix_entries():
+    first_tag = TagDefinition(
+        start_marker="<tool>",
+        end_marker="</tool>",
+        include_markers=True,
+        tag_type="tool_calls",
+        api_tag="tool_calls",
+        allowed_next_tag=["STOP_HERE"],
+    )
+
+    parser = StreamParserByTag(tag_definitions=[first_tag])
+    parsed_blocks = parser.parse_full_text("<tool>call</tool>\nSTOP_HERE")
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["tool_calls", "content"]
+    assert parsed_blocks[0][1] == "<tool>call</tool>"
+    assert parsed_blocks[1][1] == "STOP_HERE"
+    assert parser.generation_should_stop is False
+
+
+def test_stream_parser_allowed_next_tag_treats_strings_as_literal_only():
+    next_tag = TagDefinition(
+        start_marker="<next>",
+        end_marker="</next>",
+        tag_type="tool_calls",
+        api_tag="content",
+    )
+    first_tag = TagDefinition(
+        start_marker="<tool>",
+        end_marker="</tool>",
+        include_markers=True,
+        tag_type="first_tag",
+        api_tag="tool_calls",
+        allowed_next_tag=["tool_calls"],
+    )
+
+    parser = StreamParserByTag(tag_definitions=[first_tag, next_tag])
+    parsed_blocks = parser.parse_full_text("<tool>call</tool>\n<next>ok</next>")
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["tool_calls"]
+    assert parsed_blocks[0][1] == "<tool>call</tool>"
+    assert parser.generation_should_stop is True
+
+
+def test_chat_completion_response_omits_gemma4_trailing_text_from_assistant_message():
+    async def _run():
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(
+            GenText(
+                content=(
+                    '<|tool_call>call:get_weather{"city":"Seoul"}<tool_call|>\n\n'
+                    'The weather is sunny.'
+                )
+            )
+        )
+        gen_queue.put_nowait(
+            GenerationStats(
+                stop_reason="tool_use",
+                input_tokens_count=5,
+                output_tokens_count=4,
+            )
+        )
+        gen_queue.put_nowait(GenEnd())
+
+        response = await chat_completion_response(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=list(gemma4.values()),
+        )
+
+        message = response.choices[0].message
+        assert response.choices[0].finish_reason == "tool_calls"
+        assert message.tool_calls is not None
+        assert len(message.tool_calls) == 1
+        assert message.tool_calls[0].function.name == "get_weather"
+        assert json.loads(message.tool_calls[0].function.arguments) == {"city": "Seoul"}
+        assert not message.content
+
+    asyncio.run(_run())
 
 
 def test_minimax_tool_parser_supports_multiple_tool_calls():
@@ -178,8 +343,8 @@ def test_minimax_tool_parser_supports_multiple_tool_calls():
     parsed = minimax_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -193,8 +358,8 @@ def test_ministral3_tool_parser_supports_multiple_tool_calls():
     parsed = ministral3_tool_parser(tool_text)
 
     assert len(parsed) == 2
-    assert parsed[0]["index"] == 0
-    assert parsed[1]["index"] == 1
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
@@ -216,6 +381,100 @@ def test_ministral3_stream_parser_supports_thinking_and_tool_calls():
     assert len(parsed_tools) == 2
     assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
     assert _arguments(parsed_tools[1]) == {"city": "Tokyo"}
+
+
+def test_chat_completion_response_assigns_sequential_tool_call_indexes():
+    async def _run():
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(
+            GenText(
+                content=(
+                    '<|tool_call>call:get_weather{"city":"Seoul"}<tool_call|>\n'
+                    '<|tool_call>call:get_weather{"city":"Tokyo"}<tool_call|>'
+                )
+            )
+        )
+        gen_queue.put_nowait(
+            GenerationStats(
+                stop_reason="tool_use",
+                input_tokens_count=5,
+                output_tokens_count=4,
+            )
+        )
+        gen_queue.put_nowait(GenEnd())
+
+        response = await chat_completion_response(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=list(gemma4.values()),
+        )
+
+        tool_calls = response.choices[0].message.tool_calls
+        assert tool_calls is not None
+        assert [tool_call.index for tool_call in tool_calls] == [0, 1]
+        assert all(tool_call.id for tool_call in tool_calls)
+
+    asyncio.run(_run())
+
+
+def test_chat_completion_response_stream_assigns_sequential_tool_call_indexes():
+    async def _run():
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(
+            GenText(
+                content=(
+                    '<|tool_call>call:get_weather{"city":"Seoul"}<tool_call|>\n'
+                    '<|tool_call>call:get_weather{"city":"Tokyo"}<tool_call|>'
+                )
+            )
+        )
+        gen_queue.put_nowait(
+            GenerationStats(
+                stop_reason="tool_use",
+                input_tokens_count=5,
+                output_tokens_count=4,
+            )
+        )
+        gen_queue.put_nowait(GenEnd())
+
+        streamed_tool_calls = []
+        async for event in chat_completion_response_stream(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Weather?"}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=list(gemma4.values()),
+        ):
+            data = event.get("data")
+            if not data or data == "[DONE]":
+                continue
+
+            payload = json.loads(data)
+            choices = payload.get("choices", [])
+            if not choices:
+                continue
+
+            delta = choices[0].get("delta", {})
+            streamed_tool_calls.extend(delta.get("tool_calls", []))
+
+        assert [tool_call["index"] for tool_call in streamed_tool_calls] == [0, 1]
+        assert all(tool_call["id"] for tool_call in streamed_tool_calls)
+
+    asyncio.run(_run())
 
 
 class _ReasoningEffortProbeTokenizer:

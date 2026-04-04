@@ -422,7 +422,9 @@ class ModelInterface(ABC):
                 logger.info("Stop event is set, aborting chat")
             else:
                 logger.error("Error while generating response: " + str(e))
-                raise Exception("Error while generating chat response: " + str(e))
+                if isinstance(e, HTTPException):
+                    raise e
+                raise Exception("Error while generating chat response: " + str(e)) from e
         return True
 
     async def chat_raw(

@@ -6,6 +6,7 @@ from ..data_classes.data_class import (
     ChatMLQuery,
     ChatCompletionResponse,
     ChatMessage,
+    ParsedToolCall,
     UsageResponse,
     OneTool,
     ToolCallResponse,
@@ -42,6 +43,57 @@ import json
 import asyncio
 import uuid
 import logging
+
+
+def _materialize_tool_call(call: Any, index: int) -> Dict[str, Any]:
+    if hasattr(call, "model_dump"):
+        call = call.model_dump(exclude_none=True)
+
+    if isinstance(call, dict) and "function" in call:
+        function_payload = call.get("function", {})
+        raw_arguments = function_payload.get("arguments", "{}")
+        arguments_json = raw_arguments if isinstance(raw_arguments, str) else json.dumps(raw_arguments)
+
+        return ChoiceDeltaToolCall(
+            index=call.get("index", index),
+            id=call.get("id") or get_response_tool_uid(),
+            function=ChoiceDeltaToolCallFunction(
+                name=function_payload.get("name"),
+                arguments=arguments_json,
+            ),
+            type=call.get("type", "function"),
+        ).model_dump(exclude_unset=True)
+
+    if isinstance(call, dict):
+        parsed_call = ParsedToolCall(
+            name=call.get("name", ""),
+            arguments=call.get("arguments", {}),
+        )
+    else:
+        parsed_call = ParsedToolCall.model_validate(call)
+
+    return ChoiceDeltaToolCall(
+        index=index,
+        id=get_response_tool_uid(),
+        function=ChoiceDeltaToolCallFunction(
+            name=parsed_call.name,
+            arguments=json.dumps(parsed_call.arguments),
+        ),
+        type="function",
+    ).model_dump(exclude_unset=True)
+
+
+def _materialize_tool_calls(calls: Any, start_index: int) -> tuple[Any, int]:
+    if not isinstance(calls, list):
+        return calls, start_index
+
+    materialized_calls = []
+    next_index = start_index
+    for call in calls:
+        materialized_calls.append(_materialize_tool_call(call, next_index))
+        next_index += 1
+
+    return materialized_calls, next_index
 
 
 def format_generation_stats_log(model_name: str, gen_stats: GenerationStats) -> str:
@@ -121,6 +173,7 @@ async def chat_completion_response_stream(
     turn_end_interceptor: Optional[Callable[[], Awaitable[bool]]] = None,
     formatter_ready_callback: Optional[Callable[[Any], None]] = None,
     extra_events_getter: Optional[Callable[[], List[dict]]] = None,
+    generation_stop_callback: Optional[Callable[[], None]] = None,
 ) -> AsyncIterator[dict]:
     formatter_kwargs = formatter_kwargs or {}
     if provider == "openai":
@@ -143,9 +196,10 @@ async def chat_completion_response_stream(
     full_response = ""
     eos = False
     gen_stats = None
-    state = {}
+    next_tool_call_index = 0
     last_stream_event_at = time.monotonic()
     suppressed_tool_calls = False
+    generation_stop_requested = False
 
     current_tag = text_tag
     current_text = ""
@@ -173,11 +227,18 @@ async def chat_completion_response_stream(
             yield event
 
     def process_chunk(tag: TagDefinition, text: str):
+        nonlocal next_tool_call_index
+
         try:
-            extra_args = {"model_name": model_name, "unique_id": formatter.unique_id, "state": state}
+            extra_args = {"model_name": model_name, "unique_id": formatter.unique_id}
             _processed_text = tag.post_processor(text, extra_args)
             _api_tag = tag.api_tag
             _role = tag.role
+            if _api_tag == "tool_calls":
+                _processed_text, next_tool_call_index = _materialize_tool_calls(
+                    _processed_text,
+                    next_tool_call_index,
+                )
         except Exception as e:
             logger.error(f"Error in post-processor: {e}")
             logger.info("Fall back to text tag")
@@ -205,19 +266,21 @@ async def chat_completion_response_stream(
         nonlocal full_response
         nonlocal eos
         nonlocal gen_stats
-        nonlocal state
+        nonlocal next_tool_call_index
         nonlocal current_tag
         nonlocal current_text
         nonlocal suppressed_tool_calls
+        nonlocal generation_stop_requested
         nonlocal stream_parser
 
         full_response = ""
         eos = False
         gen_stats = None
-        state = {}
+        next_tool_call_index = 0
         current_tag = text_tag
         current_text = ""
         suppressed_tool_calls = False
+        generation_stop_requested = False
         stream_parser = make_stream_parser()
 
     # Emit starting event(s)
@@ -258,6 +321,14 @@ async def chat_completion_response_stream(
         if accumulated_text or eos:
             full_response += accumulated_text
             parsed_text = stream_parser.process_stream(accumulated_text)
+            if (
+                stream_parser.generation_should_stop
+                and generation_stop_callback is not None
+                and not generation_stop_requested
+            ):
+                logger.info("Stopping generation after invalid continuation following a restricted tag")
+                generation_stop_callback()
+                generation_stop_requested = True
 
             if eos:
                 parsed_text.extend(stream_parser.flush())
@@ -408,6 +479,7 @@ async def chat_completion_response(
     initial_tag = None
     gen_stats = None
     eos = False
+    next_tool_call_index = 0
     while not eos:
         try:
 
@@ -442,6 +514,11 @@ async def chat_completion_response(
                 processed_api_tag = _tag.api_tag
                 processed_role = _tag.role
                 processed_allowed_roles = _tag.allowed_roles
+                if processed_api_tag == "tool_calls":
+                    processed_content, next_tool_call_index = _materialize_tool_calls(
+                        processed_content,
+                        next_tool_call_index,
+                    )
             except Exception as e:
                 logger.error(f"Error in post-processor: {e}")
                 logger.info("Fall back to text tag")

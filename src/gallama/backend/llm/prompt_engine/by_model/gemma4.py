@@ -5,11 +5,9 @@ from typing import Dict, List, Optional
 from gallama.logger.logger import logger
 
 from .....data_classes.data_class import (
-    ChoiceDeltaToolCall,
-    ChoiceDeltaToolCallFunction,
+    ParsedToolCall,
     TagDefinition,
 )
-from .....utils.utils import get_response_tool_uid
 
 
 GEMMA4_TOOL_START_MARKER = "<|tool_call>"
@@ -58,7 +56,7 @@ def _parse_gemma4_arguments(arguments_text: str) -> Dict:
         return json.loads(normalized)
 
 
-def gemma4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
+def gemma4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[ParsedToolCall]:
     """
     Example tool call formats:
     <|tool_call>call:calculate_geometry{"shape": "square", "elements": "circles"}<tool_call|>
@@ -66,13 +64,6 @@ def gemma4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
     """
 
     results = []
-
-    if extra_vars is None:
-        extra_vars = {"state": {}}
-    if not extra_vars.get("state"):
-        extra_vars["state"] = {}
-    if "tool_call" not in extra_vars["state"]:
-        extra_vars["state"]["tool_call"] = 0
 
     if not tool_text or not tool_text.strip():
         return []
@@ -88,19 +79,12 @@ def gemma4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
             arguments_dict = _parse_gemma4_arguments(tool_args_str)
             logger.info(f"tool: {tool_name} args: {arguments_dict}")
 
-            # Match the same streaming tool-call payload shape used by other parsers.
-            chunk_data = ChoiceDeltaToolCall(
-                index=extra_vars["state"]["tool_call"],
-                id=get_response_tool_uid(),
-                function=ChoiceDeltaToolCallFunction(
-                    name=tool_name,
-                    arguments=json.dumps(arguments_dict),
-                ),
-                type="function",
+            parsed_call = ParsedToolCall(
+                name=tool_name,
+                arguments=arguments_dict,
             )
 
-            results.append(chunk_data.model_dump(exclude_unset=True))
-            extra_vars["state"]["tool_call"] += 1
+            results.append(parsed_call)
 
     except Exception as e:
         logger.error(f"Error parsing Gemma 4 tool calls: {e}")
@@ -127,6 +111,7 @@ gemma4 = {
         post_processor=gemma4_tool_parser,
         prompt_init=tool_prompt,
         wait_till_complete=True,
+        allowed_next_tag=[GEMMA4_TOOL_START_MARKER],  # gemma4 is having some issue not emitting ending token after tool call, at least with llama cpp
     ),
     "thinking": TagDefinition(
         start_marker=GEMMA4_THINKING_START_MARKER,

@@ -444,6 +444,12 @@ def test_max_tokens(client: openai.OpenAI):
         model=MODEL,
         max_tokens=5,
         messages=[{"role": "user", "content": "Write a very long essay about the history of the universe."}],
+        extra_body={
+            # Force visible-output truncation semantics for reasoning-capable models.
+            "use_thinking": "Skip",
+            "reasoning_effort": None,
+            "thinking_token_budget": 0,
+        },
     )
     resp = None
     try:
