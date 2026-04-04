@@ -1,3 +1,3 @@
 from .model_management import download_model_from_hf, log_model_status
-from .request_handler import forward_request, create_options_response
+from .request_handler import close_forward_http_client, create_options_response, forward_request
 from .server_manager import ServerManager

@@ -125,6 +125,54 @@ def format_stream_start_log(gen_type: Union[TagDefinition, str]) -> str:
     return f"Stream starts with {tag_type}"
 
 
+def _resolve_gen_queue(
+    gen_queue: GenQueue | GenQueueDynamic | List[GenQueue | GenQueueDynamic],
+) -> GenQueue | GenQueueDynamic:
+    if isinstance(gen_queue, list):
+        return gen_queue[0]
+    return gen_queue
+
+
+def _drain_available_queue_items(
+    gen_queue: GenQueue | GenQueueDynamic,
+    *,
+    first_item: Any,
+) -> List[Any]:
+    items = [first_item]
+    while True:
+        try:
+            items.append(gen_queue.get_nowait())
+        except asyncio.QueueEmpty:
+            return items
+
+
+async def _wait_for_queue_item(
+    gen_queue: GenQueue | GenQueueDynamic,
+    *,
+    timeout: Optional[float] = None,
+) -> Any:
+    try:
+        return gen_queue.get_nowait()
+    except asyncio.QueueEmpty:
+        pass
+
+    if timeout is None:
+        return await gen_queue.get()
+
+    return await asyncio.wait_for(gen_queue.get(), timeout=timeout)
+
+
+def _remaining_ping_timeout(
+    *,
+    last_event_at: float,
+    ping_interval_s: Optional[float],
+) -> Optional[float]:
+    if ping_interval_s is None:
+        return None
+
+    return max(0.0, ping_interval_s - (time.monotonic() - last_event_at))
+
+
 async def get_response_from_queue(
     gen_queue: GenQueue | GenQueueDynamic | List[GenQueue|GenQueueDynamic],
     request: Request = None,
@@ -132,17 +180,13 @@ async def get_response_from_queue(
     """ function to get the text generated in queue to be used for other part of the library"""
     response = ""
 
-    # if it is a list, assume it is the first element
-    gen_queue_to_use = gen_queue
-    if isinstance(gen_queue, list):
-        gen_queue_to_use = gen_queue[0]
+    gen_queue_to_use = _resolve_gen_queue(gen_queue)
 
     eos = False
     gen_stats = None
     while not eos:
-        try:
-            result = gen_queue_to_use.get_nowait()
-
+        result = await _wait_for_queue_item(gen_queue_to_use)
+        for result in _drain_available_queue_items(gen_queue_to_use, first_item=result):
             if isinstance(result, GenText):
                 response += result.content
             elif isinstance(result, GenerationStats):
@@ -153,9 +197,6 @@ async def get_response_from_queue(
                 eos = True
                 gen_queue_to_use.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response.strip())
-
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.01)    # short sleep before trying again
 
     return response, gen_stats
 
@@ -291,10 +332,15 @@ async def chat_completion_response_stream(
 
     while not eos:
         accumulated_text = ""
-        queue_was_empty = False
         try:
-            while True:
-                item = gen_queue.get_nowait()
+            item = await _wait_for_queue_item(
+                gen_queue,
+                timeout=_remaining_ping_timeout(
+                    last_event_at=last_stream_event_at,
+                    ping_interval_s=formatter.ping_interval_s,
+                ),
+            )
+            for item in _drain_available_queue_items(gen_queue, first_item=item):
                 if isinstance(item, GenText):
                     accumulated_text += item.content
                 elif isinstance(item, GenEnd):
@@ -311,12 +357,12 @@ async def chat_completion_response_stream(
                 elif isinstance(item, GenerationStats):
                     gen_stats = item
         except asyncio.QueueEmpty:
-            queue_was_empty = True
-            now = time.monotonic()
-            if formatter.ping_interval_s is not None and now - last_stream_event_at >= formatter.ping_interval_s:
+            pass
+        except asyncio.TimeoutError:
+            if formatter.ping_interval_s is not None:
                 async for event in emit_events(formatter.stream_ping()):
                     yield event
-            await asyncio.sleep(0.01)
+            continue
 
         if accumulated_text or eos:
             full_response += accumulated_text
@@ -364,9 +410,6 @@ async def chat_completion_response_stream(
                         if chunk := await maybe_format_chunk(_tag, _text_chunk):
                             async for event in emit_events(chunk):
                                 yield event
-        elif queue_was_empty and formatter.ping_interval_s is not None:
-            # Keep the SSE connection active during long prefill or tool-thinking gaps.
-            pass
 
         if eos:
             if current_text:
@@ -379,15 +422,22 @@ async def chat_completion_response_stream(
 
             if suppressed_tool_calls and turn_end_interceptor is not None:
                 turn_end_task = asyncio.create_task(turn_end_interceptor())
-                while not turn_end_task.done():
+                while True:
+                    if turn_end_task.done():
+                        break
+
                     async for event in emit_extra_events():
                         yield event
 
-                    now = time.monotonic()
-                    if formatter.ping_interval_s is not None and now - last_stream_event_at >= formatter.ping_interval_s:
+                    wait_timeout = _remaining_ping_timeout(
+                        last_event_at=last_stream_event_at,
+                        ping_interval_s=formatter.ping_interval_s,
+                    )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(turn_end_task), timeout=wait_timeout)
+                    except asyncio.TimeoutError:
                         async for event in emit_events(formatter.stream_ping()):
                             yield event
-                    await asyncio.sleep(0.01)
 
                 if await turn_end_task:
                     async for event in emit_extra_events():
@@ -412,14 +462,20 @@ async def chat_completion_response_stream(
                 query.stream_options and getattr(query.stream_options, "include_usage", True)
             )
             if gen_stats and include_usage:
-                stream_stop_events = formatter.stream_stop(
-                    input_tokens=gen_stats.input_tokens_count,
-                    output_tokens=gen_stats.output_tokens_count,
-                    total_tokens=gen_stats.total_tokens_count,
-                    finish_reason=base_finish_reason,
-                )
+                stream_stop_kwargs = {
+                    "input_tokens": gen_stats.input_tokens_count,
+                    "output_tokens": gen_stats.output_tokens_count,
+                    "total_tokens": gen_stats.total_tokens_count,
+                    "finish_reason": base_finish_reason,
+                }
+                if provider == "anthropic":
+                    stream_stop_kwargs["stop_sequence"] = gen_stats.stop_sequence
+                stream_stop_events = formatter.stream_stop(**stream_stop_kwargs)
             else:
-                stream_stop_events = formatter.stream_stop(finish_reason=base_finish_reason)
+                stream_stop_kwargs = {"finish_reason": base_finish_reason}
+                if provider == "anthropic" and gen_stats:
+                    stream_stop_kwargs["stop_sequence"] = gen_stats.stop_sequence
+                stream_stop_events = formatter.stream_stop(**stream_stop_kwargs)
 
             async for event in emit_events(stream_stop_events):
                 yield event
@@ -481,9 +537,8 @@ async def chat_completion_response(
     eos = False
     next_tool_call_index = 0
     while not eos:
-        try:
-
-            item = gen_queue.get_nowait()
+        item = await _wait_for_queue_item(gen_queue)
+        for item in _drain_available_queue_items(gen_queue, first_item=item):
             if isinstance(item, GenText):
                 response += item.content
             elif isinstance(item, GenerationStats):
@@ -497,9 +552,6 @@ async def chat_completion_response(
                 eos = True
                 gen_queue.task_done()
                 logger.info("----------------------LLM Response---------------\n" + response.strip())
-
-        except asyncio.QueueEmpty:
-            await asyncio.sleep(0.01)    # short sleep before trying again
 
 
     response = response.strip()
@@ -547,13 +599,17 @@ async def chat_completion_response(
             finish_reason = "tool_calls" if provider == "openai" else "tool_use"
             break
 
-    response_obj = formatter.non_stream_response(
-        parsed_blocks=parsed_blocks,
-        input_tokens=gen_stats.input_tokens_count,
-        output_tokens=gen_stats.output_tokens_count,
-        total_tokens=gen_stats.total_tokens_count,
-        finish_reason=finish_reason,
-    )
+    non_stream_kwargs = {
+        "parsed_blocks": parsed_blocks,
+        "input_tokens": gen_stats.input_tokens_count,
+        "output_tokens": gen_stats.output_tokens_count,
+        "total_tokens": gen_stats.total_tokens_count,
+        "finish_reason": finish_reason,
+    }
+    if provider == "anthropic":
+        non_stream_kwargs["stop_sequence"] = gen_stats.stop_sequence
+
+    response_obj = formatter.non_stream_response(**non_stream_kwargs)
 
     assert response_obj is not None
     # logger.info(f"full_response: {response}")
@@ -612,8 +668,8 @@ async def completion_response_stream(
     while not eos:
         accumulated_text = ""
         try:
-            while True:
-                result = gen_queue.get_nowait()
+            result = await _wait_for_queue_item(gen_queue, timeout=0.1)
+            for result in _drain_available_queue_items(gen_queue, first_item=result):
                 if isinstance(result, GenText):
                     accumulated_text += result.content
                 elif isinstance(result, GenEnd):
@@ -624,7 +680,7 @@ async def completion_response_stream(
                     pass
                 elif isinstance(result, GenerationStats):
                     gen_stats = result
-        except asyncio.QueueEmpty:
+        except asyncio.TimeoutError:
             pass
         if accumulated_text:
             full_response += accumulated_text

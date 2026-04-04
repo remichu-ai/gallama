@@ -15,7 +15,7 @@ from gallama.utils import parse_request_body
 from gallama.utils.utils import format_request_body_for_logging
 from typing import List, Dict
 from gallama.config import ConfigManager
-from gallama.server_engine import forward_request
+from gallama.server_engine import close_forward_http_client, forward_request
 import shutil
 import asyncio
 import uvicorn
@@ -521,10 +521,19 @@ async def run_model_with_timeout(model: str, timeout: int = 600):  # 10 minutes 
 
 
 
-async def get_model_from_body(request: Request) -> str:
+async def get_model_from_body(
+    request: Request,
+    parsed_body: object | None = None,
+) -> str:
     try:
-        body, is_multipart = await parse_request_body(request)
-        return body.get("model", "")
+        body = parsed_body
+        if body is None:
+            body, _ = await parse_request_body(request)
+
+        if isinstance(body, dict):
+            return body.get("model", "")
+
+        return ""
     except Exception as e:     # when request doesnt come with model e.g. audio transcription
         server_logger.debug(f"Can not get body from request {e}. Hence continue with raw body")
         return ""
@@ -554,7 +563,7 @@ async def load_balanced_router(request: Request, path: str):
     if request.method == "OPTIONS":
         return create_options_response(dict(request.headers))
 
-    model = await get_model_from_body(request)
+    model = await get_model_from_body(request, parsed_body=body_json)
 
     async with request_semaphore:
         is_embedding = any(subpath["original"] in path for subpath in EMBEDDING_SUBPATHS)
@@ -639,7 +648,11 @@ async def load_balanced_router(request: Request, path: str):
                 return JSONResponse(status_code=200, content=final_response)
 
             # Forward the request
-            response = await forward_request(request, instance)
+            response = await forward_request(
+                request,
+                instance,
+                parsed_body=body_json,
+            )
 
             return response
         finally:
@@ -697,15 +710,18 @@ async def main(model_list=None, port=8000, strict_mode=False, log_file: str | No
     # Start periodic health checks
     health_check_task = asyncio.create_task(periodic_health_check())
 
-    await start_server(port)
-
-    # Ensure tasks are cancelled when the server_engine stops
-    model_loader_task.cancel()
-    health_check_task.cancel()
     try:
-        await asyncio.gather(model_loader_task, health_check_task)
-    except asyncio.CancelledError:
-        server_logger.info("Tasks cancelled")
+        await start_server(port)
+    finally:
+        await close_forward_http_client()
+
+        # Ensure tasks are cancelled when the server_engine stops
+        model_loader_task.cancel()
+        health_check_task.cancel()
+        try:
+            await asyncio.gather(model_loader_task, health_check_task)
+        except asyncio.CancelledError:
+            server_logger.info("Tasks cancelled")
 
 
 # this parser is different to app.py

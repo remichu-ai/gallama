@@ -121,6 +121,7 @@ REQUEST_HANDLER_MODULE = importlib.util.module_from_spec(REQUEST_HANDLER_SPEC)
 assert REQUEST_HANDLER_SPEC.loader is not None
 REQUEST_HANDLER_SPEC.loader.exec_module(REQUEST_HANDLER_MODULE)
 forward_request = REQUEST_HANDLER_MODULE.forward_request
+close_forward_http_client = REQUEST_HANDLER_MODULE.close_forward_http_client
 
 
 class DummyRequest:
@@ -179,10 +180,10 @@ def test_forward_request_decompresses_encoded_json_before_proxy(monkeypatch):
         headers = {"content-type": "application/json"}
 
     class FakeAsyncClient:
-        async def __aenter__(self):
-            return self
+        def __init__(self, *args, **kwargs):
+            return None
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def aclose(self):
             return None
 
         async def request(self, method, url, headers, content, timeout=None):
@@ -192,12 +193,118 @@ def test_forward_request_decompresses_encoded_json_before_proxy(monkeypatch):
             captured["content"] = content
             return FakeResponse()
 
+    asyncio.run(close_forward_http_client())
     monkeypatch.setattr(REQUEST_HANDLER_MODULE.httpx, "AsyncClient", FakeAsyncClient)
 
-    response = asyncio.run(forward_request(request, SimpleNamespace(port=8001)))
+    response = asyncio.run(
+        forward_request(
+            request,
+            SimpleNamespace(port=8001),
+            parsed_body={"model": "minimax", "input": "hello", "stream": False},
+        )
+    )
+    asyncio.run(close_forward_http_client())
 
     assert response.status_code == 200
     assert captured["url"] == "http://localhost:8001/v1/responses"
     assert captured["content"] == payload
     assert "content-encoding" not in captured["headers"]
     assert captured["headers"]["content-length"] == str(len(payload))
+
+
+def test_forward_request_reuses_shared_async_client(monkeypatch):
+    payload = json.dumps({"model": "minimax", "input": "hello", "stream": False}).encode("utf-8")
+    requests_seen = []
+    client_count = 0
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true}'
+        headers = {"content-type": "application/json"}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            nonlocal client_count
+            client_count += 1
+
+        async def aclose(self):
+            return None
+
+        async def request(self, method, url, headers, content, timeout=None):
+            requests_seen.append((method, url, content))
+            return FakeResponse()
+
+    asyncio.run(close_forward_http_client())
+    monkeypatch.setattr(REQUEST_HANDLER_MODULE.httpx, "AsyncClient", FakeAsyncClient)
+
+    first_request = DummyRequest(
+        body=payload,
+        headers={"content-type": "application/json"},
+    )
+    second_request = DummyRequest(
+        body=payload,
+        headers={"content-type": "application/json"},
+    )
+
+    asyncio.run(
+        forward_request(
+            first_request,
+            SimpleNamespace(port=8001),
+            parsed_body={"model": "minimax", "input": "hello", "stream": False},
+        )
+    )
+    asyncio.run(
+        forward_request(
+            second_request,
+            SimpleNamespace(port=8002),
+            parsed_body={"model": "minimax", "input": "hello", "stream": False},
+        )
+    )
+    asyncio.run(close_forward_http_client())
+
+    assert client_count == 1
+    assert requests_seen == [
+        ("POST", "http://localhost:8001/v1/responses", payload),
+        ("POST", "http://localhost:8002/v1/responses", payload),
+    ]
+
+
+def test_forward_request_uses_preparsed_body_without_json_reparse(monkeypatch):
+    payload = json.dumps({"model": "minimax", "input": "hello", "stream": False}).encode("utf-8")
+    request = DummyRequest(
+        body=payload,
+        headers={"content-type": "application/json"},
+    )
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"ok":true}'
+        headers = {"content-type": "application/json"}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        async def aclose(self):
+            return None
+
+        async def request(self, method, url, headers, content, timeout=None):
+            return FakeResponse()
+
+    def fail_json_loads(*args, **kwargs):
+        raise AssertionError("json.loads should not run when parsed_body is already provided")
+
+    asyncio.run(close_forward_http_client())
+    monkeypatch.setattr(REQUEST_HANDLER_MODULE.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(REQUEST_HANDLER_MODULE.json, "loads", fail_json_loads)
+
+    response = asyncio.run(
+        forward_request(
+            request,
+            SimpleNamespace(port=8001),
+            parsed_body={"model": "minimax", "input": "hello", "stream": False},
+        )
+    )
+    asyncio.run(close_forward_http_client())
+
+    assert response.status_code == 200

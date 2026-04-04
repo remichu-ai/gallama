@@ -711,6 +711,7 @@ class ModelExllama(ModelInterface):
                         eos = True
                         # logger.info(f"eos result {result}")
                         # If the stop word occurred is from the stop_words and not LLM result token -> include in result
+                        stop_word_used = None
                         if stop_words and result.get("held") and result.get("held").get("text"):
                             ending_string = result["held"]["text"].rstrip()
 
@@ -730,6 +731,8 @@ class ModelExllama(ModelInterface):
                             output_tokens_count=result["new_tokens"],
                             time_to_first_token=result["time_prefill"],
                             time_generate=result["time_generate"],
+                            stop_reason="stop_sequence" if stop_word_used else "end_turn",
+                            stop_sequence=stop_word_used,
                         )
 
                         for g_queue in gen_queue_list:

@@ -425,6 +425,41 @@ def test_chat_completion_response_assigns_sequential_tool_call_indexes():
     asyncio.run(_run())
 
 
+def test_chat_completion_response_preserves_anthropic_stop_sequence():
+    async def _run():
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(GenText(content="I will now"))
+        gen_queue.put_nowait(
+            GenerationStats(
+                stop_reason="stop_sequence",
+                stop_sequence="STOP",
+                input_tokens_count=5,
+                output_tokens_count=4,
+            )
+        )
+        gen_queue.put_nowait(GenEnd())
+
+        response = await chat_completion_response(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Say it."}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="anthropic",
+            tag_definitions=list(gemma4.values()),
+        )
+
+        assert response.stop_reason == "stop_sequence"
+        assert response.stop_sequence == "STOP"
+        assert response.content[0].text == "I will now"
+
+    asyncio.run(_run())
+
+
 def test_chat_completion_response_stream_assigns_sequential_tool_call_indexes():
     async def _run():
         gen_queue = GenQueueDynamic()

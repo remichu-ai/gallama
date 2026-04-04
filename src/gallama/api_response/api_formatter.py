@@ -365,11 +365,12 @@ class AnthropicFormatter(BaseAPIFormatter):
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         finish_reason: AnthropicStopReason = "end_turn",
+        stop_sequence: Optional[str] = None,
     ) -> List[dict]:
         stop_reason = "tool_use" if self._current_api_tag == "tool_calls" else finish_reason
         delta = {
             "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "delta": {"stop_reason": stop_reason, "stop_sequence": stop_sequence},
             "usage": {"output_tokens": output_tokens or 0},
         }
         return [
@@ -479,6 +480,7 @@ class AnthropicFormatter(BaseAPIFormatter):
         output_tokens: int,
         total_tokens: int,
         finish_reason: str = "end_turn",
+        stop_sequence: Optional[str] = None,
     ):
         content_blocks = []
         for block in parsed_blocks:
@@ -507,6 +509,7 @@ class AnthropicFormatter(BaseAPIFormatter):
             model=self.model_name,
             content=content_blocks,
             stop_reason=finish_reason,
+            stop_sequence=stop_sequence,
             usage=AnthropicUsage(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
