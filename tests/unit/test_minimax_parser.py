@@ -1,5 +1,3 @@
-import json
-
 from gallama.backend.llm.prompt_engine.by_model.minimax import minimax_tool_parser
 
 
@@ -15,7 +13,7 @@ def test_minimax_tool_parser_allows_shell_operators_in_parameter_text():
     parsed = minimax_tool_parser(tool_text)
 
     assert len(parsed) == 1
-    arguments = json.loads(parsed[0]["function"]["arguments"])
+    arguments = parsed[0].arguments
     assert arguments["command"] == 'pip install youtube-transcript-api -q && python3 -c "print(\'ok\')"'
     assert arguments["description"] == "Install library and scrape transcript"
     assert arguments["timeout"] == 60000
@@ -33,6 +31,6 @@ def test_minimax_tool_parser_preserves_literal_angle_brackets_in_arguments():
     parsed = minimax_tool_parser(tool_text)
 
     assert len(parsed) == 1
-    arguments = json.loads(parsed[0]["function"]["arguments"])
+    arguments = parsed[0].arguments
     assert "<system-reminder>" in arguments["content"]
     assert "</system-reminder>" in arguments["content"]

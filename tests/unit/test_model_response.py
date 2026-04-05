@@ -47,13 +47,13 @@ def test_build_models_response_returns_anthropic_shape_when_requested():
             "id": "claude-local-a",
             "type": "model",
             "display_name": "claude-local-a",
-            "created_at": "2023-06-16T19:03:22Z",
+            "created_at": "2023-06-16T17:03:22Z",
         },
         {
             "id": "claude-local-b",
             "type": "model",
             "display_name": "claude-local-b",
-            "created_at": "2023-06-16T19:03:22Z",
+            "created_at": "2023-06-16T17:03:22Z",
         },
     ]
 

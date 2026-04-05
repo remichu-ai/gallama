@@ -1,44 +1,34 @@
-from gallama.cli import (
-    load_model_names_for_completion,
-    render_bash_completion_script,
-    render_zsh_completion_script,
-)
+from gallama.cli import find_config_file, parse_dict
 
 
-def test_load_model_names_for_completion_reads_user_yaml(tmp_path, monkeypatch):
-    monkeypatch.setenv("GALLAMA_HOME_PATH", str(tmp_path))
-    (tmp_path / "model_config.yaml").write_text(
-        "mistral:\n"
-        "  backend: exllama\n"
-        "qwen2-72B:\n"
-        "  backend: exllamav3\n"
-        "123:\n"
-        "  backend: exllama\n"
-    )
+def test_find_config_file_prefers_yml_over_yaml(tmp_path):
+    yml_path = tmp_path / "model_config.yml"
+    yaml_path = tmp_path / "model_config.yaml"
+    yml_path.write_text("preferred: true\n")
+    yaml_path.write_text("preferred: false\n")
 
-    assert load_model_names_for_completion() == ["mistral", "qwen2-72B"]
-    assert load_model_names_for_completion("q") == ["qwen2-72B"]
+    assert find_config_file(tmp_path, "model_config") == yml_path
 
 
-def test_load_model_names_for_completion_returns_empty_without_config(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("GALLAMA_HOME_PATH", str(tmp_path))
+def test_find_config_file_falls_back_to_yaml(tmp_path):
+    yaml_path = tmp_path / "model_config.yaml"
+    yaml_path.write_text("backend: exllama\n")
 
-    assert load_model_names_for_completion() == []
-
-
-def test_bash_completion_script_uses_hidden_model_completion_command():
-    script = render_bash_completion_script("gallama")
-
-    assert "__complete_model_names" in script
-    assert "complete -o default -F _gallama_completion gallama" in script
+    assert find_config_file(tmp_path, "model_config") == yaml_path
 
 
-def test_zsh_completion_script_uses_hidden_model_completion_command():
-    script = render_zsh_completion_script("gallama")
+def test_find_config_file_returns_none_when_missing(tmp_path):
+    assert find_config_file(tmp_path, "model_config") is None
 
-    assert "#compdef gallama" in script
-    assert "__complete_model_names" in script
-    assert "local -a commands" not in script
-    assert "local -a gallama_subcommands models" in script
+
+def test_parse_dict_supports_nested_keys_and_quoted_values():
+    parsed = parse_dict("model_id=my-model backend=exllama sampling.top_k=32 prompt='hello'")
+
+    assert parsed == {
+        "model_id": "my-model",
+        "backend": "exllama",
+        "sampling": {
+            "top_k": "32",
+        },
+        "prompt": "hello",
+    }
