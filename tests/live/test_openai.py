@@ -5,10 +5,10 @@ Every API response (and streaming chunks) is logged to a JSON file so you can
 inspect exactly what the server returned for any failing test.
 
 Usage:
-    LOCAL_BASE_URL=http://localhost:8000/v1 LOCAL_API_KEY=test python test_openai_endpoint.py
+    LOCAL_BASE_URL=http://localhost:8000/v1 LOCAL_API_KEY=test python tests/live/test_openai.py
 
     # Custom log path / model:
-    TEST_LOG_FILE=debug.json TEST_MODEL=my-model python test_openai_endpoint.py
+    TEST_LOG_FILE=debug.json TEST_MODEL=my-model python tests/live/test_openai.py
 """
 
 from __future__ import annotations
@@ -16,12 +16,24 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any
 
 import openai
-from dummy_mcp_server import (
+SCRIPT_DIR = Path(__file__).resolve().parent
+TESTS_DIR = SCRIPT_DIR.parent
+ROOT_DIR = TESTS_DIR.parent
+SRC_DIR = ROOT_DIR / "src"
+
+for path in (ROOT_DIR, SRC_DIR, TESTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from helpers.dummy_mcp_server import (
     TEST_TOKEN,
     TEST_USER_PROMPT,
     build_openai_mcp_tool,
@@ -31,8 +43,9 @@ from dummy_mcp_server import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 MODEL = os.getenv("TEST_MODEL", "gpt-4o")
-LOG_FILE = os.getenv("TEST_LOG_FILE", "test_responses.json")
+LOG_FILE = os.getenv("TEST_LOG_FILE", str(SCRIPT_DIR / "test_responses.json"))
 COMMON_SYSTEM_PROMPT = os.getenv(
     "TEST_SYSTEM_PROMPT",
     "You are a helpful assistant. Follow the user's instructions exactly.",
@@ -51,7 +64,7 @@ VISION_JSON_SYSTEM_PROMPT = (
 )
 
 # Path to a local cat image used for vision tests
-LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", "cat1.jpg")
+LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", str(TESTS_DIR / "assets" / "cat1.jpg"))
 
 # Simple tools reused across tests (OpenAI function-calling format)
 WEATHER_TOOL: dict[str, Any] = {
@@ -431,6 +444,12 @@ def test_max_tokens(client: openai.OpenAI):
         model=MODEL,
         max_tokens=5,
         messages=[{"role": "user", "content": "Write a very long essay about the history of the universe."}],
+        extra_body={
+            # Force visible-output truncation semantics for reasoning-capable models.
+            "use_thinking": "Skip",
+            "reasoning_effort": None,
+            "thinking_token_budget": 0,
+        },
     )
     resp = None
     try:

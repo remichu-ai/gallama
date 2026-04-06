@@ -3,7 +3,7 @@ import os
 from typing import Dict
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 MODULE_PATH = os.path.join(
     ROOT_DIR,
     "src",

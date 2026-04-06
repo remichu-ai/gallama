@@ -14,6 +14,7 @@ from ..data_classes import (
     BaseMessage,
     ChatMLQuery,
     GenerateQuery,
+    GenEnd,
     GenQueue,
     GenQueueDynamic,
     AnthropicMessagesRequest,
@@ -32,6 +33,43 @@ import asyncio
 # https://platform.openai.com/docs/api-reference/chat/create
 
 router = APIRouter(prefix="/v1", tags=["chat"])
+
+
+def _log_generation_task_failure(exc: Exception) -> None:
+    if isinstance(exc, HTTPException):
+        logger.error("Background generation task failed with %s: %s", exc.status_code, exc.detail)
+        return
+
+    logger.exception("Background generation task failed")
+
+
+async def _run_generation_task(coro, gen_queue: GenQueueDynamic) -> None:
+    try:
+        await coro
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        _log_generation_task_failure(exc)
+        try:
+            gen_queue.put_nowait(GenEnd())
+        except Exception:
+            logger.exception("Failed to terminate generation queue after background task error")
+
+
+def _start_generation_task(coro, gen_queue: GenQueueDynamic) -> asyncio.Task:
+    task = asyncio.create_task(_run_generation_task(coro, gen_queue))
+
+    def _consume_task_exception(done_task: asyncio.Task) -> None:
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            logger.info("Background generation task cancelled")
+        except Exception:
+            # _run_generation_task already logged the failure and terminated the queue.
+            pass
+
+    task.add_done_callback(_consume_task_exception)
+    return task
 
 
 @router.post("/messages")
@@ -65,8 +103,11 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
                     request=request,
                     tag_definitions=llm.prompt_eng.tag_definitions,
                     provider="anthropic",
+                    formatter_ready_callback=controller.attach_formatter,
+                    extra_events_getter=controller.drain_stream_events,
                     tool_calls_interceptor=controller.intercept_tool_calls,
                     turn_end_interceptor=controller.handle_turn_end,
+                    generation_stop_callback=controller.request_stop_current_turn,
                 )
             )
 
@@ -111,6 +152,7 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
                     provider=provider,
                     tool_calls_interceptor=controller.intercept_tool_calls,
                     turn_end_interceptor=controller.handle_turn_end,
+                    generation_stop_callback=controller.request_stop_current_turn,
                 )
             )
 
@@ -132,22 +174,22 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
 
     try:
         llm = model_manager.get_model(query.model, _type="llm")
+        stop_event = asyncio.Event()
         # llm = model_manager.llm_dict.get(query.model)
         # if not llm:
         #     llm = model_manager.llm_dict[list(model_manager.llm_dict.keys())[0]]
 
-        # start the generation task
-        asyncio.create_task(
-            llm.chat(
-                query=query,
-                prompt_eng=llm.prompt_eng,
-                gen_queue=gen_queue,
-                request=request,
-            )
-        )
-
-        # send the response to client
         if query.stream:
+            _start_generation_task(
+                llm.chat(
+                    query=query,
+                    prompt_eng=llm.prompt_eng,
+                    gen_queue=gen_queue,
+                    request=request,
+                    stop_event=stop_event,
+                ),
+                gen_queue,
+            )
             # EventSourceResponse take iterator so need to handle at here
             return EventSourceResponse(
                 chat_completion_response_stream(
@@ -156,18 +198,25 @@ async def chat_completion(request: Request, query: ChatMLQuery, provider: Litera
                     model_name=llm.model_name,
                     request=request,
                     tag_definitions=llm.prompt_eng.tag_definitions,
-                    provider=provider
+                    provider=provider,
+                    generation_stop_callback=stop_event.set,
                 ))
 
-        else:
-            return await chat_completion_response(
-                query=query,
-                gen_queue=gen_queue,
-                model_name=llm.model_name,
-                request=request,
-                tag_definitions=llm.prompt_eng.tag_definitions,
-                provider=provider
-            )
+        await llm.chat(
+            query=query,
+            prompt_eng=llm.prompt_eng,
+            gen_queue=gen_queue,
+            request=request,
+            stop_event=stop_event,
+        )
+        return await chat_completion_response(
+            query=query,
+            gen_queue=gen_queue,
+            model_name=llm.model_name,
+            request=request,
+            tag_definitions=llm.prompt_eng.tag_definitions,
+            provider=provider
+        )
     except HTTPException as e:
         logger.error(e)
         return e
@@ -345,6 +394,7 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                         extra_events_getter=controller.drain_stream_events,
                         tool_calls_interceptor=controller.intercept_tool_calls,
                         turn_end_interceptor=controller.handle_turn_end,
+                        generation_stop_callback=controller.request_stop_current_turn,
                     )
                 )
 
@@ -385,19 +435,21 @@ async def responses(request: Request, query: ResponsesCreateRequest):
 
         chat_query = validate_api_request(raw_chat_query)
         llm = model_manager.get_model(chat_query.model, _type="llm")
-
-        asyncio.create_task(
-            llm.chat(
-                query=chat_query,
-                prompt_eng=llm.prompt_eng,
-                gen_queue=gen_queue,
-                request=request,
-            )
-        )
+        stop_event = asyncio.Event()
 
         formatter_kwargs = {"request_model": response_request}
 
         if chat_query.stream:
+            _start_generation_task(
+                llm.chat(
+                    query=chat_query,
+                    prompt_eng=llm.prompt_eng,
+                    gen_queue=gen_queue,
+                    request=request,
+                    stop_event=stop_event,
+                ),
+                gen_queue,
+            )
             return EventSourceResponse(
                 chat_completion_response_stream(
                     query=chat_query,
@@ -408,9 +460,17 @@ async def responses(request: Request, query: ResponsesCreateRequest):
                     provider="responses",
                     formatter_kwargs=formatter_kwargs,
                     completion_callback=completion_callback if should_store or conversation_id else None,
+                    generation_stop_callback=stop_event.set,
                 )
             )
 
+        await llm.chat(
+            query=chat_query,
+            prompt_eng=llm.prompt_eng,
+            gen_queue=gen_queue,
+            request=request,
+            stop_event=stop_event,
+        )
         return await chat_completion_response(
             query=chat_query,
             gen_queue=gen_queue,
@@ -493,16 +553,23 @@ async def generate(request: Request, query: GenerateQuery):
     llm = model_manager.get_model(query.model, _type="llm")
     # llm = model_manager.llm_dict[query.model]
 
-    # start the generation task
-    asyncio.create_task(llm.chat_raw(
+    if query.stream:
+        _start_generation_task(
+            llm.chat_raw(
+                prompt=query.prompt,
+                max_tokens=query.max_tokens,
+                gen_queue=gen_queue,
+                request=request,
+            ),
+            gen_queue,
+        )
+        # EventSourceResponse take iterator so need to handle iterator here
+        return EventSourceResponse(completion_response_stream(request=request, gen_queue=gen_queue, model_name=llm.model_name))
+
+    await llm.chat_raw(
         prompt=query.prompt,
         max_tokens=query.max_tokens,
         gen_queue=gen_queue,
         request=request,
-    ))
-
-    if query.stream:
-        # EventSourceResponse take iterator so need to handle iterator here
-        return EventSourceResponse(completion_response_stream(request=request, gen_queue=gen_queue, model_name=llm.model_name))
-    else:
-        return await completion_response(gen_queue=gen_queue, model_name=llm.model_name, request=request)
+    )
+    return await completion_response(gen_queue=gen_queue, model_name=llm.model_name, request=request)

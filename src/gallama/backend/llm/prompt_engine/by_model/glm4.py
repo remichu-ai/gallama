@@ -2,24 +2,14 @@ import re
 import json
 from gallama.logger.logger import logger
 from .....data_classes.data_class import (
-    ChoiceDeltaToolCall,
-    ChoiceDeltaToolCallFunction,
+    ParsedToolCall,
     TagDefinition
 )
-from .....utils.utils import get_response_tool_uid
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 
-def glm4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
+def glm4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[ParsedToolCall]:
     results = []
-
-    # Initialize state
-    if extra_vars is None:
-        extra_vars = {"state": {}}
-    if not extra_vars.get("state"):
-        extra_vars["state"] = {}
-    if "tool_call" not in extra_vars["state"]:
-        extra_vars["state"]["tool_call"] = 0
 
     # Clean whitespace to avoid processing empty strings
     if not tool_text or not tool_text.strip():
@@ -71,19 +61,12 @@ def glm4_tool_parser(tool_text: str, extra_vars: dict = None) -> List[Dict]:
 
             logger.info(f"tool: {tool_name} args: {arguments_dict}")
 
-            # 4. Construct the response object
-            chunk_data = ChoiceDeltaToolCall(
-                index=extra_vars["state"]["tool_call"],
-                id=get_response_tool_uid(),
-                function=ChoiceDeltaToolCallFunction(
-                    name=tool_name,
-                    arguments=json.dumps(arguments_dict)
-                ),
-                type="function"
+            parsed_call = ParsedToolCall(
+                name=tool_name,
+                arguments=arguments_dict,
             )
 
-            results.append(chunk_data.model_dump(exclude_unset=True))
-            extra_vars["state"]["tool_call"] += 1
+            results.append(parsed_call)
 
     except Exception as e:
         logger.error(f"Error parsing tool text: {e}")

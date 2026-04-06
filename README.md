@@ -116,7 +116,7 @@ completion = client.chat.completions.create(
 print(completion)
 ```
 
-See [`src/tests/test_openai.py`](tests/test_openai.py) and [`src/tests/test_openai_server.py`](./src/tests/test_openai_server.py) for more complete examples.
+See [`tests/live/test_openai.py`](tests/live/test_openai.py) and [`src/tests/test_openai_server.py`](./src/tests/test_openai_server.py) for more complete examples.
 
 ## Anthropic Compatible Server
 Gallama also exposes an Anthropic-compatible Messages endpoint.
@@ -148,7 +148,7 @@ response = client.messages.create(
 print(response.content)
 ```
 
-See [`src/tests/test_anthropic.py`](tests/test_anthropic.py) for a more complete Anthropic client example suite.
+See [`tests/live/test_anthropic.py`](tests/live/test_anthropic.py) for a more complete Anthropic client example suite.
 
 ### Claude Code
 You can also point Claude Code at a local Gallama server by overriding the Anthropic base URL and auth token:
@@ -430,7 +430,7 @@ If your MCP server requires auth, include `authorization_token` or `headers` on 
 
 If you are targeting Anthropic's hosted API instead of Gallama, use Anthropic's MCP connector docs and beta versioning instead of this local Gallama example.
 
-See [`src/tests/test_openai.py`](tests/test_openai.py), [`src/tests/test_anthropic.py`](tests/test_anthropic.py), and [`src/tests/test_responses.py`](tests/test_responses.py) for live end-to-end MCP examples against a dummy MCP server.
+See [`tests/live/test_openai.py`](tests/live/test_openai.py), [`tests/live/test_anthropic.py`](tests/live/test_anthropic.py), and [`tests/live/test_responses.py`](tests/live/test_responses.py) for live end-to-end MCP examples against a dummy MCP server.
 
 ## Function Calling
 Supports function calling for all models, mimicking OpenAI's behavior for tool_choice="auto" where if tool usage is not applicable, model will generate normal response.

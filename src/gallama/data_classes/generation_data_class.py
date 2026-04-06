@@ -16,6 +16,7 @@ class GenerationStats(BaseModel):
 
     # use Anthropic stop reason here as it cover more scenario than OpenAI
     stop_reason: Optional[AnthropicStopReason] = Field(default="end_turn", description="Anthropic stop reason")
+    stop_sequence: Optional[str] = Field(default=None, description="Matched stop sequence when generation ends on one")
 
     @property
     def total_tokens_count(self) -> int:
@@ -225,4 +226,3 @@ class QueueContext:
 
     def get_queue(self) -> GenQueue | None:
         return self.gen_queue
-

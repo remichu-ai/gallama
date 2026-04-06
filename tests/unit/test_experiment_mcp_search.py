@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 MODULE_PATH = os.path.join(ROOT_DIR, "examples", "mcp", "server.py")
 MODULE_SPEC = importlib.util.spec_from_file_location("examples_mcp_server_test_module", MODULE_PATH)
 MCP_SERVER_MODULE = importlib.util.module_from_spec(MODULE_SPEC)

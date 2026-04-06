@@ -5,7 +5,7 @@ import os
 import sys
 import types
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 for path in (ROOT_DIR, SRC_DIR):
     if path not in sys.path:

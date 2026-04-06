@@ -8,6 +8,8 @@ from pydantic.json import pydantic_encoder
 
 from ..data_classes.data_class import (
     AnthropicMessagesResponse,
+    AnthropicMCPToolResultBlock,
+    AnthropicMCPToolUseBlock,
     AnthropicStopReason,
     AnthropicTextBlock,
     AnthropicThinkingBlock,
@@ -23,6 +25,7 @@ from ..data_classes.data_class import (
 from ..data_classes.responses_api import (
     ResponseConversation,
     ResponseFunctionCallItem,
+    ResponseMCPCallItem,
     ResponseOutputMessage,
     ResponseOutputText,
     ResponseReasoningItem,
@@ -362,17 +365,113 @@ class AnthropicFormatter(BaseAPIFormatter):
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         finish_reason: AnthropicStopReason = "end_turn",
+        stop_sequence: Optional[str] = None,
     ) -> List[dict]:
         stop_reason = "tool_use" if self._current_api_tag == "tool_calls" else finish_reason
         delta = {
             "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "delta": {"stop_reason": stop_reason, "stop_sequence": stop_sequence},
             "usage": {"output_tokens": output_tokens or 0},
         }
         return [
             {"event": "message_delta", "data": json.dumps(delta)},
             {"event": "message_stop", "data": json.dumps({"type": "message_stop"})},
         ]
+
+    def append_content_blocks(self, blocks: List[Any]) -> List[dict]:
+        events: List[dict] = []
+
+        for block in blocks:
+            index = self._current_block_index
+            serialized_block = (
+                block.model_dump(exclude_none=True, by_alias=True)
+                if hasattr(block, "model_dump")
+                else dict(block)
+            )
+            events.append(
+                {
+                    "event": "content_block_start",
+                    "data": json.dumps(
+                        {
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": serialized_block,
+                        }
+                    ),
+                }
+            )
+            events.append(
+                {
+                    "event": "content_block_stop",
+                    "data": json.dumps({"type": "content_block_stop", "index": index}),
+                }
+            )
+            self._current_block_index += 1
+
+        return events
+
+    def append_mcp_tool_use_block(
+        self,
+        *,
+        call_id: str,
+        name: str,
+        server_name: str,
+        arguments: Dict[str, Any],
+    ) -> List[dict]:
+        index = self._current_block_index
+        events = [
+            {
+                "event": "content_block_start",
+                "data": json.dumps(
+                    {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "mcp_tool_use",
+                            "id": call_id,
+                            "name": name,
+                            "server_name": server_name,
+                        },
+                    }
+                ),
+            },
+            {
+                "event": "content_block_delta",
+                "data": json.dumps(
+                    {
+                        "type": "content_block_delta",
+                        "index": index,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": json.dumps(arguments, ensure_ascii=False),
+                        },
+                    }
+                ),
+            },
+            {
+                "event": "content_block_stop",
+                "data": json.dumps({"type": "content_block_stop", "index": index}),
+            },
+        ]
+        self._current_block_index += 1
+        return events
+
+    def append_mcp_tool_result_block(
+        self,
+        *,
+        tool_use_id: str,
+        output_text: Optional[str],
+        is_error: bool,
+    ) -> List[dict]:
+        return self.append_content_blocks(
+            [
+                AnthropicMCPToolResultBlock(
+                    tool_use_id=tool_use_id,
+                    is_error=is_error,
+                    content=[AnthropicTextBlock(text=output_text or "")],
+                )
+            ]
+        )
 
     def non_stream_response(
         self,
@@ -381,6 +480,7 @@ class AnthropicFormatter(BaseAPIFormatter):
         output_tokens: int,
         total_tokens: int,
         finish_reason: str = "end_turn",
+        stop_sequence: Optional[str] = None,
     ):
         content_blocks = []
         for block in parsed_blocks:
@@ -409,6 +509,7 @@ class AnthropicFormatter(BaseAPIFormatter):
             model=self.model_name,
             content=content_blocks,
             stop_reason=finish_reason,
+            stop_sequence=stop_sequence,
             usage=AnthropicUsage(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -430,6 +531,7 @@ class ResponsesFormatter(BaseAPIFormatter):
         self._output_items: List[Any] = []
         self._output_index = 0
         self._current_output_start_index = 0
+        self._pending_mcp_calls: Dict[str, tuple[int, ResponseMCPCallItem]] = {}
 
     def create_unique_id(self):
         return "resp_" + str(uuid.uuid4().hex)
@@ -563,6 +665,93 @@ class ResponsesFormatter(BaseAPIFormatter):
             self._output_index += 1
 
         return events
+
+    def append_mcp_call_started(
+        self,
+        *,
+        call_id: str,
+        arguments: str,
+        name: str,
+        server_label: str,
+        approval_request_id: Optional[str] = None,
+    ) -> List[dict]:
+        output_index = self._output_index
+        item = ResponseMCPCallItem(
+            id=call_id,
+            approval_request_id=approval_request_id,
+            arguments=arguments,
+            name=name,
+            server_label=server_label,
+            status="in_progress",
+        )
+        self._pending_mcp_calls[call_id] = (output_index, item)
+        self._output_items.append(item)
+        self._output_index += 1
+
+        return [
+            self._event(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": item,
+                },
+            ),
+            self._event(
+                "response.mcp_call_arguments.done",
+                {
+                    "type": "response.mcp_call_arguments.done",
+                    "response_id": self.unique_id,
+                    "item_id": item.id,
+                    "output_index": output_index,
+                    "arguments": arguments,
+                },
+            ),
+            self._event(
+                "response.mcp_call.in_progress",
+                {
+                    "type": "response.mcp_call.in_progress",
+                    "item_id": item.id,
+                    "output_index": output_index,
+                },
+            ),
+        ]
+
+    def append_mcp_call_completed(
+        self,
+        *,
+        call_id: str,
+        output: Optional[str],
+        error: Optional[Any],
+    ) -> List[dict]:
+        pending = self._pending_mcp_calls.pop(call_id, None)
+        if pending is None:
+            return []
+
+        output_index, item = pending
+        item.output = output
+        item.error = error
+        item.status = "failed" if error else "completed"
+
+        completion_event = "response.mcp_call.failed" if error else "response.mcp_call.completed"
+        return [
+            self._event(
+                completion_event,
+                {
+                    "type": completion_event,
+                    "item_id": item.id,
+                    "output_index": output_index,
+                },
+            ),
+            self._event(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": item,
+                },
+            ),
+        ]
 
     def stream_start(self) -> List[dict]:
         response = self._response_payload(status="in_progress", output=[])

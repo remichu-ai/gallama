@@ -37,6 +37,14 @@ from gallama.utils.utils import get_image
 
 
 class ModelLlamaCppServer(ModelInterface):
+    DEFAULT_MULTIMODAL_MARKER = "<__media__>"
+
+    @classmethod
+    def apply_backend_defaults(cls, backend_extra_args: Dict[Any, Any] | None) -> Dict[Any, Any]:
+        resolved = dict(backend_extra_args or {})
+        resolved.setdefault("multimodal_marker", cls.DEFAULT_MULTIMODAL_MARKER)
+        return resolved
+
     def __init__(self, model_spec: ModelSpec):
         self.server_process: Optional[subprocess.Popen] = None
         self.server_port: Optional[int] = None
@@ -58,6 +66,7 @@ class ModelLlamaCppServer(ModelInterface):
         return False
 
     def load_model(self):
+        self.backend_extra_args = self.apply_backend_defaults(self.backend_extra_args)
         self.auto_start = self.backend_extra_args.get("auto_start", False)
         self.start_up_cmd = self.backend_extra_args.get("start_up_cmd")
         self.start_up_extra = self.backend_extra_args.get("start_up_extra")
@@ -625,11 +634,13 @@ class ModelLlamaCppServer(ModelInterface):
         if json_schema and prefix_strings:
             logger.info("Ignoring prefix_strings because json_schema was provided")
 
+        prefix_to_return = ""
         if json_schema is None and prefix_strings:
             if isinstance(prefix_strings, list):
                 prefix_strings = prefix_strings[0] if prefix_strings else None
             if prefix_strings:
-                prompt += prefix_strings
+                prefix_to_return = prefix_strings
+                prompt += prefix_to_return
 
         multimodal_data, has_audio = self._extract_multimodal_payloads(messages)
         if has_audio:
@@ -653,6 +664,11 @@ class ModelLlamaCppServer(ModelInterface):
         for g_queue in gen_queue_list:
             await g_queue.get_queue().put(gen_start)
 
+        if prefix_to_return:
+            full_prefix_chunk = GenText(content=prefix_to_return, text_type=gen_text_type)
+            for g_queue in gen_queue_list:
+                await g_queue.get_queue().put(full_prefix_chunk)
+
         payload = self._build_completion_payload(
             prompt_tokens=prompt_tokens,
             prompt_text=prompt,
@@ -665,7 +681,7 @@ class ModelLlamaCppServer(ModelInterface):
             vision_token=vision_token,
         )
 
-        full_completion = ""
+        full_completion = prefix_to_return
         final_chunk: Dict[str, Any] = {}
         output_tokens_count = 0
         aborted = False
@@ -719,7 +735,16 @@ class ModelLlamaCppServer(ModelInterface):
                             final_chunk = chunk
                             break
             except httpx.HTTPError as exc:
-                raise HTTPException(status_code=502, detail=f"Failed to reach llama.cpp server: {exc}") from exc
+                disconnected = request is not None and await is_request_disconnected(request)
+                stopped = stop_event is not None and stop_event.is_set()
+                if disconnected or stopped:
+                    aborted = True
+                    logger.info(
+                        "Ignoring llama.cpp streaming error after client stop/disconnect: %s",
+                        exc,
+                    )
+                else:
+                    raise HTTPException(status_code=502, detail=f"Failed to reach llama.cpp server: {exc}") from exc
 
         stop_word_used = ""
         if return_stop_word:

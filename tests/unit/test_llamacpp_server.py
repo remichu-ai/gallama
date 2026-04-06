@@ -68,6 +68,12 @@ def test_ik_llama_applies_default_multimodal_marker():
     assert resolved["multimodal_marker"] == "<__media__>"
 
 
+def test_llama_cpp_server_applies_default_multimodal_marker():
+    resolved = ModelLlamaCppServer.apply_backend_defaults({})
+
+    assert resolved["multimodal_marker"] == "<__media__>"
+
+
 def test_ik_llama_preserves_explicit_multimodal_marker_override():
     resolved = ModelIKLlama.apply_backend_defaults({"multimodal_marker": "<custom>"})
 

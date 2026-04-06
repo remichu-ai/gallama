@@ -2,7 +2,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 
-_MODULE_PATH = Path(__file__).resolve().parents[1] / "gallama" / "backend" / "llm" / "json_schema_utils.py"
+_MODULE_PATH = Path(__file__).resolve().parents[2] / "src" / "gallama" / "backend" / "llm" / "json_schema_utils.py"
 _SPEC = spec_from_file_location("json_schema_utils", _MODULE_PATH)
 _MODULE = module_from_spec(_SPEC)
 assert _SPEC.loader is not None

@@ -49,6 +49,10 @@ class TagDefinition(BaseModel):
         description="Wait until tag complete or switch to another tag",
         default=False
     )
+    allowed_next_tag: Optional[List[Union[str, "TagDefinition"]]] = Field(
+        description="Optional list of allowed continuations after optional whitespace. String entries are matched as explicit literal prefixes. TagDefinition entries are matched using their configured start_marker. If omitted, any continuation is allowed.",
+        default=None
+    )
 
     prompt_init: Optional[Callable[[Any], str]] = Field(
         description="optional function to get the string to init the prompt, currently used for tool prompting",
@@ -442,6 +446,13 @@ class OneTool(BaseModel):
     """The format to use to call one tool"""
     name: str = Field(description='name of the function to use')
     arguments: str
+
+
+class ParsedToolCall(BaseModel):
+    """Semantic tool call emitted by model-specific parsers before transport formatting."""
+
+    name: str
+    arguments: Any = Field(default_factory=dict)
 
 
 class ToolCallResponse(BaseModel):
@@ -1210,6 +1221,10 @@ class AnthropicMessagesRequest(BaseModel):
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
     mcp_servers: Optional[List[AnthropicMCPServer]] = None
+    thinking_token_budget: Optional[int] = None
+    reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = None
+    use_thinking: Optional[Literal[True, False, "Skip"]] = None
+    return_thinking: Optional[Literal[False, True, "separate"]] = None
 
     @staticmethod
     def _is_claude_code_billing_header_text(text: str) -> bool:
@@ -1425,6 +1440,9 @@ class AnthropicMessagesRequest(BaseModel):
             }
             chat_reasoning_effort = effort_map[self.output_config.effort]
 
+        if "reasoning_effort" in self.model_fields_set:
+            chat_reasoning_effort = self.reasoning_effort
+
         # 5. Build and return the final ChatMLQuery object
         query_kwargs = {
             "model": self.model,
@@ -1438,10 +1456,19 @@ class AnthropicMessagesRequest(BaseModel):
             "stop_words": self.stop_sequences,
             "response_format": chat_response_format,
             "reasoning_effort": chat_reasoning_effort,
+            "thinking_token_budget": self.thinking_token_budget,
+            "use_thinking": self.use_thinking,
+            "return_thinking": self.return_thinking,
         }
 
-        # Filter out None values so Pydantic applies its own defaults
-        filtered_kwargs = {k: v for k, v in query_kwargs.items() if v is not None}
+        # Filter out None values so Pydantic applies its own defaults, except when
+        # an explicit null is used to disable reasoning on Anthropic-compatible
+        # requests routed through extra_body.
+        filtered_kwargs = {
+            k: v
+            for k, v in query_kwargs.items()
+            if v is not None or (k == "reasoning_effort" and "reasoning_effort" in self.model_fields_set)
+        }
 
         logger.debug(f"converted to ChatMLQuery: {filtered_kwargs}")
 

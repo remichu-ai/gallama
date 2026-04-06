@@ -12,7 +12,7 @@ Usage:
     #   run_all()
     #
     # Or run directly after setting the two env vars:
-    #   LOCAL_BASE_URL=http://localhost:8000 LOCAL_API_KEY=test python test_endpoint.py
+    #   LOCAL_BASE_URL=http://localhost:8000 LOCAL_API_KEY=test python tests/live/test_anthropic.py
 """
 
 from __future__ import annotations
@@ -20,14 +20,26 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 import traceback
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import anthropic
-from dummy_mcp_server import (
+SCRIPT_DIR = Path(__file__).resolve().parent
+TESTS_DIR = SCRIPT_DIR.parent
+ROOT_DIR = TESTS_DIR.parent
+SRC_DIR = ROOT_DIR / "src"
+
+for path in (ROOT_DIR, SRC_DIR, TESTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from helpers.dummy_mcp_server import (
     TEST_TOKEN,
     TEST_USER_PROMPT,
     build_anthropic_mcp_server,
@@ -38,6 +50,7 @@ from dummy_mcp_server import (
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 MODEL = os.getenv("TEST_MODEL", "claude-sonnet-4-20250514")
 THINKING_BUDGET_TOKENS = int(os.getenv("TEST_THINKING_BUDGET", "1024"))
 COMMON_SYSTEM_PROMPT = os.getenv(
@@ -59,7 +72,7 @@ VISION_JSON_SYSTEM_PROMPT = (
 
 
 # Path to a local cat image used for vision tests
-LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", "cat1.jpg")
+LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", str(TESTS_DIR / "assets" / "cat1.jpg"))
 
 # Simple tools reused across tests
 WEATHER_TOOL: dict[str, Any] = {
@@ -354,6 +367,12 @@ def test_max_tokens(client: anthropic.Anthropic):
                     "content": "Write a very long essay about the history of the universe.",
                 }
             ],
+            extra_body={
+                # Force visible-output truncation semantics for reasoning-capable models.
+                "use_thinking": "Skip",
+                "reasoning_effort": None,
+                "thinking_token_budget": 0,
+            },
         )
         assert resp.stop_reason == "max_tokens", (
             f"Expected max_tokens, got: {resp.stop_reason}"

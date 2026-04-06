@@ -3,7 +3,7 @@ import sys
 import types
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 for path in (ROOT_DIR, SRC_DIR):
     if path not in sys.path:
@@ -100,3 +100,28 @@ def test_anthropic_messages_request_accepts_hosted_tools_and_skips_local_convers
     query = request.get_ChatMLQuery()
 
     assert query.tools is None
+
+
+def test_anthropic_messages_request_preserves_reasoning_overrides_from_extra_body():
+    request = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "minimax",
+            "max_tokens": 5,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Write a very long essay about the history of the universe.",
+                }
+            ],
+            "reasoning_effort": None,
+            "thinking_token_budget": 0,
+            "use_thinking": "Skip",
+        }
+    )
+
+    query = request.get_ChatMLQuery()
+
+    assert "reasoning_effort" in request.model_fields_set
+    assert query.reasoning_effort is None
+    assert query.thinking_token_budget == 0
+    assert query.use_thinking == "Skip"

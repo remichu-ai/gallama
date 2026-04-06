@@ -776,7 +776,6 @@ class ModelExllamaV3(ModelInterface):
                         # logger.info(f"eos result {result}")
                         # If the stop word occurred is from the stop_words and not LLM result token -> include in result
 
-                        use_stop_words = False
                         stop_word_used = ""
                         if stop_words and result.get("held") and result.get("held").get("text"):
                             ending_string = result["held"]["text"].rstrip()
@@ -791,8 +790,7 @@ class ModelExllamaV3(ModelInterface):
                                     chunk = GenText(content=stop_word_used, text_type=gen_type_str)
                                     for g_queue in gen_queue_list:
                                         g_queue.put_nowait(chunk)
-
-                                    use_stop_words = True
+                        use_stop_words = bool(stop_word_used)
 
                         # get stop reason
                         stop_reason = self.get_stop_reason(result, use_stop_words)
@@ -806,7 +804,8 @@ class ModelExllamaV3(ModelInterface):
                                 time_generate=result["time_generate"],
                                 cached_pages=result["cached_pages"],
                                 cached_tokens=result["cached_tokens"],
-                                stop_reason=stop_reason
+                                stop_reason=stop_reason,
+                                stop_sequence=stop_word_used or None,
                             )
 
                             for g_queue in gen_queue_list:

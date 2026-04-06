@@ -1,11 +1,42 @@
-from gallama.logger import logger
+import asyncio
 import json
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
-from gallama.data_classes import ModelInstanceInfo
-from gallama.utils.utils import decode_content_encoded_body
-from typing import Union, Optional
+from typing import Optional, Union
+
 import httpx
+from fastapi import HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
+
+from gallama.data_classes import ModelInstanceInfo
+from gallama.logger import logger
+from gallama.utils.utils import decode_content_encoded_body
+
+
+_forward_http_client: httpx.AsyncClient | None = None
+_forward_http_client_lock = asyncio.Lock()
+
+
+async def get_forward_http_client() -> httpx.AsyncClient:
+    global _forward_http_client
+
+    if _forward_http_client is not None:
+        return _forward_http_client
+
+    async with _forward_http_client_lock:
+        if _forward_http_client is None:
+            _forward_http_client = httpx.AsyncClient(timeout=None)
+
+    return _forward_http_client
+
+
+async def close_forward_http_client() -> None:
+    global _forward_http_client
+
+    client = _forward_http_client
+    if client is None:
+        return
+
+    _forward_http_client = None
+    await client.aclose()
 
 
 def create_options_response(headers: dict) -> Response:
@@ -22,7 +53,8 @@ async def forward_request(
         request: Request,
         instance: ModelInstanceInfo,
         modified_body: Optional[str] = None,
-        modified_headers: Optional[dict] = None
+        modified_headers: Optional[dict] = None,
+        parsed_body: Optional[Union[dict, str, bytes]] = None,
 ) -> Union[Response, StreamingResponse]:
     """
     Forward a request to a specific instance while handling optional modifications to the body and headers.
@@ -44,6 +76,8 @@ async def forward_request(
 
             request.body = get_body
 
+        is_streaming = False
+
         # Handle the body based on content type and modifications
         if modified_body is not None:
             body = modified_body
@@ -59,16 +93,23 @@ async def forward_request(
                 body = request._body
 
             if 'application/json' in content_type:
-                # For JSON, ensure we preserve the exact body
-                if body:
+                if not body:
+                    body = b'{}'
+                    parsed_body = {}
+                elif isinstance(parsed_body, dict):
+                    is_streaming = bool(parsed_body.get("stream", False))
+                elif parsed_body is not None:
+                    logger.error("Invalid JSON in request body")
+                    raise HTTPException(status_code=400, detail="Invalid JSON")
+                else:
                     try:
-                        # Validate it's proper JSON but use original bytes
-                        json.loads(body.decode('utf-8'))
+                        parsed_body = json.loads(body.decode('utf-8'))
                     except json.JSONDecodeError as e:
                         logger.error(f"Invalid JSON in request body: {e}")
                         raise HTTPException(status_code=400, detail="Invalid JSON")
-                else:
-                    body = b'{}'
+
+                    if isinstance(parsed_body, dict):
+                        is_streaming = bool(parsed_body.get("stream", False))
 
         # Update Content-Length header to match actual body length
         if body:
@@ -92,20 +133,10 @@ async def forward_request(
         if request.method == "OPTIONS":
             return create_options_response(headers)
 
-        # Check if it's a streaming request
-        is_streaming = False
-        if isinstance(body, bytes):
-            try:
-                body_json = json.loads(body.decode('utf-8'))
-                is_streaming = body_json.get('stream', False)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
-
         if is_streaming:
             logger.info("Handling as streaming request")
 
-            # 1. Prepare the client and request with NO TIMEOUT
-            client = httpx.AsyncClient(timeout=None)
+            client = await get_forward_http_client()
             req = client.build_request(
                 method=request.method,
                 url=url,
@@ -114,41 +145,31 @@ async def forward_request(
             )
 
             try:
-                # 2. Send the request (this will now wait patiently for the LLM's first token)
                 response = await client.send(req, stream=True)
             except Exception as e:
-                # Clean up the client if the server completely drops the connection
-                await client.aclose()
                 logger.error(f"Failed to connect or receive headers from target: {e}")
                 raise HTTPException(status_code=502, detail="Bad Gateway: Target server failed to respond.")
 
-            # 3. Catch errors immediately to prevent FastAPI from returning a 200 OK
             if response.status_code >= 400:
                 await response.aread()
                 error_detail = response.text
                 await response.aclose()
-                await client.aclose()
 
                 logger.error(f"Backend returned {response.status_code}: {error_detail}")
 
-                # Raise the exact status code to the client
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"Target server error: {error_detail}"
                 )
 
-            # 4. If successful, set up the generator
             async def stream_generator():
                 try:
                     async for chunk in response.aiter_bytes():
                         if chunk:
                             yield chunk
                 finally:
-                    # Ensure connections are cleanly closed when streaming ends or disconnects
                     await response.aclose()
-                    await client.aclose()
 
-            # 5. Return StreamingResponse with the correct HTTP status code
             return StreamingResponse(
                 stream_generator(),
                 status_code=response.status_code,
@@ -157,23 +178,22 @@ async def forward_request(
 
         else:
             logger.info("Handling as non-streaming request")
-            async with httpx.AsyncClient() as client:
-                try:
-                    response = await client.request(
-                        method=request.method,
-                        url=url,
-                        headers=headers,
-                        content=body,
-                        timeout=None
-                    )
-                    return Response(
-                        content=response.content,
-                        status_code=response.status_code,
-                        headers=dict(response.headers)
-                    )
-                except httpx.RequestError as exc:
-                    logger.error(f"Request error: {exc}")
-                    raise HTTPException(status_code=500, detail=str(exc))
+            client = await get_forward_http_client()
+            try:
+                response = await client.request(
+                    method=request.method,
+                    url=url,
+                    headers=headers,
+                    content=body,
+                )
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers)
+                )
+            except httpx.RequestError as exc:
+                logger.error(f"Request error: {exc}")
+                raise HTTPException(status_code=500, detail=str(exc))
 
     except HTTPException:
         # Re-raise HTTPExceptions so FastAPI handles them correctly instead of wrapping them in a 500

@@ -2,12 +2,12 @@
 Smoke test suite for a local OpenAI-compatible Responses API endpoint.
 
 Usage:
-    LOCAL_BASE_URL=http://localhost:8000/v1 LOCAL_API_KEY=test python src/tests/test_responses.py
+    LOCAL_BASE_URL=http://localhost:8000/v1 LOCAL_API_KEY=test python tests/live/test_responses.py
 
 Optional environment variables:
     TEST_MODEL=my-model
     TEST_LOG_FILE=test_responses_api.json
-    TEST_IMAGE_PATH=cat1.jpg
+    TEST_IMAGE_PATH=tests/assets/cat1.jpg
 """
 
 from __future__ import annotations
@@ -15,23 +15,34 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 import traceback
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import openai
-from dummy_mcp_server import (
+SCRIPT_DIR = Path(__file__).resolve().parent
+TESTS_DIR = SCRIPT_DIR.parent
+ROOT_DIR = TESTS_DIR.parent
+SRC_DIR = ROOT_DIR / "src"
+
+for path in (ROOT_DIR, SRC_DIR, TESTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from helpers.dummy_mcp_server import (
     TEST_TOKEN,
     TEST_USER_PROMPT,
     build_responses_mcp_tool,
     run_dummy_mcp_server,
 )
 
-
 MODEL = os.getenv("TEST_MODEL", "gpt-4o")
-LOG_FILE = os.getenv("TEST_LOG_FILE", "test_responses_api.json")
+LOG_FILE = os.getenv("TEST_LOG_FILE", str(SCRIPT_DIR / "test_responses_api.json"))
 COMMON_INSTRUCTIONS = os.getenv(
     "TEST_SYSTEM_PROMPT",
     "You are a helpful assistant. Follow the user's instructions exactly.",
@@ -42,7 +53,7 @@ PIRATE_INSTRUCTIONS = (
 JSON_SCHEMA_INSTRUCTIONS = (
     f"{COMMON_INSTRUCTIONS}\n\nReturn only JSON that matches the requested schema."
 )
-LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", "cat1.jpg")
+LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", str(TESTS_DIR / "assets" / "cat1.jpg"))
 
 WEATHER_TOOL: dict[str, Any] = {
     "type": "function",

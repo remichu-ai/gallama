@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 MODULE_PATH = os.path.join(SRC_DIR, "gallama", "server_engine", "request_routing.py")
 MODULE_SPEC = importlib.util.spec_from_file_location("request_routing_test_module", MODULE_PATH)

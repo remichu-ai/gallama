@@ -2,7 +2,7 @@ import importlib.util
 import os
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 MODULE_PATH = os.path.join(SRC_DIR, "gallama", "server_engine", "model_capabilities.py")
 MODULE_SPEC = importlib.util.spec_from_file_location("model_capabilities_test_module", MODULE_PATH)

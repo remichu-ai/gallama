@@ -3,7 +3,7 @@ import importlib.util
 import os
 
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 MODULE_PATH = os.path.join(ROOT_DIR, "src", "gallama", "utils", "request_disconnect.py")
 MODULE_SPEC = importlib.util.spec_from_file_location("request_disconnect_test_module", MODULE_PATH)
 REQUEST_DISCONNECT_MODULE = importlib.util.module_from_spec(MODULE_SPEC)
