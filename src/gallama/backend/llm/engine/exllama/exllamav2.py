@@ -1,7 +1,7 @@
 from gallama.backend.llm.engine.base import (
     ModelInterface,
 )
-from typing import Optional, Dict, List, Union
+from typing import Any, Optional, Dict, List, Union
 import torch
 import asyncio
 from fastapi import Request                 # for type hint
@@ -350,7 +350,7 @@ class ModelExllama(ModelInterface):
             self,
             cache: Union[ExLlamaV2Cache, ExLlamaV2Cache_Q4],
             generator: ExLlamaV2DynamicGeneratorAsync,
-            lm_enforcer_tokenizer_data: TokenEnforcerTokenizerData,
+            lm_enforcer_tokenizer_data: Any = None,
         ):
             self.cache = cache
             self.generator = generator
@@ -363,7 +363,11 @@ class ModelExllama(ModelInterface):
         this will be run in the first text generation to ensure that generator is initialized
         """
 
-        lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data(self.tokenizer)
+        lm_enforcer_tokenizer_data = (
+            build_token_enforcer_tokenizer_data(self.tokenizer)
+            if build_token_enforcer_tokenizer_data
+            else None
+        )
 
         generator = ExLlamaV2DynamicGeneratorAsync(
             model=self.model,
@@ -521,7 +525,18 @@ class ModelExllama(ModelInterface):
 
     def _get_format_enforcer_filter(self, formatter):
         """Determine appropriate format enforcer filter"""
-        if isinstance(formatter, (TokenEnforcerTokenizerData, JsonSchemaParser)):
+        lmfe_formatter_types = tuple(
+            formatter_type
+            for formatter_type in (TokenEnforcerTokenizerData, JsonSchemaParser)
+            if formatter_type is not None
+        )
+
+        if lmfe_formatter_types and isinstance(formatter, lmfe_formatter_types):
+            if not build_token_enforcer_tokenizer_data:
+                raise RuntimeError(
+                    "LM Format Enforcer support for backend 'exllama' is not installed. "
+                    "Install 'gallama[exl2]' or another extra that includes lm-format-enforcer."
+                )
             # Logic for LM format enforcer
             exllama_version = version('exllamav2')
             return [
@@ -543,7 +558,7 @@ class ModelExllama(ModelInterface):
 
     def _create_generation_filters(
         self,
-        formatter: Optional[Union[TokenEnforcerTokenizerData, FormatterBuilder]] = None,
+        formatter: Any = None,
         prefix_strings: Optional[Union[str, List[str]]] = None
     ) -> List:
         """Create filters for token generation"""
@@ -569,7 +584,7 @@ class ModelExllama(ModelInterface):
         gen_type: Union[str, GenStart] = "text",  # the generated result will be stored in this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: Optional[Union[FormatterBuilder, TokenEnforcerTokenizerData]] = None,
+        formatter: Any = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,

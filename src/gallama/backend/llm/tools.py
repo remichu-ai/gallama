@@ -1,6 +1,5 @@
 from pydantic import BaseModel, Field, ValidationError, create_model
 from typing import Literal, Type, Union, Optional, List, Any, Dict
-from formatron.schemas.pydantic import ClassSchema, Schema
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from ...data_classes import ToolSpec
@@ -9,13 +8,23 @@ from datamodel_code_generator import generate, InputFileType, DataModelType
 from ...logger.logger import logger
 import inspect
 
+try:
+    from formatron.schemas.pydantic import ClassSchema, Schema
+except ImportError:
+    ClassSchema = None
+    Schema = None
+
 
 class Tools:
     def __init__(self, prompt_eng, tools: [List[ToolSpec]], tool_choice):
         self.prompt_eng = prompt_eng
         self.tools = tools
         self.tools_list = self.create_pydantic_model_from_tools(self.tools, mode="pydantic_v2")
-        self.tools_list_formatron = self.create_pydantic_model_from_tools(self.tools, mode="formatron")
+        self.tools_list_formatron = (
+            self.create_pydantic_model_from_tools(self.tools, mode="formatron")
+            if self.is_formatron_available()
+            else []
+        )
         self.tool_dict = {tool.schema()['title']: tool for tool in self.tools_list}
         self.tool_dict_formatron = {tool.schema()['title']: tool for tool in self.tools_list_formatron}
         self.answer_format = None
@@ -37,6 +46,18 @@ class Tools:
     @property
     def tool_name_list(self):
         return ", ".join(f'"{name}"' for name in self.tool_dict.keys())
+
+    @staticmethod
+    def is_formatron_available() -> bool:
+        return ClassSchema is not None
+
+    @staticmethod
+    def require_formatron() -> None:
+        if not Tools.is_formatron_available():
+            raise RuntimeError(
+                "Formatron-backed guided decoding is not installed. "
+                "Install 'gallama[guided-decoding-all]' or a backend extra that includes formatron."
+            )
 
     def tools_in_python_function_signatures(self, func_name: str | list[str] = None,
                                             return_as_dict: bool = False) -> str | dict:
@@ -226,7 +247,8 @@ class Tools:
         return model
 
     @staticmethod
-    def create_class_schema(function_info: dict) -> Type[ClassSchema]:
+    def create_class_schema(function_info: dict) -> Type[Any]:
+        Tools.require_formatron()
         parameters = function_info['parameters']
         properties = parameters.get('properties', {})
         required_properties = set(parameters.get('required', []))
@@ -469,9 +491,10 @@ def create_function_models_v2(functions: Dict[str, Type[BaseModel]]) -> List[Typ
     return function_model_list
 
 
-def create_function_models_formatron(functions: Dict[str, Type[ClassSchema]]) -> List[Type[ClassSchema]]:
+def create_function_models_formatron(functions: Dict[str, Type[Any]]) -> List[Type[Any]]:
     """Create a list of ClassSchema models for the function schemas passed in via OpenAI request call."""
-    function_model_list: List[Type[ClassSchema]] = []
+    Tools.require_formatron()
+    function_model_list: List[Type[Any]] = []
     for func_name, arg_model in functions.items():
         class Config:
             arbitrary_types_allowed = True
@@ -489,3 +512,14 @@ def create_function_models_formatron(functions: Dict[str, Type[ClassSchema]]) ->
 
         function_model_list.append(NewModel)
     return function_model_list
+
+
+def create_tool_calling_model_formatron(functions: Dict[str, Type[Any]]) -> Type[Any]:
+    """Create the outer tool-calling schema used by formatron."""
+    Tools.require_formatron()
+    tool_models = create_function_models_formatron(functions)
+
+    class ToolCallingFormatron(ClassSchema):
+        functions_calling: List[Union[tuple(tool_models)]] = Field(default_factory=list)
+
+    return ToolCallingFormatron

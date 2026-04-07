@@ -1,5 +1,5 @@
 from ..base import ModelInterface
-from typing import Optional, Dict, List, Union
+from typing import Any, Optional, Dict, List, Union
 from fastapi import Request                 # for type hint
 import time
 
@@ -54,7 +54,11 @@ class ModelLlamaCpp(ModelInterface):
         self.model, self.tokenizer = self.load_model()
 
         # initialize lmfe tokenizer data
-        self.lm_enforcer_tokenizer_data = build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+        self.lm_enforcer_tokenizer_data = (
+            build_token_enforcer_tokenizer_data_llama_cpp(self.model)
+            if build_token_enforcer_tokenizer_data_llama_cpp
+            else None
+        )
 
 
     def load_model(self):
@@ -172,7 +176,7 @@ class ModelLlamaCpp(ModelInterface):
         gen_type: Union[str, GenStart] = "text",    # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData = None,
+        formatter: Any = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -221,9 +225,14 @@ class ModelLlamaCpp(ModelInterface):
         # format enforcer
         logits_processors = None
         if formatter:
+            if not build_llamacpp_logits_processor or self.lm_enforcer_tokenizer_data is None:
+                raise RuntimeError(
+                    "Guided decoding for backend 'llama_cpp' requires lm-format-enforcer. "
+                    "Install 'gallama[llama-cpp]' or another extra that includes lm-format-enforcer."
+                )
             logits_processors = LogitsProcessorList([
                 build_llamacpp_logits_processor(
-                    llm=self.pipeline.lm_enforcer_tokenizer_data,
+                    llm=self.lm_enforcer_tokenizer_data,
                     character_level_parser=formatter,
                 )
             ])

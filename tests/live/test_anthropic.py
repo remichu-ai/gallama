@@ -53,6 +53,8 @@ from helpers.dummy_mcp_server import (
 
 MODEL = os.getenv("TEST_MODEL", "claude-sonnet-4-20250514")
 THINKING_BUDGET_TOKENS = int(os.getenv("TEST_THINKING_BUDGET", "1024"))
+ENABLE_REASONING_TESTS = os.getenv("ENABLE_REASONING_TESTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+ONLY_REASONING_TESTS = os.getenv("ONLY_REASONING_TESTS", "0").strip().lower() in {"1", "true", "yes", "on"}
 COMMON_SYSTEM_PROMPT = os.getenv(
     "TEST_SYSTEM_PROMPT",
     "You are a helpful assistant. Follow the user's instructions exactly.",
@@ -710,6 +712,9 @@ def test_streaming_tool_use(client: anthropic.Anthropic):
 def test_thinking(client: anthropic.Anthropic):
     """Extended thinking (thinking blocks in response)."""
     name = "Extended thinking"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         resp = client.messages.create(
             model=MODEL,
@@ -753,6 +758,9 @@ def test_thinking(client: anthropic.Anthropic):
 def test_streaming_thinking(client: anthropic.Anthropic):
     """Stream a response with extended thinking enabled."""
     name = "Streaming + thinking"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         saw_thinking = False
         saw_text = False
@@ -802,6 +810,9 @@ def test_streaming_thinking(client: anthropic.Anthropic):
 def test_thinking_with_tools(client: anthropic.Anthropic):
     """Extended thinking combined with tool use."""
     name = "Thinking + tool use"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         resp = client.messages.create(
             model=MODEL,
@@ -1355,6 +1366,18 @@ def run_all(client: anthropic.Anthropic):
     print(f"  Model: {MODEL}")
     print(f"  Base URL: {client.base_url}")
     print("=" * 60)
+
+    if ONLY_REASONING_TESTS:
+        _section("Extended Thinking")
+        test_thinking(client)
+        test_streaming_thinking(client)
+        test_thinking_with_tools(client)
+
+        print("\n" + "=" * 60)
+        total = _pass + _fail + _skip
+        print(f"  Results: {_pass} passed, {_fail} failed, {_skip} skipped / {total} total")
+        print("=" * 60 + "\n")
+        return _fail == 0
 
     _section("Basic Features")
     test_basic_message(client)

@@ -54,6 +54,8 @@ JSON_SCHEMA_INSTRUCTIONS = (
     f"{COMMON_INSTRUCTIONS}\n\nReturn only JSON that matches the requested schema."
 )
 LOCAL_IMAGE_PATH = os.getenv("TEST_IMAGE_PATH", str(TESTS_DIR / "assets" / "cat1.jpg"))
+ENABLE_REASONING_TESTS = os.getenv("ENABLE_REASONING_TESTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+ONLY_REASONING_TESTS = os.getenv("ONLY_REASONING_TESTS", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 WEATHER_TOOL: dict[str, Any] = {
     "type": "function",
@@ -351,6 +353,9 @@ def test_multi_turn(client: openai.OpenAI):
 
 def test_reasoning_output(client: openai.OpenAI):
     name = "Reasoning output"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     params = {
         "model": MODEL,
         "input": "What is 27 multiplied by 14? Answer with just the number.",
@@ -773,6 +778,20 @@ def run_all(client: openai.OpenAI):
     print(f"  Base URL: {client.base_url}")
     print(f"  Response log: {os.path.abspath(LOG_FILE)}")
     print("=" * 60)
+
+    if ONLY_REASONING_TESTS:
+        _section("Reasoning")
+        test_reasoning_output(client)
+
+        print("\n" + "=" * 60)
+        total = _pass + _fail + _skip
+        print(f"  Results: {_pass} passed, {_fail} failed, {_skip} skipped / {total} total")
+        print("=" * 60)
+
+        log_path = _save_log()
+        print(f"\n  All API responses saved to: {log_path}")
+        print("  (use this file to debug failures)\n")
+        return _fail == 0
 
     _section("Basic Features")
     test_basic_response(client)

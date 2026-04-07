@@ -1,11 +1,21 @@
 import json
-from typing import Literal, Dict, Union
-from formatron.schemas.pydantic import ClassSchema
-from lmformatenforcer import JsonSchemaParser, RegexParser
-from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+from typing import Any, Dict, Literal, Optional, Union
 from gallama.logger.logger import logger
 from pydantic import BaseModel
 from gallama.backend.llm.tools import Tools
+
+try:
+    from formatron.schemas.pydantic import ClassSchema
+except ImportError:
+    ClassSchema = None
+
+try:
+    from lmformatenforcer import JsonSchemaParser, RegexParser
+    from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
+except ImportError:
+    JsonSchemaParser = None
+    RegexParser = None
+    TokenEnforcerTokenizerData = None
 
 
 try:
@@ -41,6 +51,7 @@ FilterEngine = Literal["formatron", "lm-format-enforcer", "sglang_formatter"]
 
 FilterEngineOption = Union[FilterEngine, Literal["auto"]]
 
+
 class FormatEnforcer:
     """ this class will help to create filter for generation enforcement"""
 
@@ -48,8 +59,47 @@ class FormatEnforcer:
         pass
 
     @staticmethod
+    def is_formatron_available() -> bool:
+        return FormatterBuilder is not None and ClassSchema is not None
+
+    @staticmethod
+    def is_lmfe_available() -> bool:
+        return (
+            JsonSchemaParser is not None
+            and RegexParser is not None
+            and TokenEnforcerTokenizerData is not None
+        )
+
+    @staticmethod
+    def _dependency_error(backend: str, engine: FilterEngine) -> RuntimeError:
+        extra = {
+            "formatron": {
+                "exllama": "exl2",
+                "exllamav3": "exl3",
+                "transformers": "transformers-backend",
+            }.get(backend, "guided-decoding-all"),
+            "lm-format-enforcer": {
+                "exllama": "exl2",
+                "llama_cpp": "llama-cpp",
+                "llama_cpp_server": "llama-cpp",
+                "ik_llama": "guided-decoding-all",
+            }.get(backend, "guided-decoding-all"),
+        }.get(engine, "guided-decoding-all")
+        return RuntimeError(
+            f"Guided decoding engine '{engine}' for backend '{backend}' is not installed. "
+            f"Install the backend extra 'gallama[{extra}]' or a superset extra."
+        )
+
+    @staticmethod
+    def _require_engine(backend: str, engine: FilterEngine) -> None:
+        if engine == "formatron" and not FormatEnforcer.is_formatron_available():
+            raise FormatEnforcer._dependency_error(backend, engine)
+        if engine == "lm-format-enforcer" and not FormatEnforcer.is_lmfe_available():
+            raise FormatEnforcer._dependency_error(backend, engine)
+
+    @staticmethod
     def get_default_engine(
-        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["exllama", "exllamav3", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
     ) -> FilterEngine:
 
@@ -60,38 +110,49 @@ class FormatEnforcer:
 
         # formatron does not support llama cpp at the moment
         if backend in ["llama_cpp", "llama_cpp_server", "ik_llama"]:
-            return "lm_enforcer"
+            engine = "lm-format-enforcer"
         elif backend in ["exllamav3"]:
-            return "formatron"
-        elif backend in ["exllama", "transformers", "exllamav3"]:
+            engine = "formatron"
+        elif backend in ["exllama", "transformers"]:
             # use formatron if it is available if it is exllama
             if preference == "auto":
-                if FormatterBuilder:
-                    return "formatron"
+                if FormatEnforcer.is_formatron_available():
+                    engine = "formatron"
+                elif FormatEnforcer.is_lmfe_available():
+                    engine = "lm-format-enforcer"
                 else:
-                    return "lm_enforcer"
+                    raise RuntimeError(
+                        f"Backend '{backend}' requires a guided decoding engine, but neither "
+                        "'formatron' nor 'lm-format-enforcer' is installed."
+                    )
             else:
-                if preference == "formatron" and FormatterBuilder:
-                    return "formatron"
+                if preference == "formatron":
+                    engine = "formatron"
                 elif preference == "lm-format-enforcer":
-                    return "lm_enforcer"
+                    engine = "lm-format-enforcer"
                 else:
-                    raise "Invalid backend"
+                    raise ValueError("Invalid backend")
         elif backend == "sglang":
             return "sglang_formatter"
         elif backend == "vllm":
             return "auto"   # vllm require setting guided decoding upon server start
         else:
-            raise "Invalid backend"
+            raise ValueError("Invalid backend")
+
+        if preference != "auto" and backend == "exllamav3" and preference != "formatron":
+            raise RuntimeError("Backend 'exllamav3' only supports the 'formatron' guided decoding engine.")
+
+        FormatEnforcer._require_engine(backend, engine)
+        return engine
 
 
     def regex(
         self,
         regex_pattern: str,
         filter_engine: FilterEngine = None,
-        backend: Literal["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["exllama", "exllamav3", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
-    ) -> FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter | GuidedDecodingParams:
+    ) -> Any:
 
         # set the filter engine to use
         if not filter_engine:
@@ -102,11 +163,13 @@ class FormatEnforcer:
 
         if backend != "vllm":
             # create filter if engine is lm_enforcer
-            if filter_engine == "lm_enforcer":
+            if filter_engine == "lm-format-enforcer":
+                self._require_engine(backend, filter_engine)
                 return RegexParser(regex_pattern)
 
             # create filter if engine is formatron
             elif filter_engine == "formatron":
+                self._require_engine(backend, filter_engine)
                 f = FormatterBuilder()
                 _regex = f.regex(regex_pattern, capture_name='regex')
                 f.append_line(f"{_regex}")
@@ -117,9 +180,13 @@ class FormatEnforcer:
                 return SGLangFormatter(regex_pattern=regex_pattern)
 
             else:
-                raise "Invalid backend"
+                raise ValueError("Invalid backend")
 
         else:
+            if GuidedDecodingParams is None:
+                raise RuntimeError(
+                    "Backend 'vllm' guided decoding requires vllm to be installed."
+                )
             return GuidedDecodingParams(
                 regex=regex_pattern,
             )
@@ -128,11 +195,11 @@ class FormatEnforcer:
     def json(
         self,
         pydantic_model_lmfe: BaseModel,
-        pydantic_model_formatron: ClassSchema,
+        pydantic_model_formatron: Optional[Any] = None,
         filter_engine: FilterEngine = None,
-        backend: Literal["llama_cpp", "llama_cpp_server", "ik_llama", "exllama", "transformers", "sglang", "vllm"] = "exllama",
+        backend: Literal["llama_cpp", "llama_cpp_server", "ik_llama", "exllama", "exllamav3", "transformers", "sglang", "vllm"] = "exllama",
         preference: FilterEngineOption = "auto",
-    ) -> JsonSchemaParser | FormatterBuilder | SGLangFormatter | GuidedDecodingParams:
+    ) -> Any:
         """ this function will return the filters for format enforcer to generate json output based on Pyantic model"""
 
         # set the filter engine to use
@@ -141,12 +208,16 @@ class FormatEnforcer:
 
         # create filter if engine is lm_enforcer
         if backend != "vllm":
-            if filter_engine == "lm_enforcer":  # TODO currently formatron and nested pydantic model is having issue
+            if filter_engine == "lm-format-enforcer":  # TODO currently formatron and nested pydantic model is having issue
+                self._require_engine(backend, filter_engine)
                 json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model_lmfe.model_json_schema())
                 return JsonSchemaParser(json_schema)
 
             # create filter if engine is formatron
             elif filter_engine == "formatron":
+                self._require_engine(backend, filter_engine)
+                if pydantic_model_formatron is None:
+                    raise RuntimeError("Formatron model schema is required when using the 'formatron' engine.")
                 f = FormatterBuilder()
                 f.append_line(f"{f.json(pydantic_model_formatron, capture_name='json')}")
                 return f
@@ -155,10 +226,13 @@ class FormatEnforcer:
             elif filter_engine == "sglang_formatter":
                 return SGLangFormatter(json_schema=pydantic_model_lmfe.model_json_schema())
             else:
-                raise "Invalid backend"
+                raise ValueError("Invalid backend")
         else:
             logger.info(f"guided encoding filter_engine: {filter_engine}")
-            json_schema = Tools.replace_refs_with_definitions_v2(pydantic_model_lmfe.model_json_schema())
+            if GuidedDecodingParams is None:
+                raise RuntimeError(
+                    "Backend 'vllm' guided decoding requires vllm to be installed."
+                )
 
             return GuidedDecodingParams(
                 json=pydantic_model_lmfe.model_json_schema(),

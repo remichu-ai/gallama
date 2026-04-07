@@ -1,23 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import List, Union, Optional, Literal, Callable, Tuple
+from typing import Any, List, Union, Optional, Literal, Callable, Tuple
 import asyncio
 import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
 
 # logger
 from ....logger import logger
 
-# format enforcement
-from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
-from formatron.formatter import FormatterBuilder
-from formatron.schemas.pydantic import ClassSchema
 from ....backend.llm.format_enforcer import FormatEnforcer
 
 # thinking
 from ....backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
 
 # function calling
-from ....backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
+from ....backend.llm.tools import Tools, create_function_models_v2, create_tool_calling_model_formatron
 
 from ....utils.utils import get_token_length
 from ....api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
@@ -177,7 +174,7 @@ class ModelInterface(ABC):
         gen_type: Union[str, GenStart] = "text", # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
+        formatter: Any | SGLangFormatter = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -765,19 +762,22 @@ class ModelInterface(ABC):
             # create the pydantic schema to enforce generation
             tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
 
-            class ToolCalling_LMFE(ClassSchema):
+            class ToolCalling_LMFE(BaseModel):
                 """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
+                functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = Field(default_factory=list)
 
-            # create the pydantic schema to enforce generation for formatron which use ClassSchema
-            tool_combined_pydantic_formatron = create_function_models_formatron(tool_handler.tool_dict_formatron)
-            class ToolCalling_formatron(ClassSchema):
-                """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
+            filter_engine = self.formatter.get_default_engine(
+                backend=self.backend,
+                preference=query.guided_decoding_backend,
+            )
+            tool_calling_formatron_model = None
+            if filter_engine == "formatron":
+                tool_calling_formatron_model = create_tool_calling_model_formatron(tool_handler.tool_dict_formatron)
 
             formatter_json = self.formatter.json(
                 pydantic_model_lmfe=ToolCalling_LMFE,
-                pydantic_model_formatron=ToolCalling_formatron,
+                pydantic_model_formatron=tool_calling_formatron_model,
+                filter_engine=filter_engine,
                 backend=self.backend,
                 preference = query.guided_decoding_backend
             )
@@ -876,21 +876,24 @@ arg_dict = """
         # create the pydantic schema to enforce generation
         tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
 
-        class ToolCalling_LMFE(ClassSchema):
+        class ToolCalling_LMFE(BaseModel):
             """ The format to call one or multiple tools """
-            functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
+            functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = Field(default_factory=list)
 
-        # create the pydantic schema to enforce generation for formatron which use ClassSchema
-        tool_combined_pydantic_formatron = create_function_models_formatron(
-            tool_handler.tool_dict_formatron)
-
-        class ToolCalling_formatron(ClassSchema):
-            """ The format to call one or multiple tools """
-            functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
+        filter_engine = self.formatter.get_default_engine(
+            backend=self.backend,
+            preference=query.guided_decoding_backend,
+        )
+        tool_calling_formatron_model = None
+        if filter_engine == "formatron":
+            tool_calling_formatron_model = create_tool_calling_model_formatron(
+                tool_handler.tool_dict_formatron
+            )
 
         formatter_json = self.formatter.json(
             pydantic_model_lmfe=ToolCalling_LMFE,
-            pydantic_model_formatron=ToolCalling_formatron,
+            pydantic_model_formatron=tool_calling_formatron_model,
+            filter_engine=filter_engine,
             backend=self.backend,
             preference=query.guided_decoding_backend
         )

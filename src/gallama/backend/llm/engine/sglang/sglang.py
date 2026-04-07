@@ -1,5 +1,5 @@
 from ..base import ModelInterface
-from typing import Optional, Dict, List, Union
+from typing import Any, Optional, Dict, List, Union
 import time                                 # for compute of generation time
 import asyncio
 from fastapi import Request                 # for type hint
@@ -182,7 +182,7 @@ class ModelSGLang(ModelInterface):
         gen_type: Union[str, GenStart] = "text",    # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
+        formatter: Any = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
