@@ -39,6 +39,7 @@ from ....config.config_manager import ConfigManager
 # handle prompting
 from gallama.backend.llm.prompt_engine.prompt_engine import PromptEngine
 from dataclasses import dataclass
+from gallama.sampling import SAMPLING_FIELDS, resolve_sampling_overrides
 
 # video handling
 from ....data_classes import VideoFrameCollection
@@ -52,6 +53,8 @@ class ToolCallV2:
     generate_kwargs: dict
 
 class ModelInterface(ABC):
+    SAMPLING_FIELDS = SAMPLING_FIELDS
+
     @abstractmethod
     def __init__(self, model_spec:ModelSpec):
         # initialization share the same code to keep the frontend consistent
@@ -93,6 +96,7 @@ class ModelInterface(ABC):
         # transformers specific arguments
         # self.backend_extra_args = model_spec.get("backend_extra_args") or {}
         self.backend_extra_args = model_spec.backend_extra_args or {}
+        self.default_sampling = model_spec.default_sampling or []
 
 
         # handle draft model
@@ -139,6 +143,29 @@ class ModelInterface(ABC):
         # standard modalities
         # this set should contain either "text", "image", "video"
         self.modalities = {"text"}     # TODO current backend just assume that image is supported
+
+    @staticmethod
+    def resolve_sampling_overrides(
+        query: ChatMLQuery,
+        default_sampling: list,
+        condition: Optional[Literal["thinking"]] = None,
+    ) -> dict[str, Any]:
+        return resolve_sampling_overrides(
+            query=query,
+            default_sampling=default_sampling,
+            condition=condition,
+        )
+
+    def _resolve_sampling_overrides(
+        self,
+        query: ChatMLQuery,
+        condition: Optional[Literal["thinking"]] = None,
+    ) -> dict[str, Any]:
+        return self.resolve_sampling_overrides(
+            query=query,
+            default_sampling=self.default_sampling,
+            condition=condition,
+        )
 
     ## *************** the following method must be implemented by each backend ********
     @property
@@ -360,8 +387,7 @@ class ModelInterface(ABC):
                     stop_words.append(thinking_tag.end_marker)
 
                     generation_args = {
-                        'temperature': query.temperature,
-                        'top_p': query.top_p,
+                        **self._resolve_sampling_overrides(query, condition="thinking"),
                         'gen_type': GenStart(gen_type=gen_start),
                         # 'formatter': self.formatter,
                         # add endtag of thinking as stop token
@@ -391,9 +417,9 @@ class ModelInterface(ABC):
                     prompt += partial_response
                     already_reasoning = True
 
+            final_condition = None if already_reasoning else ("thinking" if prompt_eng.is_thinking else None)
             generation_args = {
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query, condition=final_condition),
                 'gen_type': GenStart(gen_type=gen_start),
                 # 'formatter': self.formatter,
                 'stop_words': query.stop_words,
@@ -515,8 +541,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 request=request,
@@ -539,8 +564,7 @@ class ModelInterface(ABC):
             messages=query.messages,
             gen_queue=gen_queue,
             **{
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query),
                 'formatter': formatter_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
@@ -593,8 +617,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 request=request,
@@ -617,8 +640,7 @@ class ModelInterface(ABC):
             messages=query.messages,
             gen_queue=gen_queue,
             **{
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query),
                 'formatter': formatter_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
@@ -673,8 +695,7 @@ class ModelInterface(ABC):
             prompt,
             messages=query.messages,
             gen_queue=tool_thinking_queue,
-            temperature=query.temperature,
-            top_p=query.top_p,
+            **self._resolve_sampling_overrides(query),
             stop_words=tool_thinking_to_use.root_key_stop_words,
             prefix_strings=f"<{tool_thinking_to_use.root_tag}>",
             request=request,
@@ -738,8 +759,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=tool_thinking_queue_fallback,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 request=request,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
@@ -821,8 +841,7 @@ arg_dict = """
                 messages=query.messages,
                 gen_queue=gen_queue,
                 gen_type=GenStart(gen_type="tool"),
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 prefix_strings=['{\n "functions_calling": ['],
                 formatter=formatter_json,
@@ -846,7 +865,7 @@ arg_dict = """
                     messages=query.messages,
                     gen_queue=gen_queue,
                     gen_type=GenStart(gen_type="text"),
-                    temperature=query.temperature,
+                    **self._resolve_sampling_overrides(query),
                     prefix_strings=query.prefix_strings,
                     max_tokens=query.max_tokens,
                     request=request,
@@ -928,8 +947,7 @@ response(to="function", arg_dict="""
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="tool"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": ['{\n "functions_calling": ['],
             "formatter": formatter_json,
             "max_tokens": query.max_tokens,
@@ -1013,8 +1031,7 @@ response(""" + _tool_answer_prefix
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="tool"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": '"',
             "formatter": formatter_regex if not query.tool_call_thinking else None,
             "max_tokens": query.tool_call_thinking_token,
@@ -1054,8 +1071,7 @@ response(""" + _tool_answer_prefix
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="text"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": query.prefix_strings,
             "max_tokens": query.max_tokens,
             "request": request,

@@ -10,7 +10,7 @@ from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 import traceback
 
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 from gallama.data_classes import (
     BaseMessage,
     ModelSpec,
@@ -50,7 +50,10 @@ try:
     from exllamav2.generator.filters import ExLlamaV2PrefixFilter
 
     if version('exllamav2') == '0.2.1' or version('exllamav2') == '0.2.2':
-        raise "Please use version 0.2.3 onwards. There is some bug with v0.2.1 and 0.2.2 related with format enforcement"
+        raise RuntimeError(
+            "Please use version 0.2.3 onwards. There is some bug with v0.2.1 and "
+            "0.2.2 related with format enforcement"
+        )
 
 except ImportError:
     ExLlamaV2 = None
@@ -178,7 +181,7 @@ class ModelExllama(ModelInterface):
 
     def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         # initialize
         cache = None
@@ -212,9 +215,9 @@ class ModelExllama(ModelInterface):
         # get the cache quantization to use
         cache_quant_to_use = cache_quant_dict[cache_quant]
 
-        logger.info("max_seq_len: " + str(self.max_seq_len))
-        logger.info("cache_size: " + str(cache_size_to_use))
-        logger.info("Cache Quantization: " + str(cache_quant))
+        logger.info("max_seq_len: " + str(self.max_seq_len), extra=basic_log_extra())
+        logger.info("cache_size: " + str(cache_size_to_use), extra=basic_log_extra())
+        logger.info("Cache Quantization: " + str(cache_quant), extra=basic_log_extra())
 
         assert cache_quant_to_use is not None
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
@@ -225,12 +228,12 @@ class ModelExllama(ModelInterface):
                 cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=True)
                 model.load_autosplit(cache, reserve_vram=reserve_vram, progress=True)
             elif isinstance(gpus, list):      # user specify the gpus split
-                logger.info("Custom GPU Allocation in GB: " + str(gpus))
+                logger.info("Custom GPU Allocation in GB: " + str(gpus), extra=basic_log_extra())
                 model.load(gpu_split=gpus, progress=True)
                 cache = cache_quant_to_use(model, max_seq_len=cache_size_to_use, lazy=not model.loaded)
         else:
             # tensor parallel mode
-            logger.info("ExllamaV2 Tensor Parallel enabled")
+            logger.info("ExllamaV2 Tensor Parallel enabled", extra=basic_log_extra())
             if ExLlamaV2Cache_TP:       # ensure that tensor parallel is available
                 model.load_tp(progress=True, gpu_split = gpus if isinstance(gpus, list) else None)
                 cache = ExLlamaV2Cache_TP(
@@ -258,7 +261,7 @@ class ModelExllama(ModelInterface):
         if processor and processor.video_preprocess_func:
             self.modalities.add("video")
 
-        logger.info(f"Supported Modalities: {self.modalities}")
+        logger.info(f"Supported Modalities: {self.modalities}", extra=basic_log_extra())
 
         return model, tokenizer, cache, processor
 
@@ -389,17 +392,24 @@ class ModelExllama(ModelInterface):
     def _get_exllama_gen_settings(
         temperature: float = 0.01,
         top_p: float = 0.8,
+        top_k: Optional[int] = None,
+        min_p: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
+        frequency_penalty: Optional[float] = None,
+        repetition_penalty: Optional[float] = None,
         **kwargs,
     ):
         # settings
         settings = ExLlamaV2Sampler.Settings()
         settings.temperature = temperature
         settings.min_temp = 0.15
-        settings.top_k = 50
+        settings.top_k = 50 if top_k is None else top_k
         settings.top_p = top_p
-        settings.min_p = 0.05
-        settings.token_repetition_penalty = 1.1
-        settings.token_frequency_penalty = 0.05
+        settings.min_p = 0.05 if min_p is None else min_p
+        settings.token_repetition_penalty = 1.1 if repetition_penalty is None else repetition_penalty
+        settings.token_frequency_penalty = 0.05 if frequency_penalty is None else frequency_penalty
+        if presence_penalty is not None and hasattr(settings, "token_presence_penalty"):
+            settings.token_presence_penalty = presence_penalty
         settings.token_repetition_range = 1024
         # settings.token_repetition_decay: int = 0.98
         settings.temperature_last = False
@@ -596,6 +606,11 @@ class ModelExllama(ModelInterface):
         **kwargs,
     ) -> (str, GenerationStats):
         try:
+            top_k = kwargs.get("top_k")
+            min_p = kwargs.get("min_p")
+            presence_penalty = kwargs.get("presence_penalty")
+            frequency_penalty = kwargs.get("frequency_penalty")
+            repetition_penalty = kwargs.get("repetition_penalty")
             # Ensure that the generator is initialized
             if self.pipeline is None:
                 self.pipeline = await self._get_pipeline_async()
@@ -622,7 +637,15 @@ class ModelExllama(ModelInterface):
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
             # Get generation settings
-            settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
+            settings = self._get_exllama_gen_settings(
+                temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                repetition_penalty=repetition_penalty,
+            )
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
             prompt, image_embeddings = self._process_vision_inputs(prompt, messages, video)

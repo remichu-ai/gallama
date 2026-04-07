@@ -10,6 +10,9 @@ from operator import itemgetter
 import os
 
 
+GLOBAL_CONFIG_KEY = "_global"
+
+
 LOCAL_MODEL_PATH_PATTERN = re.compile(r"^(~|/|\.{1,2}([/\\]|$)|[A-Za-z]:[\\/])")
 TOP_LEVEL_MODEL_KEY_PATTERN = re.compile(r'^([^\s#][^:]*)\s*:\s*(?:#.*)?$')
 
@@ -17,6 +20,8 @@ TOP_LEVEL_MODEL_KEY_PATTERN = re.compile(r'^([^\s#][^:]*)\s*:\s*(?:#.*)?$')
 class ConfigManager:
     def __init__(self):
         self.configs: Dict[str, Any] = {}
+        self.raw_config: Dict[str, Any] = {}
+        self.global_config: Dict[str, Any] = {}
         try:
             self.load_model_configs()
         except Exception as e:
@@ -55,11 +60,26 @@ class ConfigManager:
         """Load all YAML files (both .yaml and .yml) from the data directory and combine them."""
         config_file = self.get_gallama_user_config_file_path
         self.configs = {}
+        self.raw_config = {}
+        self.global_config = {}
         if config_file.exists():
             with open(config_file, 'r') as file:
                 yaml_data = yaml.safe_load(file)
                 if yaml_data:
-                    self.configs.update(yaml_data)
+                    if not isinstance(yaml_data, dict):
+                        raise ValueError(f"Top-level YAML structure in {config_file} must be a mapping")
+                    self.raw_config.update(yaml_data)
+                    global_config = yaml_data.get(GLOBAL_CONFIG_KEY, {})
+                    if global_config is not None and not isinstance(global_config, dict):
+                        raise ValueError(f"'{GLOBAL_CONFIG_KEY}' in {config_file} must be a mapping")
+                    self.global_config = global_config or {}
+                    self.configs.update(
+                        {
+                            key: value
+                            for key, value in yaml_data.items()
+                            if key != GLOBAL_CONFIG_KEY
+                        }
+                    )
                 else:
                     raise ValueError(f'No model config in YAML file found in {config_file}')
         else:
@@ -159,6 +179,8 @@ class ConfigManager:
             self.load_model_configs()
         except ValueError:
             self.configs = {}
+            self.raw_config = {}
+            self.global_config = {}
         return missing_models
 
     def load_default_model_list(self):
@@ -170,6 +192,33 @@ class ConfigManager:
     def get_model_config(self, model_name: str) -> Dict[str, Any]:
         """Get configuration for a specific model."""
         return self.configs.get(model_name, {})
+
+    def get_effective_model_config(self, model_name: str) -> Dict[str, Any]:
+        """Get model config merged with supported global defaults."""
+        model_config = self.get_model_config(model_name)
+        if not model_config:
+            return {}
+
+        effective_config = model_config.copy()
+        global_env = self.get_global_env()
+        if global_env or "env" in effective_config:
+            model_env = effective_config.get("env") or {}
+            if model_env is not None and not isinstance(model_env, dict):
+                raise ValueError(f"'env' for model '{model_name}' must be a mapping")
+            effective_config["env"] = {**global_env, **model_env}
+
+        return effective_config
+
+    def get_global_env(self) -> Dict[str, Any]:
+        env = self.global_config.get("env", {})
+        if env is None:
+            return {}
+        if not isinstance(env, dict):
+            raise ValueError(f"'env' under '{GLOBAL_CONFIG_KEY}' must be a mapping")
+        return env.copy()
+
+    def get_full_config(self) -> Dict[str, Any]:
+        return self.raw_config.copy()
 
     def get_all_model_names(self) -> List[str]:
         """Get a list of all available model names."""

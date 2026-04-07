@@ -3,6 +3,7 @@ import os
 import subprocess
 from gallama.config import ConfigManager
 from gallama.logger import logger
+from gallama.logger.logger import basic_log_extra
 from fastapi import HTTPException
 from pathlib import Path
 from typing import Dict
@@ -55,7 +56,7 @@ def update_model_yaml(
     backend_extra_args: Dict = None,     # additional argument for transformers loading
     config_manager: ConfigManager = ConfigManager()
 ):
-    config = config_manager.configs      # the default list of model
+    config = config_manager.get_full_config()
 
     # Update or add the model configuration
     config[model_name] = {
@@ -273,6 +274,6 @@ def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None
     )
 
     if custom_logger:
-        custom_logger.info(log_message)
+        custom_logger.info(log_message, extra=basic_log_extra())
     else:
-        logger.info(log_message)
+        logger.info(log_message, extra=basic_log_extra())

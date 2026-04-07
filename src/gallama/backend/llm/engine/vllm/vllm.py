@@ -50,7 +50,7 @@ except ImportError:
 
 
 from gallama.utils import is_flash_attention_installed
-from .....logger.logger import logger
+from .....logger.logger import basic_log_extra, logger
 
 import logging
 
@@ -93,7 +93,7 @@ class ModelVLLM(ModelInterface):
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for vllm backend"
+            raise NotImplementedError("Draft model currently not supported for vllm backend")
 
         self.eos_token_ids = self.generate_eos_tokens_id()
 
@@ -104,7 +104,7 @@ class ModelVLLM(ModelInterface):
         model_id,
     ):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         cache = None  # in case not a backend with separate cache like llama cpp
         tokenizer = None
@@ -127,7 +127,7 @@ class ModelVLLM(ModelInterface):
         # set max_seq_len based on model    TODO: To find more reliable method
         self.max_seq_len = self.backend_extra_args.get('max_model_len') or 32768
 
-        logger.info(model_kargs)
+        logger.info(model_kargs, extra=basic_log_extra())
         engine_args = AsyncEngineArgs(**model_kargs)
         model = AsyncLLMEngine.from_engine_args(engine_args)
 
@@ -231,6 +231,12 @@ class ModelVLLM(ModelInterface):
         stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
+        top_k = kwargs.get("top_k")
+        min_p = kwargs.get("min_p")
+        presence_penalty = kwargs.get("presence_penalty")
+        frequency_penalty = kwargs.get("frequency_penalty")
+        repetition_penalty = kwargs.get("repetition_penalty")
+        seed = kwargs.get("seed")
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -335,18 +341,31 @@ class ModelVLLM(ModelInterface):
             max_tokens, 4096) if max_tokens else min(self.max_seq_len - len(input_ids), 4096)
 
         # Get generation settings
+        sampling_kwargs = {
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens_to_use,
+            "stop": stop_words,
+            "bad_words": banned_strings,
+            "guided_decoding": formatter if formatter else None,
+        }
+        optional_sampling_kwargs = {
+            "top_k": top_k,
+            "min_p": min_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "repetition_penalty": repetition_penalty,
+            "seed": seed,
+        }
+        sampling_kwargs.update({key: value for key, value in optional_sampling_kwargs.items() if value is not None})
+
         settings = SamplingParams(
-            temperature=temperature,
-            top_p=top_p,
-            max_tokens=max_tokens_to_use,
-            stop=stop_words,
-            bad_words=banned_strings,
-            guided_decoding = formatter if formatter else None
+            **sampling_kwargs
         )
 
         # format enforcement
         # if formatter:
-        #     raise "tool not supported for SG lang yet"
+        #     tool use is not supported for vllm yet
             # settings.update(formatter.get_formatter_dict())
 
         # logger.info("FROG FROG" + str(settings))

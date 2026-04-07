@@ -1,6 +1,7 @@
 from ..data_classes import ModelSpec
 from typing import Dict, Any, Literal, Optional
 from ..logger import logger
+from ..logger.logger import basic_log_extra
 from ..config.config_manager import ConfigManager
 
 
@@ -98,12 +99,15 @@ class ModelManager:
             raise Exception("model_name is required when loading a model from CLI")
 
         # get the config from the yml, if available
-        model_config = self.config_manager.get_model_config(model_name) or {}
+        model_config = self.config_manager.get_effective_model_config(model_name) or {}
         if model_config:
             model_config = model_config.copy()
             model_config.update({"model_name": model_name})
         else:
-            logger.info(f"Model config for '{model_name}' not found in ~/gallama/model_config.yaml, using CLI arguments only")
+            logger.info(
+                f"Model config for '{model_name}' not found in ~/gallama/model_config.yaml, using CLI arguments only",
+                extra=basic_log_extra(),
+            )
 
         # handle draft model
         if model_spec.draft_model_name and not model_spec.draft_model_id:
@@ -123,7 +127,7 @@ class ModelManager:
             _default_model_spec = ModelSpec.from_dict(model_config)
             # Merge configurations that user pass in with default setting of the model
             model_spec = ModelSpec.from_merged_config(model_spec, _default_model_spec.model_dump())
-            logger.info(f"Resolved model_spec from config: {model_spec}")
+            logger.info(f"Resolved model_spec from config: {model_spec}", extra=basic_log_extra())
 
         if not model_spec.model_id:
             raise Exception(f"model_id is required for '{model_name}' when it is not fully defined in model_config.yaml")
@@ -136,7 +140,7 @@ class ModelManager:
 
 
         # load the model with config from the model_spec and yml. model_spec comes from cli
-        logger.info(f"model_spec.backend: {model_spec.backend}")
+        logger.info(f"model_spec.backend: {model_spec.backend}", extra=basic_log_extra())
         if model_spec.backend in ["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:  # llm loading
             if model_spec.backend == "exllama":
                 from gallama.backend.llm import ModelExllama as ModelClass
@@ -229,4 +233,4 @@ class ModelManager:
 
 
 
-        logger.info("Loaded: " + model_name)
+        logger.info("Loaded: " + model_name, extra=basic_log_extra())

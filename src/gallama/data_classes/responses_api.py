@@ -317,6 +317,12 @@ class ResponsesCreateRequest(BaseModel):
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ResponseToolChoiceFunction]] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    seed: Optional[int] = None
     stream: bool = False
     max_output_tokens: Optional[int] = None
     store: bool = False
@@ -450,6 +456,8 @@ class ResponsesCreateRequest(BaseModel):
             "messages": messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
             "stream": self.stream,
             "tools": self._convert_tools(),
             "tool_choice": self._convert_tool_choice(),
@@ -458,6 +466,10 @@ class ResponsesCreateRequest(BaseModel):
             "response_format": self._convert_text_format(),
             "reasoning_effort": self.reasoning.effort if self.reasoning else None,
             "parallel_tool_calls": self.parallel_tool_calls,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            "repetition_penalty": self.repetition_penalty,
+            "seed": self.seed,
         }
 
         filtered_kwargs = {key: value for key, value in query_kwargs.items() if value is not None}

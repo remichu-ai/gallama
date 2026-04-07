@@ -101,7 +101,7 @@ def main_cli():
         dest="global_verbose",
         action='count',
         default=0,
-        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+        help="Increase logging verbosity. Use -v for current logs, -vv for debug, -vvv for maximum request/body detail.",
     )
 
     subparsers = arg_parser.add_subparsers(dest="command")
@@ -132,7 +132,7 @@ def main_cli():
         "--verbose",
         action='count',
         default=0,
-        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+        help="Increase logging verbosity. Use -v for current logs, -vv for debug, -vvv for maximum request/body detail.",
     )
 
 
@@ -156,7 +156,7 @@ def main_cli():
     requested_verbosity = max(
         getattr(args, "global_verbose", 0) or 0,
         getattr(args, "verbose", 0) or 0,
-    ) + 1
+    )
     set_log_verbosity(requested_verbosity)
 
     global logger

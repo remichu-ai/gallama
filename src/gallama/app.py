@@ -12,12 +12,21 @@ import argparse
 import uvicorn
 from fastapi.exceptions import RequestValidationError
 import json
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from gallama.utils import parse_request_body
 from gallama.config.config_manager import ConfigManager
 import os
 from contextlib import asynccontextmanager
-from gallama.logger.logger import get_logger, get_log_level_for_verbosity, set_log_verbosity
+from gallama.logger.logger import (
+    REQUEST_ID_HEADER,
+    basic_log_extra,
+    get_logger,
+    get_log_level_for_verbosity,
+    new_request_id,
+    reset_request_id,
+    set_log_verbosity,
+    set_request_id,
+)
 import base64
 from gallama.dependencies import get_model_manager
 from gallama.routes import (
@@ -79,7 +88,7 @@ async def options_handler(request: Request):
 
 async def startup_event():
     # run some dummy generation so that cache is initialized
-    logger.info("Generator initialization")
+    logger.info("Generator initialization", extra=basic_log_extra())
 
     # warm up LLM
     if model_manager.llm_dict:
@@ -94,11 +103,11 @@ async def startup_event():
                 request=None,
             )
 
-            logger.info(f"LLM| {_model_name} | warmed up")
+            logger.info(f"LLM| {_model_name} | warmed up", extra=basic_log_extra())
         gen_queue = None
 
     if model_manager.stt_dict:
-        logger.info("STT warmed up NOT YET IMPLEMENTED")
+        logger.info("STT warmed up NOT YET IMPLEMENTED", extra=basic_log_extra())
 
     if model_manager.tts_dict:
         for _model_name, tts in model_manager.tts_dict.items():
@@ -108,10 +117,10 @@ async def startup_event():
                 batching=False,
                 batch_size=1
             )
-            logger.info(f"TTS| {_model_name} | warmed up")
+            logger.info(f"TTS| {_model_name} | warmed up", extra=basic_log_extra())
 
     if model_manager.embedding_dict:
-        logger.info("Embedding warmed up NOT YET IMPLEMENTED")
+        logger.info("Embedding warmed up NOT YET IMPLEMENTED", extra=basic_log_extra())
 
 
 
@@ -123,9 +132,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # Cleanup code
-        logger.info("Cleaning up loaded models...")
+        logger.info("Cleaning up loaded models...", extra=basic_log_extra())
         model_manager.close_all_models()
-        logger.info("Cleaning up ZMQ connections...")
+        logger.info("Cleaning up ZMQ connections...", extra=basic_log_extra())
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
                 handler.close()
@@ -134,7 +143,7 @@ async def lifespan(app: FastAPI):
 def make_server(args):
     global logger
     global draft_spec_dict
-    requested_verbosity = (getattr(args, "verbose", 0) or 0) + 1
+    requested_verbosity = getattr(args, "verbose", 0) or 0
     set_log_verbosity(requested_verbosity)
 
     logger = get_logger(
@@ -146,7 +155,7 @@ def make_server(args):
 
     # Add signal handlers for graceful shutdown
     def signal_handler(signum, frame):
-        logger.info("Received shutdown signal, cleaning up...")
+        logger.info("Received shutdown signal, cleaning up...", extra=basic_log_extra())
         model_manager.close_all_models()
         for handler in logger.handlers:
             if hasattr(handler, 'close'):
@@ -157,7 +166,7 @@ def make_server(args):
     signal.signal(signal.SIGTERM, signal_handler)
 
     # load yaml file of model info
-    logger.info(args)
+    logger.info(args, extra=basic_log_extra())
     model_dict = {}
     draft_spec_dict = {}    # for speculative decoding
 
@@ -181,7 +190,7 @@ def make_server(args):
     logger.setLevel(get_log_level_for_verbosity())
 
     args.model_spec = model_spec
-    logger.info("Parsed Arguments:" + str(args))  # Debug statement
+    logger.info("Parsed Arguments:" + str(args), extra=basic_log_extra())
 
     if args.detached:
         # Reconfigure the shared package logger used across imported modules so
@@ -206,6 +215,9 @@ def make_server(args):
     @app.middleware("http")
     @app.middleware("https")
     async def log_requests(request: Request, call_next):
+        request_id = request.headers.get(REQUEST_ID_HEADER) or new_request_id()
+        request.state.request_id = request_id
+        token = set_request_id(request_id)
         try:
             # if request.method in ("POST", "PUT", "PATCH"):
             #     # Parse body and preserve it
@@ -236,14 +248,31 @@ def make_server(args):
 
             # Proceed with the request
             response = await call_next(request)
+            response.headers[REQUEST_ID_HEADER] = request_id
+            if isinstance(response, StreamingResponse):
+                original_iterator = response.body_iterator
+
+                async def context_body_iterator():
+                    stream_token = set_request_id(request_id)
+                    try:
+                        async for chunk in original_iterator:
+                            yield chunk
+                    finally:
+                        reset_request_id(stream_token)
+
+                response.body_iterator = context_body_iterator()
             return response
 
         except Exception as e:
             logger.error(f"Middleware error: {str(e)}", exc_info=True)
-            return JSONResponse(
+            error_response = JSONResponse(
                 status_code=500,
                 content={"detail": "Internal server error in middleware"}
             )
+            error_response.headers[REQUEST_ID_HEADER] = request_id
+            return error_response
+        finally:
+            reset_request_id(token)
 
     if model_spec:
         # load model
@@ -278,7 +307,7 @@ if __name__ == "__main__":
         "--verbose",
         action='count',
         default=0,
-        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+        help="Increase logging verbosity. Use -v for current logs, -vv for debug, -vvv for maximum request/body detail.",
     )
     arg_parser.add_argument('-d', "--detached", action='store_true', help="Log to ZeroMQ")
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")

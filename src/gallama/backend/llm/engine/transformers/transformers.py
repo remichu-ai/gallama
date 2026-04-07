@@ -52,7 +52,7 @@ from .model_support.llama3_2_vision.text_streamer import CustomTextIteratorStrea
 
 
 from gallama.utils import is_flash_attention_installed
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 
 # custom data classes
 from gallama.data_classes import (
@@ -90,7 +90,7 @@ class ModelTransformers(ModelInterface):
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for llama cpp backend"
+            raise NotImplementedError("Draft model currently not supported for transformers backend")
 
         self.eos_token_ids = self.generate_eos_tokens_id()
 
@@ -102,7 +102,7 @@ class ModelTransformers(ModelInterface):
         gpus,
     ):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         # infinity emb set this to 1 and cause some bug with current version of Huggingface
         # to remove this env for tqdm to work
@@ -140,7 +140,7 @@ class ModelTransformers(ModelInterface):
 
 
         # determine the class to use for loading
-        logger.info(self.backend_extra_args)
+            logger.info(self.backend_extra_args, extra=basic_log_extra())
         if self.backend_extra_args.get('model_class'):
             model_class = get_class(self.backend_extra_args['model_class'])
 
@@ -164,14 +164,14 @@ class ModelTransformers(ModelInterface):
 
         # currently speculative decoding not supported by model specific for LLama CPP python
         if isinstance(gpus, str) and gpus == "auto":
-            logger.info(model_kargs)
+            logger.info(model_kargs, extra=basic_log_extra())
             model = model_class.from_pretrained(**model_kargs)
             tokenizer = tokenizer_class.from_pretrained(**tokenizer_args)
             if processor_class:
                 processor = processor_class.from_pretrained(**tokenizer_args)
 
         elif isinstance(gpus, list):
-            raise "Specifying GPU for transformers is not supported"
+            raise NotImplementedError("Specifying GPU for transformers is not supported")
 
         else:
             raise ValueError("Device map should be either 'auto', 'gpu' split")
@@ -205,6 +205,12 @@ class ModelTransformers(ModelInterface):
         stop,
         gen_queue_list,
         top_p=0.8,
+        top_k=None,
+        min_p=None,
+        presence_penalty=None,
+        frequency_penalty=None,
+        repetition_penalty=None,
+        seed=None,
         prefix_strings=None,
         stop_word_to_return="",
         gen_type_str: str = "text",
@@ -215,14 +221,24 @@ class ModelTransformers(ModelInterface):
         input_ids = input_ids.to(self.model.device)
 
         # Create generation config
-        generation_config = transformers.GenerationConfig(
-            max_new_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop_strings=stop,
-            repetition_penalty=1.1,
-            do_sample=True,
+        generation_config_kwargs = {
+            "max_new_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "stop_strings": stop,
+            "repetition_penalty": 1.1 if repetition_penalty is None else repetition_penalty,
+            "do_sample": True,
+        }
+        optional_generation_kwargs = {
+            "top_k": top_k,
+            "min_p": min_p,
+        }
+        generation_config_kwargs.update(
+            {key: value for key, value in optional_generation_kwargs.items() if value is not None}
         )
+        generation_config = transformers.GenerationConfig(**generation_config_kwargs)
+        if seed is not None:
+            transformers.set_seed(seed)
 
         # Create streamer
         streamer = CustomTextIteratorStreamer(
@@ -288,6 +304,12 @@ class ModelTransformers(ModelInterface):
         #stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
+        top_k = kwargs.get("top_k")
+        min_p = kwargs.get("min_p")
+        presence_penalty = kwargs.get("presence_penalty")
+        frequency_penalty = kwargs.get("frequency_penalty")
+        repetition_penalty = kwargs.get("repetition_penalty")
+        seed = kwargs.get("seed")
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -432,6 +454,12 @@ class ModelTransformers(ModelInterface):
             stop=stop_words,
             gen_queue_list=gen_queue_list,
             top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
             prefix_strings=None,
             stop_word_to_return="",
             gen_type_str=gen_type_str,

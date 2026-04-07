@@ -9,7 +9,7 @@ from fastapi import Request                 # for type hint
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 from gallama.backend.llm.json_schema_utils import normalize_json_schema_for_formatron
 from gallama.utils.request_disconnect import (
     format_exception_summary,
@@ -188,7 +188,7 @@ class ModelExllamaV3(ModelInterface):
 
     def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False, backend_extra_args=None):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         config = Config.from_directory(model_id)
         model = Model.from_config(config)
@@ -228,10 +228,10 @@ class ModelExllamaV3(ModelInterface):
         # get the cache quantization to use
         cache_quant_to_use = cache_quant_dict.get(cache_quant, None)
 
-        logger.info("max_seq_len: " + str(self.max_seq_len))
-        logger.info("cache_size: " + str(cache_size_to_use))
-        logger.info("Cache Quantization: " + str(cache_quant))
-        logger.info("gpus: " + str(gpus))
+        logger.info("max_seq_len: " + str(self.max_seq_len), extra=basic_log_extra())
+        logger.info("cache_size: " + str(cache_size_to_use), extra=basic_log_extra())
+        logger.info("Cache Quantization: " + str(cache_quant), extra=basic_log_extra())
+        logger.info("gpus: " + str(gpus), extra=basic_log_extra())
 
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
             "Device map should be either 'auto', 'gpu' split"
@@ -244,7 +244,7 @@ class ModelExllamaV3(ModelInterface):
             cache_layer = CacheLayer_quant
 
         if cache_quant_to_use:
-            logger.info("Using cache quant")
+            logger.info("Using cache quant", extra=basic_log_extra())
             cache = Cache(
                 model,
                 max_num_tokens=cache_size_to_use,
@@ -253,7 +253,7 @@ class ModelExllamaV3(ModelInterface):
             )
         else:
             # FP16
-            logger.info("Not using cache quant")
+            logger.info("Not using cache quant", extra=basic_log_extra())
             cache = Cache(
                 model,
                 max_num_tokens=cache_size_to_use
@@ -276,7 +276,7 @@ class ModelExllamaV3(ModelInterface):
 
         tp_backend = (backend_extra_args or {}).get("tp_backend")
         if tp_backend:
-            logger.info("Tensor parallel backend: " + str(tp_backend))
+            logger.info("Tensor parallel backend: " + str(tp_backend), extra=basic_log_extra())
             load_kwargs["tp_backend"] = tp_backend
 
         model.load(
@@ -290,7 +290,7 @@ class ModelExllamaV3(ModelInterface):
             processor = Model.from_config(config, component = "vision")
             processor.load()
         except AssertionError:
-            logger.info("No Vision Tower")
+            logger.info("No Vision Tower", extra=basic_log_extra())
             processor = None
 
         # if processor is not None, meaning at least image is supported
@@ -405,14 +405,18 @@ class ModelExllamaV3(ModelInterface):
     def _get_exllama_gen_settings(
         temperature: float = 0.01,
         top_p: float = 0.8,
+        top_k: Optional[int] = None,
         **kwargs,
     ):
         # settings
-        settings = CustomSampler([
+        samplers = [
             SS_Temperature(temperature),
             SS_TopP(top_p),
-            SS_Sample()
-        ])
+        ]
+        if top_k is not None and SS_TopK is not None:
+            samplers.append(SS_TopK(top_k))
+        samplers.append(SS_Sample())
+        settings = CustomSampler(samplers)
 
         # settings = ExLlamaV2Sampler.Settings()
         # settings.temperature = temperature
@@ -621,6 +625,7 @@ class ModelExllamaV3(ModelInterface):
         full_completion = ""
 
         try:
+            top_k = kwargs.get("top_k")
             # Ensure that the generator is initialized
             if self.pipeline is None:
                 self.pipeline = await self._get_pipeline_async()
@@ -647,7 +652,11 @@ class ModelExllamaV3(ModelInterface):
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
             # Get generation settings
-            settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
+            settings = self._get_exllama_gen_settings(
+                temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
             prompt, image_embeddings = self._process_vision_inputs(prompt, vision_token, messages, video)

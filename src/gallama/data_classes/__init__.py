@@ -19,6 +19,8 @@ from .data_class import (
     ModelObjectResponse,
     ModelObject,
     ModelSpec,
+    SamplingConfig,
+    DefaultSamplingRule,
     EmbeddingRequest,
     ModelDownloadSpec,
     SUPPORTED_BACKENDS,

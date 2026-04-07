@@ -1,9 +1,11 @@
 import logging
 from logging.config import dictConfig
 from logging.handlers import RotatingFileHandler
+import contextvars
 import os
 import sys
 import textwrap
+import uuid
 from colorama import Fore, Back, Style, init
 import json
 import re
@@ -26,9 +28,62 @@ logging.root.setLevel(logging.NOTSET)
 
 DEFAULT_ZMQ_URL = "tcp://127.0.0.1:5555"  # Using 5559 as a standard port for logging
 LOG_VERBOSITY_ENV_VAR = "LOCAL_OPEN_AI_VERBOSE"
-DEFAULT_LOG_VERBOSITY = 1
+BASIC_LOG_VERBOSITY = 0
+INFO_LOG_VERBOSITY = 1
+DEFAULT_LOG_VERBOSITY = BASIC_LOG_VERBOSITY
 DEBUG_LOG_VERBOSITY = 2
 MAX_LOG_VERBOSITY = 3
+REQUEST_ID_HEADER = "x-request-id"
+
+
+_request_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "gallama_request_id",
+    default=None,
+)
+
+
+def get_request_id() -> Optional[str]:
+    return _request_id_var.get()
+
+
+def set_request_id(request_id: Optional[str]):
+    return _request_id_var.set(request_id)
+
+
+def reset_request_id(token) -> None:
+    _request_id_var.reset(token)
+
+
+def new_request_id() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def basic_log_extra() -> dict[str, bool]:
+    return {"gallama_basic": True}
+
+
+class VerbosityFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        verbosity = get_log_verbosity()
+        if verbosity >= DEBUG_LOG_VERBOSITY:
+            return True
+        if record.levelno >= logging.WARNING:
+            return True
+        if verbosity >= INFO_LOG_VERBOSITY:
+            return record.levelno >= logging.INFO
+        return bool(getattr(record, "gallama_basic", False))
+
+
+_original_log_record_factory = logging.getLogRecordFactory()
+
+
+def _log_record_factory(*args, **kwargs):
+    record = _original_log_record_factory(*args, **kwargs)
+    record.request_id = get_request_id()
+    return record
+
+
+logging.setLogRecordFactory(_log_record_factory)
 
 
 class PromptLexer(RegexLexer):
@@ -71,6 +126,9 @@ class ColorTabularFormatter(logging.Formatter):
         level = record.levelname
         filename = record.filename
         message = record.getMessage()
+        request_id = getattr(record, "request_id", None)
+        if request_id and not getattr(record, "gallama_basic", False):
+            message = f"[req:{request_id}] {message}"
 
         color = self.COLORS.get(level, '')
         reset = Style.RESET_ALL
@@ -90,7 +148,7 @@ class ColorTabularFormatter(logging.Formatter):
                 else:
                     formatted_lines.append(f"{' ':8}   {wrapped_line:<{self.max_width}}   ")
 
-        record.plain_message = record.getMessage()
+        record.plain_message = message
 
         return "\n".join(formatted_lines)
 
@@ -124,7 +182,14 @@ class ColorTabularFormatter(logging.Formatter):
 
 class PlainTextFormatter(logging.Formatter):
     def format(self, record):
-        return record.plain_message if hasattr(record, 'plain_message') else record.getMessage()
+        if hasattr(record, 'plain_message'):
+            return record.plain_message
+
+        message = record.getMessage()
+        request_id = getattr(record, "request_id", None)
+        if request_id and not getattr(record, "gallama_basic", False):
+            return f"[req:{request_id}] {message}"
+        return message
 
 
 class ZeroMQHandler(logging.Handler):
@@ -164,7 +229,8 @@ class ZeroMQHandler(logging.Handler):
                 'log': log_entry,
                 'level': record.levelname,
                 'model': os.environ.get('MODEL_NAME', 'unknown'),
-                'port': os.environ.get('MODEL_PORT', 'unknown')
+                'port': os.environ.get('MODEL_PORT', 'unknown'),
+                'gallama_basic': bool(getattr(record, "gallama_basic", False)),
             }, flags=zmq.NOBLOCK)
         except zmq.Again:
             print("Warning: ZMQ socket buffer full, log message dropped")
@@ -241,7 +307,7 @@ def normalize_log_verbosity(verbosity: Optional[Union[str, int]]) -> int:
     except (TypeError, ValueError):
         normalized = DEFAULT_LOG_VERBOSITY
 
-    return max(DEFAULT_LOG_VERBOSITY, min(MAX_LOG_VERBOSITY, normalized))
+    return max(BASIC_LOG_VERBOSITY, min(MAX_LOG_VERBOSITY, normalized))
 
 
 def get_log_verbosity(default: int = DEFAULT_LOG_VERBOSITY) -> int:
@@ -267,10 +333,12 @@ def is_max_log_verbosity(verbosity: Optional[Union[str, int]] = None) -> bool:
 
 def setup_logger(config: LogConfig):
     handlers = []
+    verbosity_filter = VerbosityFilter()
 
     if config.TO_CONSOLE:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(ColorTabularFormatter(max_width=250))
+        console_handler.addFilter(verbosity_filter)
         handlers.append(console_handler)
 
     if config.TO_FILE and config.LOG_FILE:
@@ -281,6 +349,7 @@ def setup_logger(config: LogConfig):
                 backupCount=config.BACKUP_COUNT
             )
             file_handler.setFormatter(PlainTextFormatter())
+            file_handler.addFilter(verbosity_filter)
             handlers.append(file_handler)
         else:
             print(f"Warning: Unable to create log file {config.LOG_FILE}. File logging will be disabled.")
@@ -289,6 +358,7 @@ def setup_logger(config: LogConfig):
     if config.TO_ZMQ and config.ZMQ_URL:
         zmq_handler = ZeroMQHandler(zmq_url=config.ZMQ_URL)
         zmq_handler.setFormatter(PlainTextFormatter())
+        zmq_handler.addFilter(verbosity_filter)
         handlers.append(zmq_handler)
 
     logger = logging.getLogger(config.LOGGER_NAME)

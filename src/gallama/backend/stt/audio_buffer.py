@@ -122,10 +122,7 @@ class AudioBufferWithTiming:
         Args:
             is_final (bool): Whether this was the final processing of the audio stream
         """
-        if is_final:
-            self.last_processed_sample_vad = len(self.buffer)
-        else:
-            self.last_processed_sample_vad = len(self.buffer)
+        self.last_processed_sample_vad = len(self.buffer)
 
     def reset(self) -> None:
         """Reset the buffer state."""

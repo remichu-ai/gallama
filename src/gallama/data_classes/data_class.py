@@ -333,6 +333,8 @@ class ChatMLQuery(BaseModel):
     messages: List[BaseMessage]
     temperature: Optional[float] = 0.7
     top_p: float = 0.85
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
     stream: Optional[bool] = False
     tools: Optional[List[Union[ToolSpec, MCPToolSpec]]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
@@ -387,6 +389,7 @@ class ChatMLQuery(BaseModel):
     top_logprob: int = None
     n: int = 1
     presence_penalty: float = 0
+    repetition_penalty: Optional[float] = None
     response_format: Optional[Union[ResponseFormat, ResponseFormatJSONSchema]] = None
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
@@ -712,6 +715,23 @@ class VoiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SamplingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    seed: Optional[int] = None
+
+
+class DefaultSamplingRule(SamplingConfig):
+    condition: Optional[Literal["thinking"]] = None
+
+
 
 # list of supported backend. None meaning it the api will take backend set from yaml config file
 SUPPORTED_BACKENDS = [
@@ -751,6 +771,14 @@ class ModelSpec(BaseModel):
 
     # extra argument for specific backend or model
     backend_extra_args: Optional[Dict[Any, Any]] = Field(description="extra args to pass to the backend", default_factory=dict)
+    env: Dict[str, Optional[str]] = Field(
+        description="Environment variables to pass to the model subprocess",
+        default_factory=dict,
+    )
+    default_sampling: List[DefaultSamplingRule] = Field(
+        description="Default sampling rules keyed by optional generation condition",
+        default_factory=list,
+    )
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -786,6 +814,25 @@ class ModelSpec(BaseModel):
             return [v.get(i, 0.0) for i in range(torch.cuda.device_count())]
         return v
 
+    @field_validator('env', mode='before')
+    @classmethod
+    def validate_env(cls, v):
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError("'env' must be a mapping of environment variables")
+
+        normalized_env = {}
+        for key, value in v.items():
+            if value is None:
+                normalized_env[str(key)] = None
+            elif isinstance(value, (str, int, float, bool)):
+                normalized_env[str(key)] = str(value)
+            else:
+                raise ValueError(f"Environment variable '{key}' must be a scalar or null")
+
+        return normalized_env
+
     # TODO this is clasing with embedding cause embedding will set visiable GPU and hence it is not seen anymore in this validator
     # @validator('gpus')
     # def check_gpus(cls, gpus):
@@ -807,6 +854,17 @@ class ModelSpec(BaseModel):
     #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
         # return gpus
+
+    @model_validator(mode='after')
+    def validate_default_sampling_rules(self) -> 'ModelSpec':
+        seen_conditions: Set[Optional[str]] = set()
+        for rule in self.default_sampling:
+            if rule.condition in seen_conditions:
+                raise ValueError(
+                    f"Duplicate default_sampling rule for condition={rule.condition!r}"
+                )
+            seen_conditions.add(rule.condition)
+        return self
 
 
     @classmethod
@@ -872,6 +930,8 @@ class ModelSpec(BaseModel):
         max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
 
         backend_extra_args = input_dict.get('backend_extra_args', {})
+        env = input_dict.get('env', {})
+        default_sampling = input_dict.get('default_sampling', [])
 
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
@@ -896,22 +956,23 @@ class ModelSpec(BaseModel):
                    voice=voice,
                    prompt_template=prompt_template,
                    backend_extra_args=backend_extra_args,
+                   env=env,
+                   default_sampling=default_sampling,
                    max_concurrent_requests=max_concurrent_requests,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
 
-    def get_visible_gpu_indices(self) -> str:
+    def get_visible_gpu_indices(self, env: Optional[Dict[str, str]] = None) -> str:
         """
         Generate a string of GPU indices based on allocated GPUs.
         If no GPUs are specified, return all available GPU indices.
         Respects existing CUDA_VISIBLE_DEVICES environment variable if set.
         """
-        import os
-
         # 1. First, check if the user explicitly set the env variable externally
-        existing_cvd = os.environ.get('CUDA_VISIBLE_DEVICES')
+        env_source = env or os.environ
+        existing_cvd = env_source.get('CUDA_VISIBLE_DEVICES')
 
         if self.gpus is None or self.gpus == "auto":
             if existing_cvd is not None:
@@ -925,8 +986,33 @@ class ModelSpec(BaseModel):
         if all(vram == 0 for vram in self.gpus):
             return ""  # No GPUs allocated
 
+        if existing_cvd is not None:
+            if existing_cvd == "":
+                return ""
+
+            visible_devices = [device.strip() for device in existing_cvd.split(',') if device.strip()]
+            selected_devices = [
+                visible_devices[i] if i < len(visible_devices) else str(i)
+                for i, vram in enumerate(self.gpus)
+                if vram > 0
+            ]
+            return ','.join(selected_devices)
+
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
+
+    def build_child_env(self, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        child_env = (base_env or os.environ).copy()
+
+        for key, value in (self.env or {}).items():
+            if value is None:
+                child_env.pop(key, None)
+            else:
+                child_env[key] = value
+
+        child_env['CUDA_VISIBLE_DEVICES'] = self.get_visible_gpu_indices(child_env)
+        child_env.setdefault('CUDA_DEVICE_ORDER', 'PCI_BUS_ID')
+        return child_env
 
     @staticmethod
     def deep_merge_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
@@ -1216,15 +1302,20 @@ class AnthropicMessagesRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
+    min_p: Optional[float] = None
     stream: Optional[bool] = False
     stop_sequences: Optional[List[str]] = None
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
     mcp_servers: Optional[List[AnthropicMCPServer]] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
     thinking_token_budget: Optional[int] = None
     reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = None
     use_thinking: Optional[Literal[True, False, "Skip"]] = None
     return_thinking: Optional[Literal[False, True, "separate"]] = None
+    seed: Optional[int] = None
 
     @staticmethod
     def _is_claude_code_billing_header_text(text: str) -> bool:
@@ -1449,6 +1540,8 @@ class AnthropicMessagesRequest(BaseModel):
             "messages": chat_messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
             "stream": self.stream,
             "max_tokens": self.max_tokens,
             "tools": chat_tools,
@@ -1459,6 +1552,10 @@ class AnthropicMessagesRequest(BaseModel):
             "thinking_token_budget": self.thinking_token_budget,
             "use_thinking": self.use_thinking,
             "return_thinking": self.return_thinking,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            "repetition_penalty": self.repetition_penalty,
+            "seed": self.seed,
         }
 
         # Filter out None values so Pydantic applies its own defaults, except when

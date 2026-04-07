@@ -705,9 +705,15 @@ Follow these steps to use the model.
 
 Each top-level key is the model name that Gallama will expose through the API. The value under that key is the configuration used to load the backend.
 
+Optional `_global` settings apply to every model entry. This is useful for subprocess environment variables such as `CUDA_VISIBLE_DEVICES`.
+
 Minimal Exllama example:
 
 ```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "1,0"
+
 mistral:
   backend: exllama
   model_id: /home/your-user/gallama/models/Mistral-7B-instruct-v0.3-4.5bpw-exl2
@@ -721,11 +727,62 @@ Typical keys:
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
+- `env`: optional environment variables for the model subprocess. Per-model `env` overrides `_global.env`
 - `max_seq_len`: override context length if needed
 - `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
 - `quant`: optional metadata for the model quantization you downloaded
 - `eos_token_list`: optional extra EOS tokens for models that need them
+- `default_sampling`: optional per-model sampling defaults. Rules with `condition: thinking` apply only to the dedicated reasoning pass; omitted `condition` is the normal default. API request values override YAML values per field.
 - `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `kokoro`, and similar backends
+
+Example with default sampling:
+
+```yaml
+qwen35:
+  backend: transformers
+  model_id: /home/your-user/gallama/models/qwen3.5
+  prompt_template: Qwen3.5
+  gpus: auto
+  default_sampling:
+    - temperature: 0.7
+      top_p: 0.85
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
+      repetition_penalty: 1.0
+    - condition: thinking
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repetition_penalty: 1.0
+```
+
+Example with global GPU reordering and a per-model override:
+
+```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "1,0"
+
+qwen25-vl:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/qwen25-vl
+  prompt_template: Qwen2-VL
+  gpus: auto
+
+text-only-model:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/text-only
+  prompt_template: Llama3
+  gpus: auto
+  env:
+    CUDA_VISIBLE_DEVICES: "0,1"
+```
+
+When `gpus: auto` is used, Gallama preserves the configured `CUDA_VISIBLE_DEVICES` order exactly. When `gpus` is an explicit split list, Gallama now interprets that split relative to the configured visible-device order.
 
 Example with a `transformers` backend:
 

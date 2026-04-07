@@ -33,7 +33,7 @@ from gallama.data_classes import (
     GenQueueDynamic
 )
 
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 
 
 
@@ -61,7 +61,7 @@ class ModelMLXVLM(ModelInterface):
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for mlx vllm backend"
+            raise NotImplementedError("Draft model currently not supported for mlx vllm backend")
 
         self.eos_token_ids = self.generate_eos_tokens_id()
         return model, processor.tokenizer, processor
@@ -85,6 +85,7 @@ class ModelMLXVLM(ModelInterface):
         # stop,
         gen_queue_list: List[QueueContext] = None,
         top_p=0.8,
+        repetition_penalty: Optional[float] = None,
         # prefix_strings=None,
         # stop_word_to_return="",
         gen_type_str: str = "text",
@@ -102,7 +103,7 @@ class ModelMLXVLM(ModelInterface):
                 'max_tokens': max_tokens,
                 'temperature': temperature,
                 'top_p': top_p,
-                'repetition_penalty': 1.1,
+                'repetition_penalty': 1.1 if repetition_penalty is None else repetition_penalty,
             }
         )
 
@@ -141,6 +142,7 @@ class ModelMLXVLM(ModelInterface):
         messages: List = None,  # query.message for multimodal
         **kwargs,
     ) -> (str, GenerationStats):
+        repetition_penalty = kwargs.get("repetition_penalty")
 
         loop = asyncio.get_event_loop()
 
@@ -283,6 +285,7 @@ class ModelMLXVLM(ModelInterface):
                 temperature,
                 gen_queue_list,
                 top_p,
+                repetition_penalty,
                 gen_type_str,
             )
 

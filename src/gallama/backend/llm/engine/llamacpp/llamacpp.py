@@ -44,7 +44,7 @@ from gallama.data_classes import (
     QueueContext,
     GenQueueDynamic
 )
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 
 
 class ModelLlamaCpp(ModelInterface):
@@ -71,7 +71,7 @@ class ModelLlamaCpp(ModelInterface):
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for llama cpp backend"
+            raise NotImplementedError("Draft model currently not supported for llama cpp backend")
 
         self.eos_token_ids = self.generate_eos_tokens_id()
         return model, tokenizer
@@ -79,7 +79,7 @@ class ModelLlamaCpp(ModelInterface):
 
     def load_model_llama_cpp(self, model_id, gpus):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         # currently speculative decoding not supported by model specific for LLama CPP python
         if isinstance(gpus, str) and gpus == "auto":
@@ -125,22 +125,50 @@ class ModelLlamaCpp(ModelInterface):
 
 
     # ************* method for generation from here
-    def _run_generator_and_queue(self, prompt, logits_processor, max_tokens, temperature, stop, gen_queue_list,
-                                 top_p=0.8, prefix_strings=None, stop_word_to_return="", gen_type_str: str="text"):
+    def _run_generator_and_queue(
+        self,
+        prompt,
+        logits_processor,
+        max_tokens,
+        temperature,
+        stop,
+        gen_queue_list,
+        top_p=0.8,
+        top_k=None,
+        min_p=None,
+        presence_penalty=None,
+        frequency_penalty=None,
+        repetition_penalty=None,
+        seed=None,
+        prefix_strings=None,
+        stop_word_to_return="",
+        gen_type_str: str = "text",
+    ):
 
         loop = asyncio.get_event_loop()
 
+        generator_kwargs = {
+            "prompt": prompt,
+            # "suffix": prefix_strings,
+            "logits_processor": logits_processor,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "min_p": 0.05 if min_p is None else min_p,
+            "stop": stop,
+            "repeat_penalty": 1.1 if repetition_penalty is None else repetition_penalty,
+            "stream": True,
+        }
+        optional_generator_kwargs = {
+            "top_k": top_k,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "seed": seed,
+        }
+        generator_kwargs.update({key: value for key, value in optional_generator_kwargs.items() if value is not None})
+
         generator = self.model(
-            prompt=prompt,
-            #suffix=prefix_strings,
-            logits_processor=logits_processor,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            min_p=0.05,
-            stop=stop,
-            repeat_penalty=1.1,
-            stream=True,
+            **generator_kwargs,
         )
 
         generate_text = ""
@@ -185,6 +213,12 @@ class ModelLlamaCpp(ModelInterface):
         messages: List = None,  # query.message for multimodal
         **kwargs,
     ) -> (str, GenerationStats):
+        top_k = kwargs.get("top_k")
+        min_p = kwargs.get("min_p")
+        presence_penalty = kwargs.get("presence_penalty")
+        frequency_penalty = kwargs.get("frequency_penalty")
+        repetition_penalty = kwargs.get("repetition_penalty")
+        seed = kwargs.get("seed")
 
         loop = asyncio.get_event_loop()
 
@@ -285,7 +319,8 @@ class ModelLlamaCpp(ModelInterface):
                 pool,
                 self._run_generator_and_queue,
                 prompt, logits_processors, max_tokens_to_use, temperature, stop_conditions, gen_queue_list,
-                top_p, prefix_strings, stop_word_to_return, gen_type_str
+                top_p, top_k, min_p, presence_penalty, frequency_penalty, repetition_penalty, seed,
+                prefix_strings, stop_word_to_return, gen_type_str
             )
 
         duration = time.time() - start_time

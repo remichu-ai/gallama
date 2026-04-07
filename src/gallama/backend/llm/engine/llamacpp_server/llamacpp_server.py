@@ -31,7 +31,7 @@ from gallama.data_classes import (
     VideoFrame,
 )
 from gallama.backend.llm.prompt_engine.model_special_tag import MODEL_VISION_TOKEN
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 from gallama.utils.request_disconnect import is_request_disconnected
 from gallama.utils.utils import get_image
 
@@ -200,7 +200,7 @@ class ModelLlamaCppServer(ModelInterface):
                     mode = self.server_log_mode
 
                 if mode == "startup":
-                    logger.info(prefix + text)
+                    logger.info(prefix + text, extra=basic_log_extra())
                 elif self.server_log_handle:
                     self.server_log_handle.write(text + "\n")
                     self.server_log_handle.flush()
@@ -214,7 +214,7 @@ class ModelLlamaCppServer(ModelInterface):
 
     def _spawn_server(self):
         cmd = self._build_startup_command()
-        logger.info(f"Starting llama.cpp server: {' '.join(cmd)}")
+        logger.info(f"Starting llama.cpp server: {' '.join(cmd)}", extra=basic_log_extra())
 
         self.server_process = subprocess.Popen(
             cmd,
@@ -244,7 +244,10 @@ class ModelLlamaCppServer(ModelInterface):
             try:
                 self._probe_server()
                 self._set_log_mode("running")
-                logger.info(f"llama.cpp server ready at {self.base_url}; logging to {self.server_log_path}")
+                logger.info(
+                    f"llama.cpp server ready at {self.base_url}; logging to {self.server_log_path}",
+                    extra=basic_log_extra(),
+                )
                 return
             except Exception as exc:
                 last_error = exc
@@ -257,7 +260,7 @@ class ModelLlamaCppServer(ModelInterface):
     def _ensure_server_started(self):
         try:
             self._probe_server()
-            logger.info(f"Using existing llama.cpp server at {self.base_url}")
+            logger.info(f"Using existing llama.cpp server at {self.base_url}", extra=basic_log_extra())
             return
         except Exception:
             pass
@@ -348,7 +351,7 @@ class ModelLlamaCppServer(ModelInterface):
 
     def close(self):
         if self.server_process is not None and self.server_process.poll() is None:
-            logger.info(f"Stopping managed llama.cpp server for {self.model_name}")
+            logger.info(f"Stopping managed llama.cpp server for {self.model_name}", extra=basic_log_extra())
             self._set_log_mode("shutdown")
             self.server_process.terminate()
             try:
@@ -497,6 +500,12 @@ class ModelLlamaCppServer(ModelInterface):
         max_tokens: int,
         temperature: float,
         top_p: float,
+        top_k: Optional[int],
+        min_p: Optional[float],
+        presence_penalty: Optional[float],
+        frequency_penalty: Optional[float],
+        repetition_penalty: Optional[float],
+        seed: Optional[int],
         stop_words: Optional[List[str]],
         json_schema: Optional[dict],
         multimodal_data: Optional[List[str]] = None,
@@ -529,6 +538,14 @@ class ModelLlamaCppServer(ModelInterface):
         if json_schema:
             payload["json_schema"] = json_schema
 
+        request_overrides = {
+            "min_p": min_p,
+            "top_k": top_k,
+            "repeat_penalty": repetition_penalty,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "seed": seed,
+        }
         passthrough_keys = (
             "min_p",
             "top_k",
@@ -543,7 +560,9 @@ class ModelLlamaCppServer(ModelInterface):
             "n_probs",
         )
         for key in passthrough_keys:
-            if key in self.backend_extra_args:
+            if request_overrides.get(key) is not None:
+                payload[key] = request_overrides[key]
+            elif key in self.backend_extra_args:
                 payload[key] = self.backend_extra_args[key]
 
         return payload
@@ -623,6 +642,12 @@ class ModelLlamaCppServer(ModelInterface):
         **kwargs,
     ) -> str:
         del formatter, banned_strings
+        top_k = kwargs.get("top_k")
+        min_p = kwargs.get("min_p")
+        presence_penalty = kwargs.get("presence_penalty")
+        frequency_penalty = kwargs.get("frequency_penalty")
+        repetition_penalty = kwargs.get("repetition_penalty")
+        seed = kwargs.get("seed")
 
         if video:
             raise HTTPException(status_code=400, detail="llama_cpp_server does not support direct video input")
@@ -675,6 +700,12 @@ class ModelLlamaCppServer(ModelInterface):
             max_tokens=max_tokens_to_use,
             temperature=temperature,
             top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            seed=seed,
             stop_words=stop_conditions,
             json_schema=json_schema,
             multimodal_data=multimodal_data or None,

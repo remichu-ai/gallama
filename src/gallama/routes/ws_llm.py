@@ -301,7 +301,8 @@ class WebSocketSession:
             query=query,
             gen_queue=gen_queue,
             model_name=model_name,
-            request=mock_request
+            request=mock_request,
+            provider="openai",
         ):
             # Check if generation should be stopped
             if self.stop_event.is_set():

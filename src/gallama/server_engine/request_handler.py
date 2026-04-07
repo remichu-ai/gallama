@@ -8,6 +8,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from gallama.data_classes import ModelInstanceInfo
 from gallama.logger import logger
+from gallama.logger.logger import REQUEST_ID_HEADER
 from gallama.utils.utils import decode_content_encoded_body
 
 
@@ -66,6 +67,9 @@ async def forward_request(
 
         # Use modified headers if provided, otherwise use the original headers
         headers = modified_headers if modified_headers else dict(request.headers)
+        request_id = getattr(request.state, "request_id", None) or headers.get(REQUEST_ID_HEADER)
+        if request_id:
+            headers[REQUEST_ID_HEADER] = request_id
 
         # Ensure we have the raw body bytes first
         if not hasattr(request, '_body'):
