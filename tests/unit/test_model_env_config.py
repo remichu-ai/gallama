@@ -41,6 +41,47 @@ def test_global_env_is_not_treated_as_model_and_merges_into_model_config(monkeyp
     assert "_global" in manager.get_full_config()
 
 
+def test_global_warmup_prompt_merges_into_model_config(monkeypatch, tmp_path):
+    config_file = tmp_path / "model_config.yaml"
+    config_file.write_text(
+        "\n".join(
+            [
+                "_global:",
+                "  warmup_prompt:",
+                "    path: warmups/claude.yaml",
+                "    max_completion_tokens: 64",
+                "vision-model:",
+                "  model_id: '/models/vision'",
+                "  backend: 'exllama'",
+                "  warmup_prompt:",
+                "    reasoning_effort: minimal",
+                "text-model:",
+                "  model_id: '/models/text'",
+                "  backend: 'exllama'",
+                "disabled-model:",
+                "  model_id: '/models/disabled'",
+                "  backend: 'exllama'",
+                "  warmup_prompt: false",
+                "",
+            ]
+        )
+    )
+
+    monkeypatch.setenv("GALLAMA_HOME_PATH", str(tmp_path))
+    manager = ConfigManager()
+
+    assert manager.get_effective_model_config("vision-model")["warmup_prompt"] == {
+        "path": "warmups/claude.yaml",
+        "max_completion_tokens": 64,
+        "reasoning_effort": "minimal",
+    }
+    assert manager.get_effective_model_config("text-model")["warmup_prompt"] == {
+        "path": "warmups/claude.yaml",
+        "max_completion_tokens": 64,
+    }
+    assert manager.get_effective_model_config("disabled-model")["warmup_prompt"] is False
+
+
 def test_update_model_yaml_preserves_global_config(monkeypatch, tmp_path):
     config_file = tmp_path / "model_config.yaml"
     config_file.write_text(
@@ -119,3 +160,30 @@ def test_build_child_env_preserves_visible_device_order_for_auto_gpu_mode():
     child_env = model_spec.build_child_env({"CUDA_VISIBLE_DEVICES": "0,1"})
 
     assert child_env["CUDA_VISIBLE_DEVICES"] == "1,0"
+
+
+def test_model_spec_from_dict_preserves_warmup_prompt():
+    model_spec = ModelSpec.from_dict(
+        {
+            "model_name": "vision-model",
+            "model_id": "/models/vision",
+            "backend": "exllama",
+            "warmup_prompt": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Reply with OK.",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert model_spec.warmup_prompt == {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Reply with OK.",
+            }
+        ]
+    }

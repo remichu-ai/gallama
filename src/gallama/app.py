@@ -21,6 +21,7 @@ from gallama.logger.logger import (
     REQUEST_ID_HEADER,
     basic_log_extra,
     get_logger,
+    get_log_verbosity,
     get_log_level_for_verbosity,
     new_request_id,
     reset_request_id,
@@ -29,6 +30,7 @@ from gallama.logger.logger import (
 )
 import base64
 from gallama.dependencies import get_model_manager
+from gallama.warmup import warmup_llm
 from gallama.routes import (
     chat_router,
     embedding_router,
@@ -93,16 +95,15 @@ async def startup_event():
     # warm up LLM
     if model_manager.llm_dict:
         gen_queue = GenQueue()
+        warmup_base_dir = config_manager.get_gallama_user_config_file_path.parent
         for _model_name, _model in model_manager.llm_dict.items():
-            await _model.chat_raw(
-                prompt="Write a 500 words story on Llama",
-                # stream=False,
-                max_tokens=50,
+            await warmup_llm(
+                model=_model,
+                model_name=_model_name,
+                warmup_prompt=getattr(_model, "warmup_prompt", None),
                 gen_queue=gen_queue,
-                quiet=True,
-                request=None,
+                base_dir=warmup_base_dir,
             )
-
             logger.info(f"LLM| {_model_name} | warmed up", extra=basic_log_extra())
         gen_queue = None
 
@@ -143,7 +144,7 @@ async def lifespan(app: FastAPI):
 def make_server(args):
     global logger
     global draft_spec_dict
-    requested_verbosity = getattr(args, "verbose", 0) or 0
+    requested_verbosity = getattr(args, "verbose", 0) or get_log_verbosity()
     set_log_verbosity(requested_verbosity)
 
     logger = get_logger(

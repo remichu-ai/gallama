@@ -238,6 +238,13 @@ def get_gpu_memory_info():
         return "Unable to retrieve GPU information"
 
 
+def format_cuda_visible_devices(cuda_visible_devices: str) -> str:
+    visible_devices = [device.strip() for device in (cuda_visible_devices or "").split(',') if device.strip()]
+    if not visible_devices:
+        return "No GPUs visible"
+    return ", ".join(f"cuda:{index}->GPU {device}" for index, device in enumerate(visible_devices))
+
+
 def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None):
     total_models = len(models)
     total_instances = sum(len(model_info.instances) for model_info in models.values())
@@ -248,9 +255,17 @@ def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None
         instances = ["{0}".format(inst.port) for inst in model_info.instances]
         model_details.append("| {0:<20} | {1:>2} | {2:<30} ".format(model_name, len(instances), ', '.join(instances)))
 
+    # Prepare effective CUDA_VISIBLE_DEVICES mapping per model instance
+    cuda_mappings = []
+    for model_name, model_info in models.items():
+        for instance in model_info.instances:
+            mapping = format_cuda_visible_devices(instance.cuda_visible_devices)
+            cuda_mappings.append("| {0}:{1:<5} -> {2}".format(model_name, instance.port, mapping))
+
     # Prepare GPU info
     gpu_info = get_gpu_memory_info().split('\n')
     formatted_gpu_info = ''.join("| {0}\n".format(line) for line in gpu_info)
+    formatted_cuda_mappings = ''.join("{0}\n".format(line) for line in cuda_mappings)
 
     # Construct the log message
     log_message = """```
@@ -261,15 +276,19 @@ def log_model_status(models: Dict[str, ModelInfo], custom_logger: "logger" =None
 +----------------------+---+---------------------------------------------------+
 {2}
 +------------------------------------------------------------------------------+
-| GPU Memory Information                                                       
+| Effective CUDA_VISIBLE_DEVICES per instance                                  
++------------------------------------------------------------------------------+
+{3}+------------------------------------------------------------------------------+
+| Physical GPU Memory Information (nvidia-smi order)                           
 +-------+-------------+-------------+------------------------------------------+
 | GPU   | Used        | Free        | Total       
 +-------+-------------+-------------+------------------------------------------+
-{3}+-------+-------------+-------------+------------------------------------------+
+{4}+-------+-------------+-------------+------------------------------------------+
 ```""".format(
         total_models,
         total_instances,
         '\n'.join(model_details),
+        formatted_cuda_mappings,
         formatted_gpu_info
     )
 

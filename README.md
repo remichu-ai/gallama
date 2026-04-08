@@ -727,7 +727,9 @@ Typical keys:
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
+- `reserve_vram`: ExLlamaV3 auto-mode reserve in GB per visible GPU. Scalar applies to all visible GPUs; list values follow the final logical CUDA order after `CUDA_VISIBLE_DEVICES`
 - `env`: optional environment variables for the model subprocess. Per-model `env` overrides `_global.env`
+- `warmup_prompt`: optional ChatML-style mapping for startup warmup. Can also be set under `_global` and overridden per model. Use `false` on a model to disable inherited warmup.
 - `max_seq_len`: override context length if needed
 - `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
 - `quant`: optional metadata for the model quantization you downloaded
@@ -768,10 +770,11 @@ _global:
     CUDA_VISIBLE_DEVICES: "1,0"
 
 qwen25-vl:
-  backend: exllama
+  backend: exllamav3
   model_id: /home/your-user/gallama/models/qwen25-vl
   prompt_template: Qwen2-VL
   gpus: auto
+  reserve_vram: [1.0, 0.0]
 
 text-only-model:
   backend: exllama
@@ -783,6 +786,39 @@ text-only-model:
 ```
 
 When `gpus: auto` is used, Gallama preserves the configured `CUDA_VISIBLE_DEVICES` order exactly. When `gpus` is an explicit split list, Gallama now interprets that split relative to the configured visible-device order.
+
+Example with a global warmup prompt loaded from an external file:
+
+```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "0,2,3,1,4,5"
+  warmup_prompt:
+    path: /home/your-user/.config/claude-code/warmup.yaml
+    max_completion_tokens: 64
+    reasoning_effort: minimal
+
+claude-code-model:
+  backend: transformers
+  model_id: /home/your-user/gallama/models/claude-code
+  warmup_prompt:
+    max_completion_tokens: 32
+
+another-model:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/another-model
+  warmup_prompt: false
+```
+
+The external file should contain a mapping that Gallama can validate as a `ChatMLQuery`, for example:
+
+```yaml
+messages:
+  - role: developer
+    content: You are Claude Code.
+  - role: user
+    content: Reply with OK.
+```
 
 Example with a `transformers` backend:
 
@@ -922,6 +958,8 @@ Useful optional arguments:
 
 - `max_seq_len=32768`
 - `gpus=20,20` or leave it as automatic
+- default ExLlamaV3 auto reserve is `0.8 GB` on logical GPU 0 and `0.4 GB` on other visible GPUs
+- `reserve_vram=0.4` for ExLlamaV3 auto mode on all visible GPUs, or `reserve_vram=1.0,0.0` to reserve only logical GPU 0
 - `cache_size=32768`
 - `cache_quant=Q4`
 - `prompt_template=<template-name>`
@@ -934,6 +972,7 @@ Useful optional arguments:
 Notes:
 
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
+- `reserve_vram` is interpreted in GB against the final visible-device order after `CUDA_VISIBLE_DEVICES` is applied. For ExLlamaV3, it only applies when `gpus=auto`; explicit `gpus=...` and `reserve_vram` cannot be combined.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
 - This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 

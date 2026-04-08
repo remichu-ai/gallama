@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, APIRouter
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from collections import defaultdict
 from typing import Union
@@ -73,6 +73,11 @@ router.include_router(realtime_router)
 
 manager_app = FastAPI()
 manager_app.include_router(router)
+
+
+@manager_app.head("/")
+async def root_head():
+    return PlainTextResponse("Not Found\n", status_code=404)
 
 
 def _log_request_received(request: Request) -> None:
@@ -565,6 +570,7 @@ async def run_model(model_spec: ModelSpec):
                 strict=model_spec.strict,
                 modalities=modalities,
                 max_concurrent_requests=model_spec.max_concurrent_requests,
+                cuda_visible_devices=env.get("CUDA_VISIBLE_DEVICES", ""),
             )
             server_manager.models[model_spec.model_name].instances.append(instance_info)
         else:
@@ -638,6 +644,33 @@ async def get_instance_for_model(model: str):
     return min(running_instances, key=get_instance_load_key)
 
 
+async def acquire_instance_slot(
+    instances: list[ModelInstanceInfo],
+    request: Request,
+    poll_interval: float = 0.05,
+) -> ModelInstanceInfo:
+    """
+    Wait until one instance is below its configured concurrency limit, then
+    atomically reserve a slot on that instance.
+    """
+    server_manager = get_server_manager()
+
+    while True:
+        async with server_manager.active_requests_lock:
+            candidates = [
+                inst for inst in instances
+                if active_requests[inst.port] < get_instance_concurrency_limit(inst)
+            ]
+            if candidates:
+                instance = min(candidates, key=get_instance_load_key)
+                active_requests[instance.port] += 1
+                return instance
+
+        if await request.is_disconnected():
+            raise HTTPException(status_code=499, detail="Client disconnected while waiting for model capacity")
+
+        await asyncio.sleep(poll_interval)
+
 
 async def load_balanced_router(request: Request, path: str):
     server_manager = get_server_manager()
@@ -697,13 +730,8 @@ async def load_balanced_router(request: Request, path: str):
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
 
-        # Select the instance with the lowest normalized load so higher-capacity
-        # instances can absorb more concurrent traffic.
-        instance = min(available_instances, key=get_instance_load_key)
-
-        # Increment the active request count for the selected instance
-        async with server_manager.active_requests_lock:
-            active_requests[instance.port] += 1
+        # Select an instance with spare capacity and reserve a slot on it.
+        instance = await acquire_instance_slot(available_instances, request)
 
         try:
             server_logger.info(f"active_requests: {str(active_requests)}")

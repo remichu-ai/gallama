@@ -88,6 +88,7 @@ class ModelInterface(ABC):
 
         # self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
         self.cache_quant = model_spec.cache_quant or None       # default to FP16
+        self.reserve_vram = model_spec.reserve_vram
         # self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.backend = model_spec.backend   # default should be set as exllama if not defined
         # self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
@@ -97,6 +98,7 @@ class ModelInterface(ABC):
         # self.backend_extra_args = model_spec.get("backend_extra_args") or {}
         self.backend_extra_args = model_spec.backend_extra_args or {}
         self.default_sampling = model_spec.default_sampling or []
+        self.warmup_prompt = model_spec.warmup_prompt
 
 
         # handle draft model

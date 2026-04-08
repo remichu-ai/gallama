@@ -30,7 +30,7 @@ from gallama.data_classes import (
     TagDefinition,
     AnthropicStopReason
 )
-from gallama.utils.utils import get_image, get_free_vram_gb
+from gallama.utils.utils import get_image
 
 try:
     from exllamav3 import (
@@ -122,6 +122,66 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
 
     return normalized
 
+
+def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
+    if num_devices <= 0:
+        return []
+
+    if raw_reserve_vram is None:
+        return [0.4] * num_devices
+
+    if isinstance(raw_reserve_vram, (int, float)):
+        return [float(raw_reserve_vram)] * num_devices
+
+    if isinstance(raw_reserve_vram, list):
+        normalized = [float(value) for value in raw_reserve_vram]
+        if len(normalized) < num_devices:
+            normalized.extend([0.0] * (num_devices - len(normalized)))
+        return normalized[:num_devices]
+
+    raise ValueError("reserve_vram must be a float or list[float]")
+
+
+def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices: int) -> Dict:
+    load_kwargs = {
+        "progressbar": True,
+        "tensor_p": tensor_parallel,
+    }
+
+    if isinstance(gpus, list):
+        if reserve_vram is not None:
+            raise ValueError(
+                "ExLlamaV3 does not support `reserve_vram` together with an explicit `gpus` split. "
+                "Use `gpus: auto` with `reserve_vram`, or remove `reserve_vram`."
+            )
+        load_kwargs["use_per_device"] = gpus
+        return load_kwargs
+
+    if isinstance(gpus, str) and gpus == "auto":
+        load_kwargs["reserve_per_device"] = _normalize_reserve_vram(reserve_vram, num_devices)
+        return load_kwargs
+
+    raise ValueError("Device map should be either 'auto' or a GPU split list")
+
+
+def _resolve_vision_device(vision_device, num_devices: int):
+    if vision_device is None:
+        return None
+
+    if isinstance(vision_device, str):
+        vision_device = vision_device.strip().lower()
+        if vision_device.startswith("cuda:"):
+            vision_device = vision_device.split(":", 1)[1]
+        vision_device = int(vision_device)
+
+    if not isinstance(vision_device, int):
+        raise ValueError("vision_device must be an integer GPU index or a cuda:<index> string")
+
+    if vision_device < 0 or vision_device >= num_devices:
+        raise ValueError(f"vision_device {vision_device} is out of range for {num_devices} CUDA devices")
+
+    return torch.device(f"cuda:{vision_device}")
+
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
@@ -144,7 +204,7 @@ class ModelExllamaV3(ModelInterface):
             cache_size=self.cache_size,
             cache_quant=self.cache_quant,
             gpus=self.gpus,
-            reserve_vram=self._reserve_vram,
+            reserve_vram=self.reserve_vram,
             tensor_parallel=self.tensor_parallel,
             backend_extra_args=self.backend_extra_args,
         )
@@ -159,32 +219,12 @@ class ModelExllamaV3(ModelInterface):
         #         cache_size=self.draft_cache_size,
         #         cache_quant=self.draft_cache_quant,
         #         gpus=self.draft_gpus,
-        #         reserve_vram=self._reserve_vram,
+        #         reserve_vram=self.reserve_vram,
         #     )
 
         self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)
 
         return model, tokenizer, cache, processor
-
-
-    @property
-    def _reserve_vram(self):
-        try:
-            reserve_block_size = 1024 ** 2
-            num_devices = torch.cuda.device_count()
-            #reserved_vram = [192 * 1024**2] + [64 * 1024**2] * (num_devices - 1)
-            #reserved_vram = [256 * 1024 ** 2] + [96 * 1024 ** 2] * (num_devices - 1)
-
-            # GPU1 is the main GPU for my PC
-            # The below is lower threshold than exllamav2 default setting
-            reserve_per_gpu = [48 for _ in range(num_devices)]
-            main_gpu = 0    # TODO pass it to front end
-            reserve_per_gpu[main_gpu] = 96
-            reserved_vram = [_reserve * reserve_block_size for _reserve in reserve_per_gpu]
-            return reserved_vram
-        except:
-            # for non cuda env e.g. macbook
-            return None
 
     def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False, backend_extra_args=None):
         """This function return the model and its tokenizer"""
@@ -232,6 +272,7 @@ class ModelExllamaV3(ModelInterface):
         logger.info("cache_size: " + str(cache_size_to_use), extra=basic_log_extra())
         logger.info("Cache Quantization: " + str(cache_quant), extra=basic_log_extra())
         logger.info("gpus: " + str(gpus), extra=basic_log_extra())
+        logger.info("reserve_vram: " + str(reserve_vram), extra=basic_log_extra())
 
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
             "Device map should be either 'auto', 'gpu' split"
@@ -258,21 +299,13 @@ class ModelExllamaV3(ModelInterface):
                 model,
                 max_num_tokens=cache_size_to_use
             )
-        # since exl3 only allow the reserve or use per device
-        # TODO allow user to set reserve per device
-
-        # find out free vramclear
-        if gpus == "auto":
-            free_vram = get_free_vram_gb()
-            vram_reserve = 0.4
-            free_vram = [max(0, f-vram_reserve) for f in free_vram]
-            gpus = free_vram if free_vram else gpus
-
-        load_kwargs = {
-            "progressbar": True,
-            "use_per_device": gpus if isinstance(gpus, list) else None,
-            "tensor_p": tensor_parallel,
-        }
+        # ExLlamaV3 supports either reserve_per_device or use_per_device, not both.
+        load_kwargs = _resolve_load_kwargs(
+            gpus=gpus,
+            reserve_vram=reserve_vram,
+            tensor_parallel=tensor_parallel,
+            num_devices=torch.cuda.device_count(),
+        )
 
         tp_backend = (backend_extra_args or {}).get("tp_backend")
         if tp_backend:
@@ -288,7 +321,15 @@ class ModelExllamaV3(ModelInterface):
         processor = None
         try:
             processor = Model.from_config(config, component = "vision")
-            processor.load()
+            vision_device = _resolve_vision_device(
+                (backend_extra_args or {}).get("vision_device"),
+                torch.cuda.device_count(),
+            )
+            if vision_device is not None:
+                logger.info("Vision device: " + str(vision_device), extra=basic_log_extra())
+                processor.load(device=vision_device)
+            else:
+                processor.load()
         except AssertionError:
             logger.info("No Vision Tower", extra=basic_log_extra())
             processor = None

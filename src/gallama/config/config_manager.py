@@ -1,5 +1,4 @@
-# src/gallama/config_manager.py
-
+import copy
 import yaml
 import re
 from pathlib import Path
@@ -199,13 +198,24 @@ class ConfigManager:
         if not model_config:
             return {}
 
-        effective_config = model_config.copy()
+        effective_config = copy.deepcopy(model_config)
         global_env = self.get_global_env()
         if global_env or "env" in effective_config:
             model_env = effective_config.get("env") or {}
             if model_env is not None and not isinstance(model_env, dict):
                 raise ValueError(f"'env' for model '{model_name}' must be a mapping")
             effective_config["env"] = {**global_env, **model_env}
+
+        global_warmup_prompt = self.get_global_warmup_prompt()
+        if global_warmup_prompt is not None or "warmup_prompt" in effective_config:
+            model_has_warmup_prompt = "warmup_prompt" in effective_config
+            model_warmup_prompt = effective_config.get("warmup_prompt")
+            effective_config["warmup_prompt"] = self._merge_warmup_prompt(
+                global_warmup_prompt=global_warmup_prompt,
+                model_warmup_prompt=model_warmup_prompt,
+                model_has_warmup_prompt=model_has_warmup_prompt,
+                model_name=model_name,
+            )
 
         return effective_config
 
@@ -216,6 +226,59 @@ class ConfigManager:
         if not isinstance(env, dict):
             raise ValueError(f"'env' under '{GLOBAL_CONFIG_KEY}' must be a mapping")
         return env.copy()
+
+    def get_global_warmup_prompt(self) -> Any:
+        warmup_prompt = self.global_config.get("warmup_prompt")
+        return self._validate_warmup_prompt(
+            warmup_prompt=warmup_prompt,
+            source=f"'{GLOBAL_CONFIG_KEY}.warmup_prompt'",
+        )
+
+    @staticmethod
+    def _deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+        merged = copy.deepcopy(base)
+        for key, value in override.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key] = ConfigManager._deep_merge_dicts(merged[key], value)
+            else:
+                merged[key] = copy.deepcopy(value)
+        return merged
+
+    @staticmethod
+    def _validate_warmup_prompt(warmup_prompt: Any, source: str) -> Any:
+        if warmup_prompt is None or isinstance(warmup_prompt, bool):
+            return warmup_prompt
+        if not isinstance(warmup_prompt, dict):
+            raise ValueError(f"{source} must be a mapping, boolean, or null")
+        return copy.deepcopy(warmup_prompt)
+
+    def _merge_warmup_prompt(
+        self,
+        *,
+        global_warmup_prompt: Any,
+        model_warmup_prompt: Any,
+        model_has_warmup_prompt: bool,
+        model_name: str,
+    ) -> Any:
+        validated_global = self._validate_warmup_prompt(
+            warmup_prompt=global_warmup_prompt,
+            source=f"'{GLOBAL_CONFIG_KEY}.warmup_prompt'",
+        )
+
+        if model_has_warmup_prompt:
+            validated_model = self._validate_warmup_prompt(
+                warmup_prompt=model_warmup_prompt,
+                source=f"'warmup_prompt' for model '{model_name}'",
+            )
+            if validated_model is False:
+                return False
+            if validated_model is None:
+                return validated_global
+            if isinstance(validated_global, dict) and isinstance(validated_model, dict):
+                return self._deep_merge_dicts(validated_global, validated_model)
+            return validated_model
+
+        return validated_global
 
     def get_full_config(self) -> Dict[str, Any]:
         return self.raw_config.copy()

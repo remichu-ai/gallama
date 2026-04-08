@@ -756,12 +756,20 @@ class ModelSpec(BaseModel):
     model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
     model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
     gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
+    reserve_vram: Optional[Union[float, List[float]]] = Field(
+        description="ExLlamaV3 auto-split reserve per visible GPU in GB. Scalar applies to all visible GPUs; list is positional.",
+        default=None,
+    )
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default="FP16", description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
     backend: Optional[Union[Literal[tuple(SUPPORTED_BACKENDS)], None]] = Field(description="model engine backend", default=None)
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
     prompt_template: Optional[str] = Field(description="prompt template", default=None)
+    warmup_prompt: Optional[Union[bool, Dict[str, Any]]] = Field(
+        description="Optional warmup ChatML query config. False disables warmup for this model.",
+        default=None,
+    )
     eos_token_list: List[str] = Field(description="eos tokens, can customize token here", default_factory=list)
 
     quant: Optional[float] = Field(description="quantization if the model support quantization on the fly", default=None)
@@ -833,6 +841,33 @@ class ModelSpec(BaseModel):
 
         return normalized_env
 
+    @field_validator('warmup_prompt', mode='before')
+    @classmethod
+    def validate_warmup_prompt(cls, v):
+        if v is None or isinstance(v, bool):
+            return v
+        if not isinstance(v, dict):
+            raise ValueError("'warmup_prompt' must be a mapping, boolean, or null")
+        return v
+
+    @field_validator('reserve_vram', mode='before')
+    @classmethod
+    def validate_reserve_vram(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            parts = [part.strip() for part in v.split(',') if part.strip()]
+            if not parts:
+                return None
+            if len(parts) == 1:
+                return float(parts[0])
+            return [float(part) for part in parts]
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, list):
+            return [float(item) for item in v]
+        raise ValueError("'reserve_vram' must be a number, comma-separated string, or list of numbers")
+
     # TODO this is clasing with embedding cause embedding will set visiable GPU and hence it is not seen anymore in this validator
     # @validator('gpus')
     # def check_gpus(cls, gpus):
@@ -899,6 +934,7 @@ class ModelSpec(BaseModel):
         model_name = input_dict.get('model_name')
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
+        reserve_vram = input_dict.get('reserve_vram')
         cache_size = input_dict.get('cache_size')
         backend = input_dict.get('backend', None)  # Default to None if not provided
         tensor_parallel = input_dict.get('tp', False)
@@ -924,6 +960,7 @@ class ModelSpec(BaseModel):
             model_type = cls.get_model_type_from_backend(backend)
 
         prompt_template = input_dict.get('prompt_template', None)
+        warmup_prompt = input_dict.get('warmup_prompt', None)
 
         # concurrent request
         allowed_concurrency = 50 if backend in ["exllama", "exllamav3", "embedding"] else 1  # TODO to look into optimal number for each backend
@@ -951,10 +988,11 @@ class ModelSpec(BaseModel):
             draft_cache_size = int(draft_cache_size)
 
         return cls(model_id=model_id, model_name=model_name, model_type=model_type,
-                   gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+                   gpus=gpus, reserve_vram=reserve_vram, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    strict=strict,
                    voice=voice,
                    prompt_template=prompt_template,
+                   warmup_prompt=warmup_prompt,
                    backend_extra_args=backend_extra_args,
                    env=env,
                    default_sampling=default_sampling,
