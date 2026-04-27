@@ -726,7 +726,7 @@ class ModelExllamaV3(ModelInterface):
             else:
                 input_ids = self.tokenizer.encode(
                     prompt,
-                    encode_special_tokens=False
+                    encode_special_tokens=True
                 )
 
             self.validate_token_length(len(input_ids[0]))
@@ -767,7 +767,7 @@ class ModelExllamaV3(ModelInterface):
                 "banned_strings": banned_strings,
                 "decode_special_tokens": True,
                 "filters": filters,
-                "token_healing": True,
+                "token_healing": False,
                 "identifier": job_id,
             }
 
