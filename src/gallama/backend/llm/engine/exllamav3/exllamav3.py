@@ -144,7 +144,10 @@ def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
         return []
 
     if raw_reserve_vram is None:
-        return [0.4] * num_devices
+        result = [0.4] * num_devices
+        if num_devices > 0:
+            result[0] = 0.8
+        return result
 
     if isinstance(raw_reserve_vram, (int, float)):
         return [float(raw_reserve_vram)] * num_devices
