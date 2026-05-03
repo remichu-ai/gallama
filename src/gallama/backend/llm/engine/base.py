@@ -1,23 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import List, Union, Optional, Literal, Callable, Tuple
+from typing import Any, List, Union, Optional, Literal, Callable, Tuple
 import asyncio
 import re       # for text processing of the thinking
 from fastapi import HTTPException, Request
+from pydantic import BaseModel, Field
 
 # logger
 from ....logger import logger
 
-# format enforcement
-from lmformatenforcer.tokenenforcer import TokenEnforcerTokenizerData
-from formatron.formatter import FormatterBuilder
-from formatron.schemas.pydantic import ClassSchema
 from ....backend.llm.format_enforcer import FormatEnforcer
 
 # thinking
 from ....backend.llm.thinking_template import THINKING_TEMPLATE, Thinking
 
 # function calling
-from ....backend.llm.tools import Tools, create_function_models_v2, create_function_models_formatron
+from ....backend.llm.tools import Tools, create_function_models_v2, create_tool_calling_model_formatron
 
 from ....utils.utils import get_token_length
 from ....api_response.chat_response import get_response_from_queue   # helper function to collect result from queue
@@ -42,6 +39,7 @@ from ....config.config_manager import ConfigManager
 # handle prompting
 from gallama.backend.llm.prompt_engine.prompt_engine import PromptEngine
 from dataclasses import dataclass
+from gallama.sampling import SAMPLING_FIELDS, resolve_sampling_overrides
 
 # video handling
 from ....data_classes import VideoFrameCollection
@@ -55,6 +53,8 @@ class ToolCallV2:
     generate_kwargs: dict
 
 class ModelInterface(ABC):
+    SAMPLING_FIELDS = SAMPLING_FIELDS
+
     @abstractmethod
     def __init__(self, model_spec:ModelSpec):
         # initialization share the same code to keep the frontend consistent
@@ -88,6 +88,7 @@ class ModelInterface(ABC):
 
         # self.cache_quant = model_spec.cache_quant or model_config.get("cache_quant") or "Q4"
         self.cache_quant = model_spec.cache_quant or None       # default to FP16
+        self.reserve_vram = model_spec.reserve_vram
         # self.backend = model_spec.backend or model_config["backend"] or "exllama"
         self.backend = model_spec.backend   # default should be set as exllama if not defined
         # self.tensor_parallel = model_spec.tensor_parallel or model_config.get("tensor_parallel", False)
@@ -96,22 +97,29 @@ class ModelInterface(ABC):
         # transformers specific arguments
         # self.backend_extra_args = model_spec.get("backend_extra_args") or {}
         self.backend_extra_args = model_spec.backend_extra_args or {}
+        self.default_sampling = model_spec.default_sampling or []
+        self.warmup_prompt = model_spec.warmup_prompt
 
 
         # handle draft model
         draft_model_config = {}
-        if model_spec.draft_model_id:
+        if model_spec.draft_model_name:
             draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
             if not draft_model_config:
                 raise HTTPException(f"Model config for '{model_spec.draft_model_name}' not exist")
 
 
-        # draft model is via cli only
-        self.draft_model_id = draft_model_config.get("model_id")
-        self.draft_model_name = model_spec.draft_model_name or None
-        self.draft_gpus = model_spec.draft_gpus or draft_model_config.get("draft_gpus") or "auto"
+        # draft model may be supplied directly or through a named model config
+        self.draft_model_id = model_spec.draft_model_id or draft_model_config.get("model_id")
+        self.draft_model_name = model_spec.draft_model_name or draft_model_config.get("model_name") or None
+        self.draft_gpus = (
+            model_spec.draft_gpus
+            or draft_model_config.get("draft_gpus")
+            or draft_model_config.get("gpus")
+            or "auto"
+        )
         self.draft_cache_size = self.cache_size   # set to the same as main model
-        self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "Q4"
+        self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "FP16"
         # assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # get the eos_token_str by merging the default config with anything set by user
@@ -142,6 +150,29 @@ class ModelInterface(ABC):
         # standard modalities
         # this set should contain either "text", "image", "video"
         self.modalities = {"text"}     # TODO current backend just assume that image is supported
+
+    @staticmethod
+    def resolve_sampling_overrides(
+        query: ChatMLQuery,
+        default_sampling: list,
+        condition: Optional[Literal["thinking"]] = None,
+    ) -> dict[str, Any]:
+        return resolve_sampling_overrides(
+            query=query,
+            default_sampling=default_sampling,
+            condition=condition,
+        )
+
+    def _resolve_sampling_overrides(
+        self,
+        query: ChatMLQuery,
+        condition: Optional[Literal["thinking"]] = None,
+    ) -> dict[str, Any]:
+        return self.resolve_sampling_overrides(
+            query=query,
+            default_sampling=self.default_sampling,
+            condition=condition,
+        )
 
     ## *************** the following method must be implemented by each backend ********
     @property
@@ -177,7 +208,7 @@ class ModelInterface(ABC):
         gen_type: Union[str, GenStart] = "text", # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
+        formatter: Any | SGLangFormatter = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -359,12 +390,12 @@ class ModelInterface(ABC):
                 thinking_tag = prompt_eng.tag_dict.get("thinking")
 
                 if thinking_tag:
-                    stop_words = query.stop_words if query.stop_words else []
+                    # for thinking generation, we dont apply stop word, so that the LLM can reasoning about the stop word itself
+                    stop_words = []
                     stop_words.append(thinking_tag.end_marker)
 
                     generation_args = {
-                        'temperature': query.temperature,
-                        'top_p': query.top_p,
+                        **self._resolve_sampling_overrides(query, condition="thinking"),
                         'gen_type': GenStart(gen_type=gen_start),
                         # 'formatter': self.formatter,
                         # add endtag of thinking as stop token
@@ -394,9 +425,9 @@ class ModelInterface(ABC):
                     prompt += partial_response
                     already_reasoning = True
 
+            final_condition = None if already_reasoning else ("thinking" if prompt_eng.is_thinking else None)
             generation_args = {
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query, condition=final_condition),
                 'gen_type': GenStart(gen_type=gen_start),
                 # 'formatter': self.formatter,
                 'stop_words': query.stop_words,
@@ -518,8 +549,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 request=request,
@@ -542,8 +572,7 @@ class ModelInterface(ABC):
             messages=query.messages,
             gen_queue=gen_queue,
             **{
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query),
                 'formatter': formatter_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
@@ -596,8 +625,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=queue_group,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 formatter=formatter_prefix_regex,
                 prefix_strings=query.prefix_strings,
                 request=request,
@@ -620,8 +648,7 @@ class ModelInterface(ABC):
             messages=query.messages,
             gen_queue=gen_queue,
             **{
-                'temperature': query.temperature,
-                'top_p': query.top_p,
+                **self._resolve_sampling_overrides(query),
                 'formatter': formatter_regex,
                 'stop_words': query.stop_words,
                 'max_tokens': query.max_tokens,
@@ -676,8 +703,7 @@ class ModelInterface(ABC):
             prompt,
             messages=query.messages,
             gen_queue=tool_thinking_queue,
-            temperature=query.temperature,
-            top_p=query.top_p,
+            **self._resolve_sampling_overrides(query),
             stop_words=tool_thinking_to_use.root_key_stop_words,
             prefix_strings=f"<{tool_thinking_to_use.root_tag}>",
             request=request,
@@ -741,8 +767,7 @@ class ModelInterface(ABC):
                 prompt,
                 messages=query.messages,
                 gen_queue=tool_thinking_queue_fallback,
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 request=request,
                 # prefix_strings="n",
                 # stop_words=TOOL_THINKING.root_key_stop_words,
@@ -765,19 +790,22 @@ class ModelInterface(ABC):
             # create the pydantic schema to enforce generation
             tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
 
-            class ToolCalling_LMFE(ClassSchema):
+            class ToolCalling_LMFE(BaseModel):
                 """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
+                functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = Field(default_factory=list)
 
-            # create the pydantic schema to enforce generation for formatron which use ClassSchema
-            tool_combined_pydantic_formatron = create_function_models_formatron(tool_handler.tool_dict_formatron)
-            class ToolCalling_formatron(ClassSchema):
-                """ The format to call one or multiple tools """
-                functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
+            filter_engine = self.formatter.get_default_engine(
+                backend=self.backend,
+                preference=query.guided_decoding_backend,
+            )
+            tool_calling_formatron_model = None
+            if filter_engine == "formatron":
+                tool_calling_formatron_model = create_tool_calling_model_formatron(tool_handler.tool_dict_formatron)
 
             formatter_json = self.formatter.json(
                 pydantic_model_lmfe=ToolCalling_LMFE,
-                pydantic_model_formatron=ToolCalling_formatron,
+                pydantic_model_formatron=tool_calling_formatron_model,
+                filter_engine=filter_engine,
                 backend=self.backend,
                 preference = query.guided_decoding_backend
             )
@@ -821,8 +849,7 @@ arg_dict = """
                 messages=query.messages,
                 gen_queue=gen_queue,
                 gen_type=GenStart(gen_type="tool"),
-                temperature=query.temperature,
-                top_p=query.top_p,
+                **self._resolve_sampling_overrides(query),
                 # stop_words=TOOL_THINKING.root_key_stop_words,
                 prefix_strings=['{\n "functions_calling": ['],
                 formatter=formatter_json,
@@ -846,7 +873,7 @@ arg_dict = """
                     messages=query.messages,
                     gen_queue=gen_queue,
                     gen_type=GenStart(gen_type="text"),
-                    temperature=query.temperature,
+                    **self._resolve_sampling_overrides(query),
                     prefix_strings=query.prefix_strings,
                     max_tokens=query.max_tokens,
                     request=request,
@@ -876,21 +903,24 @@ arg_dict = """
         # create the pydantic schema to enforce generation
         tool_combined_pydantic_lmfe = create_function_models_v2(tool_handler.tool_dict)
 
-        class ToolCalling_LMFE(ClassSchema):
+        class ToolCalling_LMFE(BaseModel):
             """ The format to call one or multiple tools """
-            functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = []
+            functions_calling: List[Union[tuple(tool_combined_pydantic_lmfe)]] = Field(default_factory=list)
 
-        # create the pydantic schema to enforce generation for formatron which use ClassSchema
-        tool_combined_pydantic_formatron = create_function_models_formatron(
-            tool_handler.tool_dict_formatron)
-
-        class ToolCalling_formatron(ClassSchema):
-            """ The format to call one or multiple tools """
-            functions_calling: List[Union[tuple(tool_combined_pydantic_formatron)]] = []
+        filter_engine = self.formatter.get_default_engine(
+            backend=self.backend,
+            preference=query.guided_decoding_backend,
+        )
+        tool_calling_formatron_model = None
+        if filter_engine == "formatron":
+            tool_calling_formatron_model = create_tool_calling_model_formatron(
+                tool_handler.tool_dict_formatron
+            )
 
         formatter_json = self.formatter.json(
             pydantic_model_lmfe=ToolCalling_LMFE,
-            pydantic_model_formatron=ToolCalling_formatron,
+            pydantic_model_formatron=tool_calling_formatron_model,
+            filter_engine=filter_engine,
             backend=self.backend,
             preference=query.guided_decoding_backend
         )
@@ -925,8 +955,7 @@ response(to="function", arg_dict="""
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="tool"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": ['{\n "functions_calling": ['],
             "formatter": formatter_json,
             "max_tokens": query.max_tokens,
@@ -1010,8 +1039,7 @@ response(""" + _tool_answer_prefix
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="tool"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": '"',
             "formatter": formatter_regex if not query.tool_call_thinking else None,
             "max_tokens": query.tool_call_thinking_token,
@@ -1051,8 +1079,7 @@ response(""" + _tool_answer_prefix
             "messages": query.messages,
             "gen_queue": gen_queue_dynamic,
             "gen_type": GenStart(gen_type="text"),
-            "temperature": query.temperature,
-            "top_p": query.top_p,
+            **self._resolve_sampling_overrides(query),
             "prefix_strings": query.prefix_strings,
             "max_tokens": query.max_tokens,
             "request": request,

@@ -30,23 +30,23 @@ class ASRBase(ABC):
 
     @abstractmethod
     def load_model(self, model_spec: ModelSpec):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     @abstractmethod
     def segment_to_timestamped_words(self, segments):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     @abstractmethod
     def transcribe(self, audio, init_prompt: str = "", temperature: float = 0.0):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     @abstractmethod
     def transcribe_to_segment(self, audio, init_prompt=""):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     @abstractmethod
     def segments_end_ts(self, res):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")
 
     def use_vad(self):
-        raise NotImplemented("must be implemented in the child class")
+        raise NotImplementedError("must be implemented in the child class")

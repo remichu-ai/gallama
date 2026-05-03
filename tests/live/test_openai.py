@@ -46,9 +46,11 @@ from helpers.dummy_mcp_server import (
 
 MODEL = os.getenv("TEST_MODEL", "gpt-4o")
 LOG_FILE = os.getenv("TEST_LOG_FILE", str(SCRIPT_DIR / "test_responses.json"))
+_SHARED_SYSTEM_PROMPT = (SCRIPT_DIR / "shared_system_prompt.txt").read_text(encoding="utf-8").strip()
+
 COMMON_SYSTEM_PROMPT = os.getenv(
     "TEST_SYSTEM_PROMPT",
-    "You are a helpful assistant. Follow the user's instructions exactly.",
+    _SHARED_SYSTEM_PROMPT,
 )
 PIRATE_SYSTEM_PROMPT = (
     f"{COMMON_SYSTEM_PROMPT}\n\nYou are a pirate. Every answer must contain 'Arrr'."
@@ -1361,7 +1363,7 @@ def run_all(client: openai.OpenAI):
     test_model_echo(client)
     test_usage_fields(client)
     test_system_fingerprint(client)
-    #
+
     _section("Sampling Parameters")
     test_temperature(client)
     test_seed_determinism(client)

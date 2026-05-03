@@ -3,6 +3,40 @@ set -eu
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 PYTHON_BIN="${PYTHON:-}"
+ENABLE_REASONING_TESTS="${ENABLE_REASONING_TESTS:-1}"
+ONLY_REASONING_TESTS="${ONLY_REASONING_TESTS:-0}"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --reasoning)
+      if [ "$#" -lt 2 ]; then
+        echo "Missing value for --reasoning (expected on/off)" >&2
+        exit 1
+      fi
+      case "$2" in
+        on|true|1)
+          ENABLE_REASONING_TESTS=1
+          ;;
+        off|false|0)
+          ENABLE_REASONING_TESTS=0
+          ;;
+        *)
+          echo "Invalid value for --reasoning: $2 (expected on/off)" >&2
+          exit 1
+          ;;
+      esac
+      shift 2
+      ;;
+    --only-reasoning)
+      ONLY_REASONING_TESTS=1
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 cd "$ROOT_DIR"
 
@@ -23,6 +57,8 @@ if ! "$PYTHON_BIN" -c "import openai, anthropic" >/dev/null 2>&1; then
 fi
 
 echo "Running live API tests against Gallama at ${LOCAL_BASE_URL:-"(using each script default)"}"
+echo "Reasoning tests: ${ENABLE_REASONING_TESTS}"
+echo "Only reasoning tests: ${ONLY_REASONING_TESTS}"
 
 OPENAI_BASE_URL=""
 ANTHROPIC_BASE_URL=""
@@ -43,11 +79,20 @@ if [ -n "${LOCAL_BASE_URL:-}" ]; then
   esac
 fi
 
-for test_file in \
-  tests/live/test_openai.py \
-  tests/live/test_anthropic.py \
-  tests/live/test_responses.py
-do
+if [ "$ONLY_REASONING_TESTS" = "1" ]; then
+  TEST_FILES="
+tests/live/test_anthropic.py
+tests/live/test_responses.py
+"
+else
+  TEST_FILES="
+tests/live/test_openai.py
+tests/live/test_anthropic.py
+tests/live/test_responses.py
+"
+fi
+
+for test_file in $TEST_FILES; do
   echo
   echo "==> ${test_file}"
   test_base_url=""
@@ -64,8 +109,8 @@ do
   esac
 
   if [ -n "$test_base_url" ]; then
-    PYTHONPATH="${ROOT_DIR}/tests${PYTHONPATH:+:${PYTHONPATH}}" LOCAL_BASE_URL="$test_base_url" "$PYTHON_BIN" "$test_file"
+    PYTHONPATH="${ROOT_DIR}/tests${PYTHONPATH:+:${PYTHONPATH}}" LOCAL_BASE_URL="$test_base_url" ENABLE_REASONING_TESTS="$ENABLE_REASONING_TESTS" ONLY_REASONING_TESTS="$ONLY_REASONING_TESTS" "$PYTHON_BIN" "$test_file"
   else
-    PYTHONPATH="${ROOT_DIR}/tests${PYTHONPATH:+:${PYTHONPATH}}" "$PYTHON_BIN" "$test_file"
+    PYTHONPATH="${ROOT_DIR}/tests${PYTHONPATH:+:${PYTHONPATH}}" ENABLE_REASONING_TESTS="$ENABLE_REASONING_TESTS" ONLY_REASONING_TESTS="$ONLY_REASONING_TESTS" "$PYTHON_BIN" "$test_file"
   fi
 done

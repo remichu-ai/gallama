@@ -25,6 +25,10 @@ class ModelInstanceInfo(BaseModel):
         description="number of concurrent requests the instance is expected to handle",
         default=1,
     )
+    cuda_visible_devices: str = Field(
+        description="resolved CUDA_VISIBLE_DEVICES seen by the model subprocess",
+        default="",
+    )
 
     class Config:
         # Override protected namespaces to suppress warning

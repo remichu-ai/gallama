@@ -110,7 +110,13 @@ if "fastapi.responses" not in sys.modules:
 from gallama.api_response.api_formatter import ResponsesFormatter
 from gallama.api_response.chat_response import chat_completion_response_stream
 from gallama.conversation_store import ConversationStore
-from gallama.data_classes import ChatMLQuery, ConversationCreateRequest, ResponseInputItem, ResponsesCreateRequest, TagDefinition
+from gallama.data_classes import (
+    ChatMLQuery,
+    ConversationCreateRequest,
+    ResponseInputItem,
+    ResponsesCreateRequest,
+    TagDefinition,
+)
 from gallama.data_classes.generation_data_class import GenEnd, GenQueueDynamic, GenStart, GenText
 
 
@@ -276,6 +282,75 @@ def test_conversation_create_request_converts_initial_items():
 
     assert [message.role for message in messages] == ["user", "assistant"]
     assert [message.content for message in messages] == ["hello", "hi there"]
+
+
+def test_responses_request_normalizes_instruction_messages_to_front():
+    request = ResponsesCreateRequest(
+        model="qwen3",
+        input=[
+            ResponseInputItem(
+                role="assistant",
+                content=[{"type": "output_text", "text": "Previous assistant reply."}],
+            ),
+            ResponseInputItem(
+                role="developer",
+                content=[{"type": "input_text", "text": "Follow repository conventions."}],
+            ),
+            ResponseInputItem(
+                role="user",
+                content=[{"type": "input_text", "text": "Make the next edit."}],
+            ),
+            ResponseInputItem(
+                role="system",
+                content=[{"type": "input_text", "text": "Be concise."}],
+            ),
+        ],
+    )
+
+    messages = request.to_input_messages()
+
+    assert [message.role for message in messages] == ["system", "assistant", "user"]
+    assert messages[0].content == "Follow repository conventions.\n\nBe concise."
+
+
+def test_responses_request_ignores_item_reference_inputs():
+    request = ResponsesCreateRequest(
+        model="qwen3",
+        input=[
+            ResponseInputItem(type="item_reference", id="item_123"),
+            ResponseInputItem(
+                role="user",
+                content=[{"type": "input_text", "text": "Hello"}],
+            ),
+        ],
+    )
+
+    messages = request.to_input_messages()
+
+    assert [message.role for message in messages] == ["user"]
+    assert messages[0].content == "Hello"
+
+
+def test_responses_request_can_insert_codex_user_fallback():
+    request = ResponsesCreateRequest(
+        model="qwen3",
+        input=[
+            ResponseInputItem(
+                role="assistant",
+                content=[{"type": "output_text", "text": "Tool call pending."}],
+            ),
+            ResponseInputItem(
+                type="function_call_output",
+                call_id="call_123",
+                output={"status": "ok"},
+            ),
+        ],
+    )
+
+    messages = request.to_input_messages(ensure_user=True)
+
+    assert [message.role for message in messages] == ["assistant", "tool", "user"]
+    assert messages[-1].content == "Please continue based on the conversation above."
 
 
 def test_conversation_store_crud_round_trip():

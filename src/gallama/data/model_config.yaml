@@ -12,15 +12,43 @@
 # Gemma2
 # Phi3
 
+#_global:
+#  env:                                    # (Optional) environment variables passed to every model subprocess
+#    CUDA_VISIBLE_DEVICES: "1,0"           # Reorder visible GPUs so exllama logical GPU 0 maps to physical GPU 1
+#    CUDA_DEVICE_ORDER: "PCI_BUS_ID"
+#  warmup_prompt:                          # (Optional) default startup warmup query for LLM models
+#    path: /home/your-user/.config/claude-code/warmup.yaml
+#    max_completion_tokens: 64
+#    reasoning_effort: minimal
+
 
 #model_name:                                # any no space string here which will be referred to for model loading and api call
 #  model_id:                                # the path to where the model is in the pc
 #  backend: 'exllama'                       # backend option are:  'exllama' or 'llama_cpp' or 'embedding'
 #  gpus: "auto"                             # 'auto' -> model autosplit, or an array of gpus split e.g. [12,24,12] where each number is the VRAM to limit the load on that card
+#  reserve_vram: 0.4                        # (ExLlamaV3 auto mode) override default reserve in GB. Default is 0.8GB on logical GPU 0 and 0.4GB on other visible GPUs.
+#  env:                                     # (Optional) per-model environment overrides. Overrides `_global.env`
+#    CUDA_VISIBLE_DEVICES: "1,0"
 #  cache_quant: 'Q4'                        # quantization for kv cache. Default is Q4. Options are: 'FP32', 'Q4', 'Q6', 'Q8'
 #  prompt_template: Llama3                  # please refer prompt_template mapping above
 #  eos_token_list: ["<|eot_id|>"]           # (Optional) the list of string to stop generation. It is good to include other model token on top of the model eos
 #  max_seq_len: 8192                        # maximum length the model can handle
+#  warmup_prompt: false                     # (Optional) disable inherited global warmup, or provide a ChatML-style mapping override
+#  default_sampling:                        # (Optional) default sampling rules. API request values override these per field.
+#    - temperature: 0.7                    # condition omitted/null means the standard default for this model
+#      top_p: 0.85
+#      top_k: 20
+#      min_p: 0.0
+#      presence_penalty: 0.0
+#      frequency_penalty: 0.0
+#      repetition_penalty: 1.0
+#    - condition: thinking                 # condition: thinking applies only to the dedicated thinking/reasoning phase
+#      temperature: 1.0
+#      top_p: 0.95
+#      top_k: 20
+#      min_p: 0.0
+#      presence_penalty: 1.5
+#      repetition_penalty: 1.0
 
 ## Example:
 #llama3-70B:       # model name is up to you to define
@@ -30,6 +58,12 @@
 #  cache_quant: 'Q4'
 #  prompt_template: Llama3
 #  max_seq_len: 8192
+#  default_sampling:
+#    - temperature: 0.7
+#      top_p: 0.85
+#    - condition: thinking
+#      temperature: 1.0
+#      top_p: 0.95
 
 #mistral-v0.3:
 #  model_id: '/home/gallama/model/turboderp/mistral-v0.3-exl2-4.5bpw'

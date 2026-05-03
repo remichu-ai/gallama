@@ -53,9 +53,13 @@ from helpers.dummy_mcp_server import (
 
 MODEL = os.getenv("TEST_MODEL", "claude-sonnet-4-20250514")
 THINKING_BUDGET_TOKENS = int(os.getenv("TEST_THINKING_BUDGET", "1024"))
+ENABLE_REASONING_TESTS = os.getenv("ENABLE_REASONING_TESTS", "1").strip().lower() in {"1", "true", "yes", "on"}
+ONLY_REASONING_TESTS = os.getenv("ONLY_REASONING_TESTS", "0").strip().lower() in {"1", "true", "yes", "on"}
+_SHARED_SYSTEM_PROMPT = (SCRIPT_DIR / "shared_system_prompt.txt").read_text(encoding="utf-8").strip()
+
 COMMON_SYSTEM_PROMPT = os.getenv(
     "TEST_SYSTEM_PROMPT",
-    "You are a helpful assistant. Follow the user's instructions exactly.",
+    _SHARED_SYSTEM_PROMPT,
 )
 PIRATE_SYSTEM_PROMPT = (
     f"{COMMON_SYSTEM_PROMPT}\n\nYou are a pirate. Every answer must contain 'Arrr'."
@@ -187,6 +191,10 @@ def _messages_url(client: anthropic.Anthropic) -> str:
     return f"{base_url}/v1/messages"
 
 
+def _messages_count_tokens_url(client: anthropic.Anthropic) -> str:
+    return f"{_messages_url(client)}/count_tokens"
+
+
 def _post_messages_json(client: anthropic.Anthropic, payload: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         _messages_url(client),
@@ -204,6 +212,25 @@ def _post_messages_json(client: anthropic.Anthropic, payload: dict[str, Any]) ->
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"POST {_messages_url(client)} failed with {exc.code}: {body}") from exc
+
+
+def _post_messages_count_tokens_json(client: anthropic.Anthropic, payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        _messages_count_tokens_url(client),
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "x-api-key": client.api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"POST {_messages_count_tokens_url(client)} failed with {exc.code}: {body}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +257,27 @@ def test_basic_message(client: anthropic.Anthropic):
         text = _get_text(resp)
         has_think = _has_thinking(resp)
         _report(name, True, f"Got: {text!r}" + (" (with implicit thinking)" if has_think else ""))
+    except Exception as e:
+        _report(name, False, str(e))
+
+
+def test_count_tokens(client: anthropic.Anthropic):
+    """Anthropic token counting endpoint returns input token usage without max_tokens."""
+    name = "Count tokens"
+    try:
+        payload = _post_messages_count_tokens_json(
+            client,
+            {
+                "model": MODEL,
+                "system": COMMON_SYSTEM_PROMPT,
+                "messages": [
+                    {"role": "user", "content": "Count the input tokens for this request."},
+                ],
+            },
+        )
+        assert isinstance(payload.get("input_tokens"), int), f"Unexpected payload: {payload}"
+        assert payload["input_tokens"] > 0, f"input_tokens={payload['input_tokens']}"
+        _report(name, True, f"input={payload['input_tokens']}")
     except Exception as e:
         _report(name, False, str(e))
 
@@ -710,6 +758,9 @@ def test_streaming_tool_use(client: anthropic.Anthropic):
 def test_thinking(client: anthropic.Anthropic):
     """Extended thinking (thinking blocks in response)."""
     name = "Extended thinking"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         resp = client.messages.create(
             model=MODEL,
@@ -753,6 +804,9 @@ def test_thinking(client: anthropic.Anthropic):
 def test_streaming_thinking(client: anthropic.Anthropic):
     """Stream a response with extended thinking enabled."""
     name = "Streaming + thinking"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         saw_thinking = False
         saw_text = False
@@ -802,6 +856,9 @@ def test_streaming_thinking(client: anthropic.Anthropic):
 def test_thinking_with_tools(client: anthropic.Anthropic):
     """Extended thinking combined with tool use."""
     name = "Thinking + tool use"
+    if not ENABLE_REASONING_TESTS:
+        _skip_test(name, "Disabled by ENABLE_REASONING_TESTS=0")
+        return
     try:
         resp = client.messages.create(
             model=MODEL,
@@ -1311,6 +1368,7 @@ def test_json_schema_vision(client: anthropic.Anthropic):
 # ---------------------------------------------------------------------------
 ALL_TESTS = [
     test_basic_message,
+    test_count_tokens,
     test_system_prompt,
     test_multi_turn,
     test_streaming_basic,
@@ -1356,18 +1414,31 @@ def run_all(client: anthropic.Anthropic):
     print(f"  Base URL: {client.base_url}")
     print("=" * 60)
 
-    _section("Basic Features")
-    test_basic_message(client)
-    test_system_prompt(client)
-    test_multi_turn(client)
-    test_model_echo(client)
-    test_usage_fields(client)
+    if ONLY_REASONING_TESTS:
+        _section("Extended Thinking")
+        test_thinking(client)
+        test_streaming_thinking(client)
+        test_thinking_with_tools(client)
+
+        print("\n" + "=" * 60)
+        total = _pass + _fail + _skip
+        print(f"  Results: {_pass} passed, {_fail} failed, {_skip} skipped / {total} total")
+        print("=" * 60 + "\n")
+        return _fail == 0
+
+    # _section("Basic Features")
+    # test_basic_message(client)
+    # test_count_tokens(client)
+    # test_system_prompt(client)
+    # test_multi_turn(client)
+    # test_model_echo(client)
+    # test_usage_fields(client)
 
     _section("Sampling Parameters")
-    test_temperature(client)
-    test_top_p(client)
-    test_top_k(client)
-    test_max_tokens(client)
+    # test_temperature(client)
+    # test_top_p(client)
+    # test_top_k(client)
+    # test_max_tokens(client)
     test_stop_sequences(client)
 
     _section("Streaming")

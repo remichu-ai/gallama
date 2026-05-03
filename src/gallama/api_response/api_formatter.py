@@ -211,26 +211,30 @@ class OpenAIFormatter(BaseAPIFormatter):
         total_tokens: int,
         finish_reason: str = "stop",
     ):
-        choices = []
-        if parsed_blocks:
-            message = {"role": parsed_blocks[0].role}
-            for block in parsed_blocks:
-                if block.api_tag in message:
-                    existing = message[block.api_tag]
-                    if isinstance(existing, list) and isinstance(block.content, list):
-                        message[block.api_tag] = existing + block.content
-                    elif isinstance(existing, str) and isinstance(block.content, str):
-                        message[block.api_tag] = existing + block.content
-                else:
-                    message[block.api_tag] = block.content
+        message = {"role": parsed_blocks[0].role if parsed_blocks else "assistant"}
+        for block in parsed_blocks:
+            if block.api_tag in message:
+                existing = message[block.api_tag]
+                if isinstance(existing, list) and isinstance(block.content, list):
+                    message[block.api_tag] = existing + block.content
+                elif isinstance(existing, str) and isinstance(block.content, str):
+                    message[block.api_tag] = existing + block.content
+            else:
+                message[block.api_tag] = block.content
 
-            choices.append(
-                Choice(
-                    index=0,
-                    message=message,
-                    finish_reason=finish_reason,
-                )
+        # OpenAI-compatible responses must always contain one choice. This also
+        # covers valid empty completions, e.g. when a stop sequence is produced
+        # before any visible text.
+        if "content" not in message and "tool_calls" not in message:
+            message["content"] = ""
+
+        choices = [
+            Choice(
+                index=0,
+                message=message,
+                finish_reason=finish_reason,
             )
+        ]
 
         return ChatCompletionResponse(
             id=self.unique_id,

@@ -1,5 +1,6 @@
 /log
 /build
+/.venv/
 **/__pycache__/
 **/**/__pycache__/
 /.idea/
@@ -13,5 +14,5 @@
 sonar-project.properties
 /src/tests/*
 !/tests/test_tool_parsers.py
-
+/tests/live/*.json
 /dist/

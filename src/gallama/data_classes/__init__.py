@@ -19,6 +19,8 @@ from .data_class import (
     ModelObjectResponse,
     ModelObject,
     ModelSpec,
+    SamplingConfig,
+    DefaultSamplingRule,
     EmbeddingRequest,
     ModelDownloadSpec,
     SUPPORTED_BACKENDS,
@@ -34,6 +36,7 @@ from .responses_api import (
     ConversationDeletedResource,
     ConversationResource,
     ConversationUpdateRequest,
+    normalize_input_messages,
     ResponseConversation,
     ResponseConversationParam,
     ResponsesCreateRequest,
@@ -52,6 +55,8 @@ from .responses_api import (
 
 # anthropic
 from .data_class import (
+    AnthropicCountTokensRequest,
+    AnthropicCountTokensResponse,
     AnthropicMessagesRequest,
     AnthropicMessagesResponse,
     AnthropicStopReason

@@ -9,7 +9,7 @@ from fastapi import Request                 # for type hint
 from functools import lru_cache             # for image caching
 import uuid                                 # use for generating id for api return
 
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 from gallama.backend.llm.json_schema_utils import normalize_json_schema_for_formatron
 from gallama.utils.request_disconnect import (
     format_exception_summary,
@@ -30,7 +30,7 @@ from gallama.data_classes import (
     TagDefinition,
     AnthropicStopReason
 )
-from gallama.utils.utils import get_image, get_free_vram_gb
+from gallama.utils.utils import get_image
 
 try:
     from exllamav3 import (
@@ -122,6 +122,86 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
 
     return normalized
 
+
+def _align_cache_size(cache_size: int | None, max_seq_len: int) -> int:
+    base_size = cache_size or max_seq_len
+    return ((max(base_size, max_seq_len) + 255) // 256) * 256
+
+
+def _apply_dflash_generator_defaults(generator_kwargs: Dict, draft_model) -> Dict:
+    normalized = dict(generator_kwargs)
+    if (
+        draft_model is not None
+        and draft_model.caps.get("dflash_draft", False)
+        and normalized.get("num_draft_tokens") is None
+    ):
+        normalized["num_draft_tokens"] = 15
+    return normalized
+
+
+def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
+    if num_devices <= 0:
+        return []
+
+    if raw_reserve_vram is None:
+        result = [0.4] * num_devices
+        if num_devices > 0:
+            result[0] = 0.8
+        return result
+
+    if isinstance(raw_reserve_vram, (int, float)):
+        return [float(raw_reserve_vram)] * num_devices
+
+    if isinstance(raw_reserve_vram, list):
+        normalized = [float(value) for value in raw_reserve_vram]
+        if len(normalized) < num_devices:
+            normalized.extend([0.0] * (num_devices - len(normalized)))
+        return normalized[:num_devices]
+
+    raise ValueError("reserve_vram must be a float or list[float]")
+
+
+def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices: int) -> Dict:
+    load_kwargs = {
+        "progressbar": True,
+        "tensor_p": tensor_parallel,
+    }
+
+    if isinstance(gpus, list):
+        if reserve_vram is not None:
+            raise ValueError(
+                "ExLlamaV3 does not support `reserve_vram` together with an explicit `gpus` split. "
+                "Use `gpus: auto` with `reserve_vram`, or remove `reserve_vram`."
+            )
+        load_kwargs["use_per_device"] = gpus
+        return load_kwargs
+
+    if isinstance(gpus, str) and gpus == "auto":
+        load_kwargs["reserve_per_device"] = _normalize_reserve_vram(reserve_vram, num_devices)
+        return load_kwargs
+
+    raise ValueError("Device map should be either 'auto' or a GPU split list")
+
+
+def _resolve_vision_device(vision_device, num_devices: int):
+    if vision_device is None:
+        return None
+
+    if isinstance(vision_device, str):
+        vision_device = vision_device.strip().lower()
+        if vision_device.startswith("cuda:"):
+            vision_device = vision_device.split(":", 1)[1]
+        vision_device = int(vision_device)
+
+    if not isinstance(vision_device, int):
+        raise ValueError("vision_device must be an integer GPU index or a cuda:<index> string")
+
+    if vision_device < 0 or vision_device >= num_devices:
+        raise ValueError(f"vision_device {vision_device} is out of range for {num_devices} CUDA devices")
+
+    return torch.device(f"cuda:{vision_device}")
+
+
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
@@ -144,55 +224,52 @@ class ModelExllamaV3(ModelInterface):
             cache_size=self.cache_size,
             cache_quant=self.cache_quant,
             gpus=self.gpus,
-            reserve_vram=self._reserve_vram,
+            reserve_vram=self.reserve_vram,
             tensor_parallel=self.tensor_parallel,
             backend_extra_args=self.backend_extra_args,
         )
 
-        # # load draft model
-        # if self.draft_model_id:
-        #     # tokenizer and processor already set above
-        #     self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
-        #         model_id=self.draft_model_id,
-        #         backend=self.backend,
-        #         max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
-        #         cache_size=self.draft_cache_size,
-        #         cache_quant=self.draft_cache_quant,
-        #         gpus=self.draft_gpus,
-        #         reserve_vram=self._reserve_vram,
-        #     )
+        # load draft model
+        if self.draft_model_id:
+            # tokenizer and processor already set above
+            self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
+                model_id=self.draft_model_id,
+                backend=self.backend,
+                max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
+                cache_size=cache.max_num_tokens,
+                cache_quant=self.draft_cache_quant,
+                gpus=self.draft_gpus,
+                reserve_vram=self.reserve_vram,
+                tensor_parallel=False,
+                backend_extra_args=self.backend_extra_args,
+                load_tokenizer=False,
+                load_processor=False,
+            )
 
         self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)
 
         return model, tokenizer, cache, processor
 
-
-    @property
-    def _reserve_vram(self):
-        try:
-            reserve_block_size = 1024 ** 2
-            num_devices = torch.cuda.device_count()
-            #reserved_vram = [192 * 1024**2] + [64 * 1024**2] * (num_devices - 1)
-            #reserved_vram = [256 * 1024 ** 2] + [96 * 1024 ** 2] * (num_devices - 1)
-
-            # GPU1 is the main GPU for my PC
-            # The below is lower threshold than exllamav2 default setting
-            reserve_per_gpu = [48 for _ in range(num_devices)]
-            main_gpu = 0    # TODO pass it to front end
-            reserve_per_gpu[main_gpu] = 96
-            reserved_vram = [_reserve * reserve_block_size for _reserve in reserve_per_gpu]
-            return reserved_vram
-        except:
-            # for non cuda env e.g. macbook
-            return None
-
-    def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False, backend_extra_args=None):
+    def load_model_exllama(
+        self,
+        model_id,
+        backend,
+        cache_size,
+        cache_quant,
+        gpus,
+        reserve_vram,
+        max_seq_len=None,
+        tensor_parallel=False,
+        backend_extra_args=None,
+        load_tokenizer=True,
+        load_processor=True,
+    ):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         config = Config.from_directory(model_id)
         model = Model.from_config(config)
-        tokenizer = Tokenizer.from_config(config)
+        tokenizer = Tokenizer.from_config(config) if load_tokenizer else None
         processor = None    # placeholder for visual processing tower
 
         if tensor_parallel and not model.caps.get("supports_tp", False):
@@ -218,20 +295,17 @@ class ModelExllamaV3(ModelInterface):
             "Q8": {"k_bits": 8, "v_bits": 8},
         }
 
-        # cache size needed to minimally max_seq_len size
-        # Use provided cache_size or default to max_seq_len
-        base_size = cache_size or self.max_seq_len
-
         # Align to 256, but ensure it is at least max_seq_len
-        cache_size_to_use = (max(base_size, self.max_seq_len) // 256) * 256
+        cache_size_to_use = _align_cache_size(cache_size, self.max_seq_len)
 
         # get the cache quantization to use
         cache_quant_to_use = cache_quant_dict.get(cache_quant, None)
 
-        logger.info("max_seq_len: " + str(self.max_seq_len))
-        logger.info("cache_size: " + str(cache_size_to_use))
-        logger.info("Cache Quantization: " + str(cache_quant))
-        logger.info("gpus: " + str(gpus))
+        logger.info("max_seq_len: " + str(self.max_seq_len), extra=basic_log_extra())
+        logger.info("cache_size: " + str(cache_size_to_use), extra=basic_log_extra())
+        logger.info("Cache Quantization: " + str(cache_quant), extra=basic_log_extra())
+        logger.info("gpus: " + str(gpus), extra=basic_log_extra())
+        logger.info("reserve_vram: " + str(reserve_vram), extra=basic_log_extra())
 
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
             "Device map should be either 'auto', 'gpu' split"
@@ -244,7 +318,7 @@ class ModelExllamaV3(ModelInterface):
             cache_layer = CacheLayer_quant
 
         if cache_quant_to_use:
-            logger.info("Using cache quant")
+            logger.info("Using cache quant", extra=basic_log_extra())
             cache = Cache(
                 model,
                 max_num_tokens=cache_size_to_use,
@@ -253,30 +327,22 @@ class ModelExllamaV3(ModelInterface):
             )
         else:
             # FP16
-            logger.info("Not using cache quant")
+            logger.info("Not using cache quant", extra=basic_log_extra())
             cache = Cache(
                 model,
                 max_num_tokens=cache_size_to_use
             )
-        # since exl3 only allow the reserve or use per device
-        # TODO allow user to set reserve per device
-
-        # find out free vramclear
-        if gpus == "auto":
-            free_vram = get_free_vram_gb()
-            vram_reserve = 0.4
-            free_vram = [max(0, f-vram_reserve) for f in free_vram]
-            gpus = free_vram if free_vram else gpus
-
-        load_kwargs = {
-            "progressbar": True,
-            "use_per_device": gpus if isinstance(gpus, list) else None,
-            "tensor_p": tensor_parallel,
-        }
+        # ExLlamaV3 supports either reserve_per_device or use_per_device, not both.
+        load_kwargs = _resolve_load_kwargs(
+            gpus=gpus,
+            reserve_vram=reserve_vram,
+            tensor_parallel=tensor_parallel,
+            num_devices=torch.cuda.device_count(),
+        )
 
         tp_backend = (backend_extra_args or {}).get("tp_backend")
         if tp_backend:
-            logger.info("Tensor parallel backend: " + str(tp_backend))
+            logger.info("Tensor parallel backend: " + str(tp_backend), extra=basic_log_extra())
             load_kwargs["tp_backend"] = tp_backend
 
         model.load(
@@ -286,11 +352,22 @@ class ModelExllamaV3(ModelInterface):
         # load vision processor if there is
         # if there is error, assume that the model doesnt have vision
         processor = None
+        if not load_processor:
+            return model, tokenizer, cache, processor
+
         try:
             processor = Model.from_config(config, component = "vision")
-            processor.load()
+            vision_device = _resolve_vision_device(
+                (backend_extra_args or {}).get("vision_device"),
+                torch.cuda.device_count(),
+            )
+            if vision_device is not None:
+                logger.info("Vision device: " + str(vision_device), extra=basic_log_extra())
+                processor.load(device=vision_device)
+            else:
+                processor.load()
         except AssertionError:
-            logger.info("No Vision Tower")
+            logger.info("No Vision Tower", extra=basic_log_extra())
             processor = None
 
         # if processor is not None, meaning at least image is supported
@@ -388,31 +465,82 @@ class ModelExllamaV3(ModelInterface):
         """
 
         generator_kwargs = _normalize_generator_kwargs(self.backend_extra_args)
+        generator_kwargs = _apply_dflash_generator_defaults(generator_kwargs, self.draft_model)
 
         generator = AsyncGenerator(
             model=self.model,
             cache=self.cache,
             tokenizer=self.tokenizer,
+            draft_model=self.draft_model,
+            draft_cache=self.draft_cache,
             **generator_kwargs,
         )
+
+        if self.draft_model is not None:
+            mode = "dflash" if generator.generator.dflash_draft else "flash"
+            logger.info(f"ExLlamaV3 speculative draft mode: {mode}", extra=basic_log_extra())
 
         return self.ExllamaV3Pipeline(
             cache=self.cache,
             generator=generator,
         )
 
+    async def _ensure_pipeline_ready(self):
+        """Create or replace the ExLlamaV3 async generator if its worker died."""
+        if self.pipeline is None:
+            self.pipeline = await self._get_pipeline_async()
+            return
+
+        iteration_task = getattr(self.pipeline.generator, "iteration_task", None)
+        if iteration_task is not None and iteration_task.done():
+            exc = None
+            if not iteration_task.cancelled():
+                try:
+                    exc = iteration_task.exception()
+                except Exception:
+                    exc = None
+            if exc:
+                logger.error(f"ExLlamaV3 async generator stopped unexpectedly: {format_exception_summary(exc)}")
+            else:
+                logger.warning("ExLlamaV3 async generator is not running; restarting it")
+            self.pipeline = await self._get_pipeline_async()
+
+    async def _cancel_job_safely(self, job):
+        if not job:
+            return
+        try:
+            await job.cancel()
+        except AssertionError:
+            logger.debug("ExLlamaV3 job was already removed from async generator")
+        except Exception as e:
+            logger.debug(f"Error cancelling ExLlamaV3 job: {format_exception_summary(e)}")
+
+    @staticmethod
+    def _stop_event_is_set(stop_event: asyncio.Event | None) -> bool:
+        return bool(stop_event and stop_event.is_set())
+
+    @staticmethod
+    def _put_gen_end(gen_queue_list):
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenEnd:
+                g_queue.put_nowait(GenEnd())
+
     @staticmethod
     def _get_exllama_gen_settings(
         temperature: float = 0.01,
         top_p: float = 0.8,
+        top_k: Optional[int] = None,
         **kwargs,
     ):
         # settings
-        settings = CustomSampler([
+        samplers = [
             SS_Temperature(temperature),
             SS_TopP(top_p),
-            SS_Sample()
-        ])
+        ]
+        if top_k is not None and SS_TopK is not None:
+            samplers.append(SS_TopK(top_k))
+        samplers.append(SS_Sample())
+        settings = CustomSampler(samplers)
 
         # settings = ExLlamaV2Sampler.Settings()
         # settings.temperature = temperature
@@ -621,9 +749,9 @@ class ModelExllamaV3(ModelInterface):
         full_completion = ""
 
         try:
-            # Ensure that the generator is initialized
-            if self.pipeline is None:
-                self.pipeline = await self._get_pipeline_async()
+            top_k = kwargs.get("top_k")
+            # Ensure that the generator is initialized and its worker is alive.
+            await self._ensure_pipeline_ready()
 
             # Convert gen_queue to List[GenQueueDynamic] format to standardize downstream handling
             gen_queue_list = []
@@ -647,10 +775,21 @@ class ModelExllamaV3(ModelInterface):
                 raise TypeError("gen_queue must be either a GenQueue, GenQueueDynamic, or a list of GenQueueDynamic")
 
             # Get generation settings
-            settings = self._get_exllama_gen_settings(temperature, top_p=top_p)
+            settings = self._get_exllama_gen_settings(
+                temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
             prompt, image_embeddings = self._process_vision_inputs(prompt, vision_token, messages, video)
+            if image_embeddings:
+                inner_generator = self.pipeline.generator.generator
+                if inner_generator.draft_model is not None and not inner_generator.dflash_draft:
+                    raise ValueError(
+                        "ExLlamaV3 normal draft flash does not support multimodal embeddings; "
+                        "disable draft or use a DFlash draft model."
+                    )
 
             # Create filters for format enforcement
             # for now the filter is only for prefix string
@@ -676,7 +815,7 @@ class ModelExllamaV3(ModelInterface):
             else:
                 input_ids = self.tokenizer.encode(
                     prompt,
-                    encode_special_tokens=False
+                    encode_special_tokens=True
                 )
 
             self.validate_token_length(len(input_ids[0]))
@@ -717,7 +856,7 @@ class ModelExllamaV3(ModelInterface):
                 "banned_strings": banned_strings,
                 "decode_special_tokens": True,
                 "filters": filters,
-                "token_healing": True,
+                "token_healing": False,
                 "identifier": job_id,
             }
 
@@ -758,8 +897,8 @@ class ModelExllamaV3(ModelInterface):
 
                 # Start the generation
                 async for result in job:
-                    if eos or stop_event.is_set():
-                        await job.cancel()
+                    if eos or self._stop_event_is_set(stop_event):
+                        await self._cancel_job_safely(job)
                         break
 
                     chunk_text = result.get("text", "")
@@ -822,7 +961,13 @@ class ModelExllamaV3(ModelInterface):
                         return full_completion
 
             except Exception as e:
-                logger.error(e)
+                logger.error(e, exc_info=True)
+                if stop_event:
+                    stop_event.set()
+                await self._cancel_job_safely(job)
+                self.pipeline = None
+                self._put_gen_end(gen_queue_list)
+                raise
             finally:
                 if disconnect_check_task:
                     disconnect_check_task.cancel()

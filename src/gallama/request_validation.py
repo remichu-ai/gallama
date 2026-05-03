@@ -4,7 +4,7 @@ from .data_classes import ChatMLQuery, ToolForce
 
 
 def validate_api_request(query: ChatMLQuery):
-    if query.temperature <= 0:
+    if query.temperature is not None and query.temperature <= 0:
         query.temperature = 0.01
 
     if query.tools:

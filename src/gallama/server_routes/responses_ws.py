@@ -30,6 +30,15 @@ def _select_llm_instance(model_name: Optional[str]):
     return server_manager.get_instance(model_type="llm", model_name=model_name)
 
 
+def _is_normal_websocket_disconnect(exc: Exception) -> bool:
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+
+    return isinstance(exc, RuntimeError) and (
+        'WebSocket is not connected. Need to call "accept" first.' in str(exc)
+    )
+
+
 @router.websocket("/v1/responses")
 async def responses_websocket_endpoint(websocket: WebSocket):
     headers = dict(websocket.headers)
@@ -41,7 +50,14 @@ async def responses_websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            raw_message = await websocket.receive_text()
+            try:
+                raw_message = await websocket.receive_text()
+            except Exception as exc:
+                if _is_normal_websocket_disconnect(exc):
+                    logger.debug("Responses websocket disconnected")
+                    break
+                raise
+
             if not raw_message:
                 continue
 
@@ -82,7 +98,13 @@ async def responses_websocket_endpoint(websocket: WebSocket):
                     if keys:
                         await responses_websocket_hub.publish(keys, event_payload)
                     else:
-                        await websocket.send_json(event_payload)
+                        try:
+                            await websocket.send_json(event_payload)
+                        except Exception as exc:
+                            if _is_normal_websocket_disconnect(exc):
+                                logger.debug("Responses websocket disconnected during event forwarding")
+                                return
+                            raise
 
                 try:
                     await stream_responses_request_to_events(
@@ -92,18 +114,28 @@ async def responses_websocket_endpoint(websocket: WebSocket):
                         on_event=on_event,
                     )
                 except httpx.HTTPStatusError as exc:
-                    await websocket.send_json(
-                        {
-                            "type": "response.failed",
-                            "error": {
-                                "message": exc.response.text,
-                                "status_code": exc.response.status_code,
-                            },
-                        }
-                    )
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": "response.failed",
+                                "error": {
+                                    "message": exc.response.text,
+                                    "status_code": exc.response.status_code,
+                                },
+                            }
+                        )
+                    except Exception as send_exc:
+                        if not _is_normal_websocket_disconnect(send_exc):
+                            raise
 
             active_stream_task = asyncio.create_task(_forward_stream())
-            await active_stream_task
+            try:
+                await active_stream_task
+            except Exception as exc:
+                if _is_normal_websocket_disconnect(exc):
+                    logger.debug("Responses websocket disconnected while streaming")
+                    break
+                raise
 
     except WebSocketDisconnect:
         logger.debug("Responses websocket disconnected")

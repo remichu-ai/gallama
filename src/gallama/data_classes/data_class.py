@@ -333,6 +333,8 @@ class ChatMLQuery(BaseModel):
     messages: List[BaseMessage]
     temperature: Optional[float] = 0.7
     top_p: float = 0.85
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
     stream: Optional[bool] = False
     tools: Optional[List[Union[ToolSpec, MCPToolSpec]]] = None
     tool_choice: Union[None, Literal["none", "auto", "required"], ToolForce] = None
@@ -387,6 +389,7 @@ class ChatMLQuery(BaseModel):
     top_logprob: int = None
     n: int = 1
     presence_penalty: float = 0
+    repetition_penalty: Optional[float] = None
     response_format: Optional[Union[ResponseFormat, ResponseFormatJSONSchema]] = None
     seed: Optional[int] = None
     stream_options: Optional[StreamOption] = None
@@ -712,6 +715,23 @@ class VoiceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SamplingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    min_p: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    seed: Optional[int] = None
+
+
+class DefaultSamplingRule(SamplingConfig):
+    condition: Optional[Literal["thinking"]] = None
+
+
 
 # list of supported backend. None meaning it the api will take backend set from yaml config file
 SUPPORTED_BACKENDS = [
@@ -736,12 +756,20 @@ class ModelSpec(BaseModel):
     model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
     model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
     gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
+    reserve_vram: Optional[Union[float, List[float]]] = Field(
+        description="ExLlamaV3 auto-split reserve per visible GPU in GB. Scalar applies to all visible GPUs; list is positional.",
+        default=None,
+    )
     cache_size: Optional[int] = Field(default=None, description='The context length for cache text in int. If None, will be set to the model context length')
     cache_quant: Optional[Literal["FP16", "Q4", "Q6", "Q8"]] = Field(default="FP16", description='the quantization to use for cache, will use Q4 if not specified')
     max_seq_len: Optional[int] = Field(description="max sequence length", default=None)
     backend: Optional[Union[Literal[tuple(SUPPORTED_BACKENDS)], None]] = Field(description="model engine backend", default=None)
     tensor_parallel: Optional[bool] = Field(description="tensor parallel mode", default=False)
     prompt_template: Optional[str] = Field(description="prompt template", default=None)
+    warmup_prompt: Optional[Union[bool, Dict[str, Any]]] = Field(
+        description="Optional warmup ChatML query config. False disables warmup for this model.",
+        default=None,
+    )
     eos_token_list: List[str] = Field(description="eos tokens, can customize token here", default_factory=list)
 
     quant: Optional[float] = Field(description="quantization if the model support quantization on the fly", default=None)
@@ -751,6 +779,14 @@ class ModelSpec(BaseModel):
 
     # extra argument for specific backend or model
     backend_extra_args: Optional[Dict[Any, Any]] = Field(description="extra args to pass to the backend", default_factory=dict)
+    env: Dict[str, Optional[str]] = Field(
+        description="Environment variables to pass to the model subprocess",
+        default_factory=dict,
+    )
+    default_sampling: List[DefaultSamplingRule] = Field(
+        description="Default sampling rules keyed by optional generation condition",
+        default_factory=list,
+    )
 
     # speculative decoding
     draft_model_id: Optional[str] = Field(description='id of the draft model', default=None)
@@ -786,6 +822,52 @@ class ModelSpec(BaseModel):
             return [v.get(i, 0.0) for i in range(torch.cuda.device_count())]
         return v
 
+    @field_validator('env', mode='before')
+    @classmethod
+    def validate_env(cls, v):
+        if v is None:
+            return {}
+        if not isinstance(v, dict):
+            raise ValueError("'env' must be a mapping of environment variables")
+
+        normalized_env = {}
+        for key, value in v.items():
+            if value is None:
+                normalized_env[str(key)] = None
+            elif isinstance(value, (str, int, float, bool)):
+                normalized_env[str(key)] = str(value)
+            else:
+                raise ValueError(f"Environment variable '{key}' must be a scalar or null")
+
+        return normalized_env
+
+    @field_validator('warmup_prompt', mode='before')
+    @classmethod
+    def validate_warmup_prompt(cls, v):
+        if v is None or isinstance(v, bool):
+            return v
+        if not isinstance(v, dict):
+            raise ValueError("'warmup_prompt' must be a mapping, boolean, or null")
+        return v
+
+    @field_validator('reserve_vram', mode='before')
+    @classmethod
+    def validate_reserve_vram(cls, v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            parts = [part.strip() for part in v.split(',') if part.strip()]
+            if not parts:
+                return None
+            if len(parts) == 1:
+                return float(parts[0])
+            return [float(part) for part in parts]
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, list):
+            return [float(item) for item in v]
+        raise ValueError("'reserve_vram' must be a number, comma-separated string, or list of numbers")
+
     # TODO this is clasing with embedding cause embedding will set visiable GPU and hence it is not seen anymore in this validator
     # @validator('gpus')
     # def check_gpus(cls, gpus):
@@ -807,6 +889,17 @@ class ModelSpec(BaseModel):
     #                     f"Requested VRAM ({vram} GB) for GPU {gpu_id} exceeds available VRAM ({total_vram:.2f} GB)")
 
         # return gpus
+
+    @model_validator(mode='after')
+    def validate_default_sampling_rules(self) -> 'ModelSpec':
+        seen_conditions: Set[Optional[str]] = set()
+        for rule in self.default_sampling:
+            if rule.condition in seen_conditions:
+                raise ValueError(
+                    f"Duplicate default_sampling rule for condition={rule.condition!r}"
+                )
+            seen_conditions.add(rule.condition)
+        return self
 
 
     @classmethod
@@ -841,6 +934,7 @@ class ModelSpec(BaseModel):
         model_name = input_dict.get('model_name')
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
+        reserve_vram = input_dict.get('reserve_vram')
         cache_size = input_dict.get('cache_size')
         backend = input_dict.get('backend', None)  # Default to None if not provided
         tensor_parallel = input_dict.get('tp', False)
@@ -866,12 +960,15 @@ class ModelSpec(BaseModel):
             model_type = cls.get_model_type_from_backend(backend)
 
         prompt_template = input_dict.get('prompt_template', None)
+        warmup_prompt = input_dict.get('warmup_prompt', None)
 
         # concurrent request
         allowed_concurrency = 50 if backend in ["exllama", "exllamav3", "embedding"] else 1  # TODO to look into optimal number for each backend
         max_concurrent_requests = input_dict.get('max_concurrent_requests', allowed_concurrency)
 
         backend_extra_args = input_dict.get('backend_extra_args', {})
+        env = input_dict.get('env', {})
+        default_sampling = input_dict.get('default_sampling', [])
 
         # speculative decoding
         draft_model_id = input_dict.get('draft_model_id')
@@ -891,27 +988,29 @@ class ModelSpec(BaseModel):
             draft_cache_size = int(draft_cache_size)
 
         return cls(model_id=model_id, model_name=model_name, model_type=model_type,
-                   gpus=gpus, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
+                   gpus=gpus, reserve_vram=reserve_vram, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    strict=strict,
                    voice=voice,
                    prompt_template=prompt_template,
+                   warmup_prompt=warmup_prompt,
                    backend_extra_args=backend_extra_args,
+                   env=env,
+                   default_sampling=default_sampling,
                    max_concurrent_requests=max_concurrent_requests,
                    max_seq_len=max_seq_len,
                    tensor_parallel=tensor_parallel,
                    draft_model_id=draft_model_id, draft_model_name=draft_model_name,
                    draft_gpus=draft_gpus, draft_cache_size=draft_cache_size, draft_cache_quant=draft_cache_quant)
 
-    def get_visible_gpu_indices(self) -> str:
+    def get_visible_gpu_indices(self, env: Optional[Dict[str, str]] = None) -> str:
         """
         Generate a string of GPU indices based on allocated GPUs.
         If no GPUs are specified, return all available GPU indices.
         Respects existing CUDA_VISIBLE_DEVICES environment variable if set.
         """
-        import os
-
         # 1. First, check if the user explicitly set the env variable externally
-        existing_cvd = os.environ.get('CUDA_VISIBLE_DEVICES')
+        env_source = env or os.environ
+        existing_cvd = env_source.get('CUDA_VISIBLE_DEVICES')
 
         if self.gpus is None or self.gpus == "auto":
             if existing_cvd is not None:
@@ -925,8 +1024,48 @@ class ModelSpec(BaseModel):
         if all(vram == 0 for vram in self.gpus):
             return ""  # No GPUs allocated
 
+        if existing_cvd is not None:
+            if existing_cvd == "":
+                return ""
+
+            visible_devices = [device.strip() for device in existing_cvd.split(',') if device.strip()]
+            selected_devices = [
+                visible_devices[i] if i < len(visible_devices) else str(i)
+                for i, vram in enumerate(self.gpus)
+                if vram > 0
+            ]
+            return ','.join(selected_devices)
+
         visible_devices = [str(i) for i, vram in enumerate(self.gpus) if vram > 0]
         return ','.join(visible_devices)
+
+    def build_child_env(self, base_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        child_env = (base_env or os.environ).copy()
+
+        for key, value in (self.env or {}).items():
+            if value is None:
+                child_env.pop(key, None)
+            else:
+                child_env[key] = value
+
+        child_env['CUDA_VISIBLE_DEVICES'] = self.get_visible_gpu_indices(child_env)
+        child_env.setdefault('CUDA_DEVICE_ORDER', 'PCI_BUS_ID')
+        return child_env
+
+    def build_child_model_spec(self) -> 'ModelSpec':
+        child_model_spec = self.model_copy(deep=True)
+
+        if isinstance(child_model_spec.gpus, list):
+            child_model_spec.gpus = [
+                float(vram) for vram in child_model_spec.gpus if vram > 0
+            ]
+
+        if isinstance(child_model_spec.draft_gpus, list):
+            child_model_spec.draft_gpus = [
+                float(vram) for vram in child_model_spec.draft_gpus if vram > 0
+            ]
+
+        return child_model_spec
 
     @staticmethod
     def deep_merge_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
@@ -1038,7 +1177,8 @@ class AnthropicToolUseContent(BaseModel):
 class AnthropicToolResultContent(BaseModel):
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str
-    content: Union[str, List[AnthropicTextContent]]
+    is_error: bool = False
+    content: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
 
 
 class AnthropicMCPToolUseContent(BaseModel):
@@ -1053,7 +1193,7 @@ class AnthropicMCPToolResultContent(BaseModel):
     type: Literal["mcp_tool_result"] = "mcp_tool_result"
     tool_use_id: str
     is_error: bool = False
-    content: Union[str, List[AnthropicTextContent]]
+    content: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
 
 
 class AnthropicToolInputSchema(BaseModel):
@@ -1216,15 +1356,20 @@ class AnthropicMessagesRequest(BaseModel):
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     top_k: Optional[int] = None
+    min_p: Optional[float] = None
     stream: Optional[bool] = False
     stop_sequences: Optional[List[str]] = None
     metadata: Optional[dict] = None
     output_config: Optional[AnthropicOutputConfig] = None
     mcp_servers: Optional[List[AnthropicMCPServer]] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    repetition_penalty: Optional[float] = None
     thinking_token_budget: Optional[int] = None
     reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = None
     use_thinking: Optional[Literal[True, False, "Skip"]] = None
     return_thinking: Optional[Literal[False, True, "separate"]] = None
+    seed: Optional[int] = None
 
     @staticmethod
     def _is_claude_code_billing_header_text(text: str) -> bool:
@@ -1270,6 +1415,40 @@ class AnthropicMessagesRequest(BaseModel):
     def get_ChatMLQuery(self) -> ChatMLQuery:
         import json
         chat_messages = []
+
+        def _anthropic_blocks_to_multimodal_content(
+            blocks: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
+        ) -> Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]:
+            if isinstance(blocks, str):
+                return blocks
+
+            multimodal_content: List[Union[MultiModalTextContent, MultiModalImageContent]] = []
+            text_parts: List[str] = []
+            has_non_text_content = False
+
+            for block in blocks:
+                if getattr(block, "type", "") == "text":
+                    text_parts.append(block.text)
+                    multimodal_content.append(
+                        MultiModalTextContent(type="text", text=block.text)
+                    )
+                elif getattr(block, "type", "") == "image":
+                    has_non_text_content = True
+
+                    if getattr(block.source, "type", None) == "base64":
+                        data_uri = f"data:{block.source.media_type};base64,{block.source.data}"
+                        img_detail = MultiModalImageContent.ImageDetail(url=data_uri)
+                    else:
+                        img_detail = MultiModalImageContent.ImageDetail(url=block.source.url)
+
+                    multimodal_content.append(
+                        MultiModalImageContent(type="image_url", image_url=img_detail)
+                    )
+
+            if has_non_text_content:
+                return multimodal_content
+
+            return "\n".join(text_parts)
 
         # 1. Translate Top-Level System Prompt to System Message
         if self.system:
@@ -1337,29 +1516,17 @@ class AnthropicMessagesRequest(BaseModel):
                     elif block.type == "tool_result":
                         # Anthropic passes tool results inside a "user" message.
                         # OpenAI requires these to be separate "tool" role messages.
-                        content_str = ""
-                        if isinstance(block.content, str):
-                            content_str = block.content
-                        elif isinstance(block.content, list):
-                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
-
                         tool_results.append(BaseMessage(
                             role="tool",
                             tool_call_id=block.tool_use_id,
-                            content=content_str
+                            content=_anthropic_blocks_to_multimodal_content(block.content)
                         ))
 
                     elif block.type == "mcp_tool_result":
-                        content_str = ""
-                        if isinstance(block.content, str):
-                            content_str = block.content
-                        elif isinstance(block.content, list):
-                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
-
                         tool_results.append(BaseMessage(
                             role="tool",
                             tool_call_id=block.tool_use_id,
-                            content=content_str
+                            content=_anthropic_blocks_to_multimodal_content(block.content)
                         ))
 
                 # Handling the assembled blocks
@@ -1449,6 +1616,8 @@ class AnthropicMessagesRequest(BaseModel):
             "messages": chat_messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
             "stream": self.stream,
             "max_tokens": self.max_tokens,
             "tools": chat_tools,
@@ -1459,6 +1628,10 @@ class AnthropicMessagesRequest(BaseModel):
             "thinking_token_budget": self.thinking_token_budget,
             "use_thinking": self.use_thinking,
             "return_thinking": self.return_thinking,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            "repetition_penalty": self.repetition_penalty,
+            "seed": self.seed,
         }
 
         # Filter out None values so Pydantic applies its own defaults, except when
@@ -1492,3 +1665,11 @@ class AnthropicMessagesRequest(BaseModel):
             configs.append(server.to_mcp_server_config(allowed_tools=toolset.get_allowed_tool_names()))
 
         return configs
+
+
+class AnthropicCountTokensRequest(AnthropicMessagesRequest):
+    max_tokens: Optional[int] = None
+
+
+class AnthropicCountTokensResponse(BaseModel):
+    input_tokens: int

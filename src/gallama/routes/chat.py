@@ -11,6 +11,8 @@ from ..logger import logger
 from ..remote_mcp.orchestrator import MCPStreamController, prepend_mcp_traces_to_response, run_mcp_completion_loop
 from ..request_validation import validate_api_request
 from ..data_classes import (
+    AnthropicCountTokensRequest,
+    AnthropicCountTokensResponse,
     BaseMessage,
     ChatMLQuery,
     GenerateQuery,
@@ -21,11 +23,14 @@ from ..data_classes import (
     ConversationCreateRequest,
     ConversationDeletedResource,
     ConversationUpdateRequest,
+    normalize_input_messages,
     ResponsesCreateRequest,
     ResponsesCreateResponse,
     response_output_to_assistant_messages,
 )
 from ..response_store import ResponseStoreRecord
+from ..server_engine.responses_ws_bridge import is_codex_responses_transport
+from ..utils.utils import get_token_length
 from typing import Literal
 
 import asyncio
@@ -70,6 +75,24 @@ def _start_generation_task(coro, gen_queue: GenQueueDynamic) -> asyncio.Task:
 
     task.add_done_callback(_consume_task_exception)
     return task
+
+
+def _count_query_input_tokens(query: ChatMLQuery) -> int:
+    model_manager = get_model_manager()
+
+    query = validate_api_request(query)
+    llm = model_manager.get_model(query.model, _type="llm")
+    query = llm.validate_video_support(query)
+
+    prompt_output = llm.prompt_eng.get_prompt(
+        query,
+        backend=llm.backend,
+    )
+    prompt = prompt_output[0] if isinstance(prompt_output, tuple) else prompt_output
+
+    input_tokens = get_token_length(llm.tokenizer, prompt)
+    llm.validate_token_length(input_tokens)
+    return input_tokens
 
 
 @router.post("/messages")
@@ -122,6 +145,17 @@ async def anthropic_message(request: Request, message: AnthropicMessagesRequest)
         return result.response_obj
 
     return await chat_completion(request, message.get_ChatMLQuery(), provider="anthropic")
+
+
+@router.post("/messages/count_tokens")
+async def anthropic_count_tokens(message: AnthropicCountTokensRequest) -> AnthropicCountTokensResponse:
+    if message.strip_claude_code_billing_header:
+        removed = message.remove_claude_code_billing_header_system_message()
+        if removed:
+            logger.info("Removed Claude Code billing header from Anthropic system prompt for prompt caching")
+
+    input_tokens = _count_query_input_tokens(message.get_ChatMLQuery())
+    return AnthropicCountTokensResponse(input_tokens=input_tokens)
 
 @router.post("/chat/completions")
 async def chat_completion(request: Request, query: ChatMLQuery, provider: Literal["openai", "anthropic"]="openai"):
@@ -274,12 +308,17 @@ async def responses(request: Request, query: ResponsesCreateRequest):
             raise _missing_conversation(conversation_id)
         previous_messages = _clone_messages(conversation_record.messages)
 
+    ensure_user_for_codex = is_codex_responses_transport(request.headers)
     current_messages = query.to_input_messages(include_instructions=not previous_messages)
     conversation_input_messages = query.to_input_messages(include_instructions=False) if conversation_id else []
     effective_messages = (
         _merge_instructions_into_history(previous_messages, query.instructions) + current_messages
         if previous_messages
         else current_messages
+    )
+    effective_messages = normalize_input_messages(
+        effective_messages,
+        ensure_user=ensure_user_for_codex,
     )
 
     try:

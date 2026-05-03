@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gallama"
-version = "0.1.4"
+version = "0.1.5"
 description = "An opinionated Llama Server engine with a focus on agentic tasks"
 authors = [{name = "David", email = "trantrungduc91@example.com"}]
 license = {text = "MIT"}
@@ -17,9 +17,7 @@ dependencies = [
     "colorama",
     "datamodel-code-generator",
     "fastapi",
-    "formatron>=0.4.4",
     "httpx",
-    "lm-format-enforcer",
     "mcp>=1.26.0",
     "lxml",
     "packaging",
@@ -54,14 +52,22 @@ embedding = [
 ]
 exl2 = [
     "exllamav2",
+    "formatron>=0.4.4",
+    "lm-format-enforcer",
 ]
 exl3 = [
     "exllamav3",
+    "formatron>=0.4.4",
 ]
 llama-cpp = [
     "cmake",
     "llama-cpp-python",
+    "lm-format-enforcer",
     "ninja",
+]
+guided-decoding-all = [
+    "formatron>=0.4.4",
+    "lm-format-enforcer",
 ]
 sglang = [
     "qwen_omni_utils",
@@ -73,6 +79,7 @@ stt = [
     "silero-vad",
 ]
 transformers-backend = [
+    "formatron>=0.4.4",
     "qwen_omni_utils",
     "qwen_vl_utils",
 ]
@@ -106,6 +113,7 @@ all = [
     "exllamav3",
     "faster-whisper",
     "ffmpeg-python",
+    "formatron>=0.4.4",
     "fuzzywuzzy",
     "huggingface-hub",
     "infinity-emb[all]",
@@ -115,6 +123,7 @@ all = [
     "livekit-agents>=0.12.15",
     "livekit-protocol",
     "llama-cpp-python",
+    "lm-format-enforcer",
     "misaki",
     "misaki[en]",
     "misaki[ja]",

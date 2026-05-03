@@ -1,5 +1,5 @@
 from ..base import ModelInterface
-from typing import Optional, Dict, List, Union
+from typing import Any, Optional, Dict, List, Union
 import time                                 # for compute of generation time
 import asyncio
 from fastapi import Request                 # for type hint
@@ -39,7 +39,7 @@ except ImportError:
 
 
 from gallama.utils import is_flash_attention_installed
-from .....logger.logger import logger
+from .....logger.logger import basic_log_extra, logger
 
 import logging
 
@@ -116,7 +116,7 @@ class ModelSGLang(ModelInterface):
 
         # load draft model
         if self.draft_model_id is not None:
-            raise "Draft model currently not supported for llama cpp backend"
+            raise NotImplementedError("Draft model currently not supported for sglang backend")
 
         self.eos_token_ids = self.generate_eos_tokens_id()
 
@@ -128,7 +128,7 @@ class ModelSGLang(ModelInterface):
         gpus,
     ):
         """This function return the model and its tokenizer"""
-        logger.info("Loading model: " + model_id)
+        logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
 
         cache = None  # in case not a backend with separate cache like llama cpp
@@ -153,7 +153,7 @@ class ModelSGLang(ModelInterface):
         # set max_seq_len based on model    TODO: To find more reliable method
         self.max_seq_len = self.backend_extra_args.get('max_seq_len') or 32768
 
-        logger.info(model_kargs)
+        logger.info(model_kargs, extra=basic_log_extra())
         model = sgl.Engine(**model_kargs)
 
         # wrapped_tokenizer = AsyncEncodeWrapper(model)
@@ -182,7 +182,7 @@ class ModelSGLang(ModelInterface):
         gen_type: Union[str, GenStart] = "text",    # the generated result will be store to this queue
         temperature: float = 0.01,
         top_p: float = 0.8,
-        formatter: FormatterBuilder | TokenEnforcerTokenizerData | SGLangFormatter = None,
+        formatter: Any = None,
         stop_words: Union[List[str], str] = None,
         prefix_strings: Optional[Union[str, List[str]]] = None,
         banned_strings: list[str] | None = None,
@@ -193,6 +193,12 @@ class ModelSGLang(ModelInterface):
         stop_event: asyncio.Event = None,
         **kwargs,
     ) -> (str, GenerationStats):
+        top_k = kwargs.get("top_k")
+        min_p = kwargs.get("min_p")
+        presence_penalty = kwargs.get("presence_penalty")
+        frequency_penalty = kwargs.get("frequency_penalty")
+        repetition_penalty = kwargs.get("repetition_penalty")
+        seed = kwargs.get("seed")
 
         if not quiet:
             logger.info("----------------------Prompt---------------\n" + prompt)
@@ -330,10 +336,19 @@ class ModelSGLang(ModelInterface):
             "stop": stop_words,
             # "skip_special_tokens": False,
         }
+        optional_settings = {
+            "top_k": top_k,
+            "min_p": min_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+            "repetition_penalty": repetition_penalty,
+            "seed": seed,
+        }
+        settings.update({key: value for key, value in optional_settings.items() if value is not None})
 
         # format enforcement
         if formatter:
-            raise "tool not supported for SG lang yet"
+            raise NotImplementedError("Tool use is not supported for sglang yet")
             # settings.update(formatter.get_formatter_dict())
 
         # logger.info("FROG FROG" + str(settings))

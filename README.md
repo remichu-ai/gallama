@@ -14,6 +14,7 @@ Do checkout [TabbyAPI](https://github.com/theroyallab/tabbyAPI) if you want a re
 - OpenAI chat completion API
 - Anthropic message API
 - Compatible with Claude Code
+- ExLlamaV3 speculative decoding, including DFlash draft models with `exllamav3>=0.0.31`
 
 ## Native Tool Calling
 Gallama supports native tool calling. Instead of forcing every model into one synthetic format, Gallama uses the model's own tool-calling format when that format is supported by a parser in [`src/gallama/backend/llm/prompt_engine/by_model`](./src/gallama/backend/llm/prompt_engine/by_model).
@@ -647,7 +648,13 @@ If you're starting from scratch and don't have these dependencies yet, follow th
 
 2. Install and verify your backend:
    - Exllama V3 is the recommended path if you want the setup closest to what is actively tested.
+   - DFlash speculative decoding requires `exllamav3>=0.0.31`.
    - Exllama V2, llama.cpp, transformers, vLLM, sglang, and other backends are still available, but expect some backend-specific rough edges.
+
+   For ExLlamaV3 with DFlash support:
+   ```shell
+   pip install -U "exllamav3>=0.0.31"
+   ```
 
    (Optional) Install llama cpp-python:
    - Follow instructions at [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
@@ -701,13 +708,30 @@ Follow these steps to use the model.
       gallama run -id "model_id=mistral"
       ```
 
+### Environment rollback
+
+If you use a repo-local `.venv`, you can snapshot it and restore it later:
+
+```shell
+make env-snapshot
+make env-restore
+```
+
+The snapshot is written to `.base-env/requirements.txt` with basic interpreter metadata in `.base-env/metadata.txt`. The snapshot command only targets `.venv` and refuses to write an empty lock file.
+
 ### model_config.yaml
 
 Each top-level key is the model name that Gallama will expose through the API. The value under that key is the configuration used to load the backend.
 
+Optional `_global` settings apply to every model entry. This is useful for subprocess environment variables such as `CUDA_VISIBLE_DEVICES`.
+
 Minimal Exllama example:
 
 ```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "1,0"
+
 mistral:
   backend: exllama
   model_id: /home/your-user/gallama/models/Mistral-7B-instruct-v0.3-4.5bpw-exl2
@@ -717,15 +741,106 @@ mistral:
 
 Typical keys:
 
-- `backend`: backend name such as `exllama`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `embedding`, or `kokoro`
+- `backend`: backend name such as `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `embedding`, or `kokoro`
 - `model_id`: local path to the model or model directory
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
+- `reserve_vram`: ExLlamaV3 auto-mode reserve in GB per visible GPU. Scalar applies to all visible GPUs; list values follow the final logical CUDA order after `CUDA_VISIBLE_DEVICES`
+- `env`: optional environment variables for the model subprocess. Per-model `env` overrides `_global.env`
+- `warmup_prompt`: optional ChatML-style mapping for startup warmup. Can also be set under `_global` and overridden per model. Use `false` on a model to disable inherited warmup.
 - `max_seq_len`: override context length if needed
 - `cache_quant`: KV cache quantization such as `FP16`, `Q4`, `Q6`, or `Q8`
 - `quant`: optional metadata for the model quantization you downloaded
 - `eos_token_list`: optional extra EOS tokens for models that need them
+- `default_sampling`: optional per-model sampling defaults. Rules with `condition: thinking` apply only to the dedicated reasoning pass; omitted `condition` is the normal default. API request values override YAML values per field.
 - `backend_extra_args`: backend-specific options, commonly used for `transformers`, `sglang`, `kokoro`, and similar backends
+- `draft_model_id`: optional draft model path for speculative decoding. With ExLlamaV3 this can be a normal flash draft model or a DFlash draft model.
+- `draft_model_name`: optional name of another `model_config.yaml` entry to use as the draft model.
+- `draft_gpus`: optional GPU split for the draft model. If omitted, Gallama uses `auto`.
+- `draft_cache_quant`: draft KV cache quantization. Defaults to `FP16`; use `Q4`, `Q6`, or `Q8` only if you intentionally want a quantized draft cache.
+
+Example with default sampling:
+
+```yaml
+qwen35:
+  backend: transformers
+  model_id: /home/your-user/gallama/models/qwen3.5
+  prompt_template: Qwen3.5
+  gpus: auto
+  default_sampling:
+    - temperature: 0.7
+      top_p: 0.85
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
+      repetition_penalty: 1.0
+    - condition: thinking
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repetition_penalty: 1.0
+```
+
+Example with global GPU reordering and a per-model override:
+
+```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "1,0"
+
+qwen25-vl:
+  backend: exllamav3
+  model_id: /home/your-user/gallama/models/qwen25-vl
+  prompt_template: Qwen2-VL
+  gpus: auto
+  reserve_vram: [1.0, 0.0]
+
+text-only-model:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/text-only
+  prompt_template: Llama3
+  gpus: auto
+  env:
+    CUDA_VISIBLE_DEVICES: "0,1"
+```
+
+When `gpus: auto` is used, Gallama preserves the configured `CUDA_VISIBLE_DEVICES` order exactly. When `gpus` is an explicit split list, Gallama now interprets that split relative to the configured visible-device order.
+
+Example with a global warmup prompt loaded from an external file:
+
+```yaml
+_global:
+  env:
+    CUDA_VISIBLE_DEVICES: "0,2,3,1,4,5"
+  warmup_prompt:
+    path: /home/your-user/.config/claude-code/warmup.yaml
+    max_completion_tokens: 64
+    reasoning_effort: minimal
+
+claude-code-model:
+  backend: transformers
+  model_id: /home/your-user/gallama/models/claude-code
+  warmup_prompt:
+    max_completion_tokens: 32
+
+another-model:
+  backend: exllama
+  model_id: /home/your-user/gallama/models/another-model
+  warmup_prompt: false
+```
+
+The external file should contain a mapping that Gallama can validate as a `ChatMLQuery`, for example:
+
+```yaml
+messages:
+  - role: developer
+    content: You are Claude Code.
+  - role: user
+    content: Reply with OK.
+```
 
 Example with a `transformers` backend:
 
@@ -865,6 +980,8 @@ Useful optional arguments:
 
 - `max_seq_len=32768`
 - `gpus=20,20` or leave it as automatic
+- default ExLlamaV3 auto reserve is `0.8 GB` on logical GPU 0 and `0.4 GB` on other visible GPUs
+- `reserve_vram=0.4` for ExLlamaV3 auto mode on all visible GPUs, or `reserve_vram=1.0,0.0` to reserve only logical GPU 0
 - `cache_size=32768`
 - `cache_quant=Q4`
 - `prompt_template=<template-name>`
@@ -877,15 +994,18 @@ Useful optional arguments:
 Notes:
 
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
+- `reserve_vram` is interpreted in GB against the final visible-device order after `CUDA_VISIBLE_DEVICES` is applied. For ExLlamaV3, it only applies when `gpus=auto`; explicit `gpus=...` and `reserve_vram` cannot be combined.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
+- ExLlamaV3 DFlash speculative decoding requires `exllamav3>=0.0.31`. Gallama detects DFlash from the draft model and defaults DFlash to `num_draft_tokens=15` unless you override it in `backend_extra_args`.
 - This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 
 #### Speculative Decoding Parameters
 - `draft_model_id`: ID of the draft model (optional)
 - `draft_model_name`: Name of the draft model (optional)
 - `draft_gpus`: VRAM usage for each GPU for the draft model, comma-separated list of floats (optional)
-- `draft_cache_size`: Context length for cache text in integers for the draft model (optional)
-- `draft_cache_quant`: Quantization to use for cache for the draft model, options are "FP16", "Q4", "Q6", "Q8" (optional)
+- `draft_cache_size`: Context length for cache text in integers for the draft model (optional; ExLlamaV3 keeps the draft cache size matched to the main cache)
+- `draft_cache_quant`: Quantization to use for cache for the draft model, options are `FP16`, `Q4`, `Q6`, `Q8`. Defaults to `FP16`
+- `backend_extra_args.num_draft_tokens`: Number of draft tokens. For ExLlamaV3 DFlash, Gallama defaults this to `15`; explicit values override the default
 
 ### Examples
 
@@ -903,7 +1023,7 @@ Notes:
 3. Launch a model with custom cache size and quantization:
    By default cache_size is initialized to max sequence length of the model.
    However, if there is VRAM to spare, increase cache_size will have model to perform better for concurrent and batched request.
-   By default, cache_quant=Q4 will be used. However, do adjust it if required e.g. Qwen2 1.5B doesn't work well with Q4 cache, please use Q6 or Q8.
+   By default, cache_quant is `FP16`. You can set `Q4`, `Q6`, or `Q8` to reduce KV cache VRAM if the model tolerates quantized cache.
    ```shell
    gallama run -id "model_name=mistral model_id=/path/to/mistral backend=exllamav3 cache_size=102400 cache_quant=Q8"
    ```
@@ -921,14 +1041,41 @@ Notes:
    ```
 
 6. Launch a model with speculative decoding:
-   Only model with same vocabulary should be used for speculative decoding.
-   For reference, by enabling speculative decoding, qwen2-72B generation speed improve from 20tok/s to 25-35tok/s on my 4090s.
-   Highly recommend speculative decoding if you have VRAM to spare.
-   ```shell
-   gallama run -id "model_name=qwen2-72B model_id=/path/to/qwen2-72B backend=exllama draft_model_id=/path/to/qwen2-1.5B"
+   Only use a draft model that is compatible with the target model. For normal draft models this usually means the same tokenizer/vocabulary. For DFlash, use a DFlash draft model built for that target model family.
+
+   ExLlamaV3 supports two speculative decoding modes:
+   - normal flash draft: a smaller draft model proposes tokens with regular flash attention
+   - DFlash draft: a DFlash draft model proposes a block of tokens and syncs accepted target states back into the draft cache
+
+   Recommended DFlash setup in `~/gallama/model_config.yaml`:
+   ```yaml
+   qwen3.6-27B:
+     backend: exllamav3
+     model_id: /path/to/Qwen3.6-27B-exl3
+     gpus: auto
+     max_seq_len: 128000
+     draft_model_id: /path/to/Qwen3.6-27B-DFlash
+     draft_cache_quant: FP16
+     backend_extra_args:
+       num_draft_tokens: 15
    ```
-   Ensure your GPU settings can accommodate the model requirements. Trial and adjust parameters as needed for your specific use case.
-   Note: The backend is assumed to be the same for both the main model and the draft model in speculative decoding.
+
+   Then launch it by model name:
+   ```shell
+   gallama run qwen3.6-27B
+   ```
+
+   You can also pass a direct draft path from the CLI. Dotted keys can be used for `backend_extra_args`:
+   ```shell
+   gallama run -id "model_name=qwen3.6-27B model_id=/path/to/Qwen3.6-27B-exl3 backend=exllamav3 draft_model_id=/path/to/Qwen3.6-27B-DFlash draft_cache_quant=FP16 backend_extra_args.num_draft_tokens=15"
+   ```
+
+   For normal flash speculative decoding with ExLlamaV3, use a standard compatible draft model instead:
+   ```shell
+   gallama run -id "model_name=qwen2-72B model_id=/path/to/qwen2-72B backend=exllamav3 draft_model_id=/path/to/qwen2-draft"
+   ```
+
+   Ensure your GPU settings can accommodate both the target and draft model. Trial and adjust `gpus`, `draft_gpus`, and `cache_quant` for your hardware.
 
 7. Tensor Parallel (TP)
    Exllama V2 Tensor Parallel support Tensor Parallel from v0.1.9.

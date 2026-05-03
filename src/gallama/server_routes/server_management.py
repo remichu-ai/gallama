@@ -13,7 +13,7 @@ import psutil
 import asyncio
 from gallama.server_engine import log_model_status
 from gallama.dependencies_server import get_server_manager, get_logger
-from gallama.logger.logger import is_max_log_verbosity
+from gallama.logger.logger import basic_log_extra, is_max_log_verbosity
 from gallama.utils.utils import format_request_body_for_logging
 
 
@@ -41,7 +41,7 @@ async def load_models(model_request, task_id):
         models_to_load = model_request if isinstance(model_request, List) else [model_request]
         for model in models_to_load:
             await server_manager.model_load_queue.put(model)
-            logger.info(f"Model {model} instance queued for loading")
+            logger.info(f"Model {model} instance queued for loading", extra=basic_log_extra())
 
         # Wait for all models to be loaded
         await server_manager.model_load_queue.join()
@@ -62,11 +62,12 @@ async def add_model(model_request: Union[ModelSpec, List[ModelSpec]], background
         + format_request_body_for_logging(
             await request.body(),
             include_full_base64=is_max_log_verbosity(),
-        )
+        ),
+        extra=basic_log_extra(),
     )
 
 
-    logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}")
+    logger.info(f"Received request to add model(s): {model_request}, Task ID: {task_id}", extra=basic_log_extra())
 
     if any(instance.status == "loading" for model in server_manager.models.values() for instance in model.instances):
         logger.warning("Another model is currently loading. Request rejected.")

@@ -1,7 +1,7 @@
 from gallama.server_engine import ServerManager
 from gallama.server_engine.responses_ws_bridge import ResponsesWebSocketHub
 import time
-from gallama.logger.logger import get_logger
+from gallama.logger.logger import basic_log_extra, get_logger
 import logging
 import zmq
 import json
@@ -41,7 +41,7 @@ def start_log_receiver(zmq_url, log_file: str | None = None):
         to_zmq=False
     )
 
-    receiver_logger.info(f"Log receiver started on {zmq_url}")
+    receiver_logger.info(f"Log receiver started on {zmq_url}", extra=basic_log_extra())
 
     def receive_logs():
         while True:
@@ -49,9 +49,14 @@ def start_log_receiver(zmq_url, log_file: str | None = None):
                 message = socket.recv_json()
                 log_level = getattr(logging, message['level'].upper(), logging.INFO)
 
+                log_kwargs = {}
+                if message.get("gallama_basic"):
+                    log_kwargs["extra"] = basic_log_extra()
+
                 receiver_logger.log(
                     level=log_level,
-                    msg=f"{message['model']}:{message['port']} | {message['log']}"
+                    msg=f"{message['model']}:{message['port']} | {message['log']}",
+                    **log_kwargs,
                 )
             except zmq.Again:
                 # No message available, sleep for a short time

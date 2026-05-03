@@ -37,6 +37,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Literal,
 from ..utils.request_disconnect import is_request_disconnected
 from ..utils.utils import get_response_uid, get_response_tool_uid
 from ..logger import logger
+from ..logger.logger import basic_log_extra
 from pydantic.json import pydantic_encoder
 import time
 import json
@@ -496,7 +497,7 @@ async def chat_completion_response_stream(
                     logger.error(f"Error in response completion callback: {e}")
 
             if gen_stats:
-                logger.info(format_generation_stats_log(model_name, gen_stats))
+                logger.info(format_generation_stats_log(model_name, gen_stats), extra=basic_log_extra())
 
 
 async def chat_completion_response(
@@ -601,12 +602,12 @@ async def chat_completion_response(
 
     non_stream_kwargs = {
         "parsed_blocks": parsed_blocks,
-        "input_tokens": gen_stats.input_tokens_count,
-        "output_tokens": gen_stats.output_tokens_count,
-        "total_tokens": gen_stats.total_tokens_count,
+        "input_tokens": gen_stats.input_tokens_count if gen_stats else 0,
+        "output_tokens": gen_stats.output_tokens_count if gen_stats else 0,
+        "total_tokens": gen_stats.total_tokens_count if gen_stats else 0,
         "finish_reason": finish_reason,
     }
-    if provider == "anthropic":
+    if provider == "anthropic" and gen_stats:
         non_stream_kwargs["stop_sequence"] = gen_stats.stop_sequence
 
     response_obj = formatter.non_stream_response(**non_stream_kwargs)
@@ -614,7 +615,7 @@ async def chat_completion_response(
     assert response_obj is not None
     # logger.info(f"full_response: {response}")
     if gen_stats:
-        logger.info(format_generation_stats_log(model_name, gen_stats))
+        logger.info(format_generation_stats_log(model_name, gen_stats), extra=basic_log_extra())
 
     if completion_callback is not None:
         try:
@@ -706,7 +707,7 @@ async def completion_response_stream(
         if eos:
             logger.info(f"----------------------LLM Response---------------\n{full_response.strip()}")
             if gen_stats is not None:
-                logger.info(format_generation_stats_log(model_name, gen_stats))
+                logger.info(format_generation_stats_log(model_name, gen_stats), extra=basic_log_extra())
             yield "[DONE]"
             break
         else:

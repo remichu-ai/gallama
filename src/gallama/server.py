@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, APIRouter
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from collections import defaultdict
 from typing import Union
@@ -51,8 +51,13 @@ from gallama.server_engine.request_routing import (
 )
 from gallama.server_engine.model_capabilities import infer_model_modalities_fallback
 from gallama.logger.logger import (
+    REQUEST_ID_HEADER,
+    basic_log_extra,
     get_log_level_for_verbosity,
     is_max_log_verbosity,
+    new_request_id,
+    reset_request_id,
+    set_request_id,
     set_log_verbosity,
 )
 
@@ -70,11 +75,88 @@ manager_app = FastAPI()
 manager_app.include_router(router)
 
 
+@manager_app.head("/")
+async def root_head():
+    return PlainTextResponse("Not Found\n", status_code=404)
+
+
+def _log_request_received(request: Request) -> None:
+    request_id = getattr(request.state, "request_id", "-")
+    server_logger.info(
+        f"REQ {request_id} {request.method} {request.url.path}",
+        extra=basic_log_extra(),
+    )
+
+
+def _log_response_sent(
+    request: Request,
+    *,
+    status_code: int,
+    started_at: float,
+    stream_complete: bool | None = None,
+) -> None:
+    request_id = getattr(request.state, "request_id", "-")
+    parts = [f"RES {request_id} {status_code} {request.method} {request.url.path}"]
+
+    model_name = getattr(request.state, "request_model", None) or getattr(request.state, "routed_model", None)
+    if model_name:
+        parts.append(f"model={model_name}")
+
+    instance_port = getattr(request.state, "instance_port", None)
+    if instance_port:
+        parts.append(f"port={instance_port}")
+
+    if stream_complete is not None:
+        parts.append("stream=done" if stream_complete else "stream=aborted")
+
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+    parts.append(f"{elapsed_ms}ms")
+
+    server_logger.info(" ".join(parts), extra=basic_log_extra())
+
+
+def _finalize_request_logging(request: Request, response, *, started_at: float):
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        response.headers[REQUEST_ID_HEADER] = request_id
+
+    if isinstance(response, StreamingResponse):
+        original_iterator = response.body_iterator
+
+        async def logged_body_iterator():
+            stream_token = set_request_id(request_id)
+            completed = False
+            try:
+                async for chunk in original_iterator:
+                    yield chunk
+                completed = True
+            finally:
+                _log_response_sent(
+                    request,
+                    status_code=response.status_code,
+                    started_at=started_at,
+                    stream_complete=completed,
+                )
+                reset_request_id(stream_token)
+
+        response.body_iterator = logged_body_iterator()
+        return response
+
+    _log_response_sent(request, status_code=response.status_code, started_at=started_at)
+    return response
+
+
 
 
 
 @manager_app.middleware("http")
 async def log_requests(request: Request, call_next):
+    request_id = request.headers.get(REQUEST_ID_HEADER) or new_request_id()
+    request.state.request_id = request_id
+    started_at = time.perf_counter()
+    token = set_request_id(request_id)
+    _log_request_received(request)
+
     try:
         if request.url.path in EXCLUDED_ENDPOINTS and request.method in ("POST", "PUT", "PATCH"):
             content_type = request.headers.get("Content-Type", "")
@@ -93,8 +175,10 @@ async def log_requests(request: Request, call_next):
     except RequestValidationError as e:
         server_logger.debug(f"Validation error:\n{e}")
         response = JSONResponse(status_code=422, content={"detail": "Validation error"})
+    finally:
+        reset_request_id(token)
 
-    return response
+    return _finalize_request_logging(request, response, started_at=started_at)
 
 
 class WebSocketLoggingMiddleware:
@@ -324,22 +408,28 @@ async def model_loader():
     server_manager = get_server_manager()
 
     while True:
-        server_logger.info("Model loader waiting for next model in queue")
+        server_logger.info("Model loader waiting for next model in queue", extra=basic_log_extra())
         model = await server_manager.model_load_queue.get()
-        server_logger.info(f"Model loader retrieved model from queue: {model}")
+        server_logger.info(f"Model loader retrieved model from queue: {model}", extra=basic_log_extra())
         async with server_manager.loading_lock:
             try:
-                server_logger.info(f"Starting to load model: {model}")
-                server_logger.info(f"Current queue size: {server_manager.model_load_queue.qsize()}")
+                server_logger.info(f"Starting to load model: {model}", extra=basic_log_extra())
+                server_logger.info(
+                    f"Current queue size: {server_manager.model_load_queue.qsize()}",
+                    extra=basic_log_extra(),
+                )
                 await run_model_with_timeout(model)
             except Exception as e:
                 server_logger.exception(f"Error loading model {model} instance: {str(e)}")
             finally:
-                server_logger.info(f"Finished processing model: {model}")
+                server_logger.info(f"Finished processing model: {model}", extra=basic_log_extra())
                 server_manager.model_load_queue.task_done()
-                server_logger.info(f"Remaining queue size: {server_manager.model_load_queue.qsize()}")
+                server_logger.info(
+                    f"Remaining queue size: {server_manager.model_load_queue.qsize()}",
+                    extra=basic_log_extra(),
+                )
 
-        server_logger.info("Model loader finished processing, looping back")
+        server_logger.info("Model loader finished processing, looping back", extra=basic_log_extra())
         await asyncio.sleep(1)
 
 
@@ -376,9 +466,10 @@ async def get_instance_modalities(port, timeout=5.0) -> List[str]:
 
 async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
+    port = None
 
     try:
-        model_config = config_manager.configs.get(model_spec.model_name) or {}
+        model_config = config_manager.get_effective_model_config(model_spec.model_name) or {}
         if model_config:
             resolved_model_config = model_config.copy()
             resolved_model_config.update({"model_name": model_spec.model_name})
@@ -394,7 +485,10 @@ async def run_model(model_spec: ModelSpec):
         while any(instance.port == port for model_info in server_manager.models.values() for instance in model_info.instances):
             port += 1
 
-        server_logger.info(f"Attempting to start model {model_spec.model_name} on port {port}")
+        server_logger.info(
+            f"Attempting to start model {model_spec.model_name} on port {port}",
+            extra=basic_log_extra(),
+        )
 
         backend = model_spec.backend
         if not backend:
@@ -402,24 +496,21 @@ async def run_model(model_spec: ModelSpec):
                 f"backend is required to start model '{model_spec.model_name}' when it is not defined in model_config.yaml"
             )
 
-        # Create a copy of the current environment
-        env = os.environ.copy()
-
-        # Set CUDA_VISIBLE_DEVICES
-        env['CUDA_VISIBLE_DEVICES'] = model_spec.get_visible_gpu_indices()
-        server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']))
-        env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-        server_logger.info(f"Resolved model spec: {model_spec}")
+        env = model_spec.build_child_env(os.environ)
+        child_model_spec = model_spec.build_child_model_spec()
+        server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']), extra=basic_log_extra())
+        server_logger.info("Child env overrides: {}".format(model_spec.env), extra=basic_log_extra())
+        server_logger.info(f"Resolved model spec: {child_model_spec}", extra=basic_log_extra())
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
-            model_json = model_spec.model_dump_json()
+            model_json = child_model_spec.model_dump_json()
             model_b64 = base64.b64encode(model_json.encode('utf-8')).decode('utf-8')
 
 
             # Use the function
             app_path = get_package_file_path('app.py')
-            server_logger.info(f"Using app path: {app_path}")
+            server_logger.info(f"Using app path: {app_path}", extra=basic_log_extra())
 
             # Determine the correct Python executable
             python_exec = shutil.which("python3") or shutil.which("python")
@@ -455,7 +546,7 @@ async def run_model(model_spec: ModelSpec):
 
         # Wait for the model to become ready
         if await wait_for_model_ready(port):
-            server_logger.info(f"Model {model_spec.model_name} on port {port} is ready")
+            server_logger.info(f"Model {model_spec.model_name} on port {port} is ready", extra=basic_log_extra())
             modalities = await get_instance_modalities(port)
             if not modalities:
                 config_record = config_manager.configs.get(model_spec.model_name, {})
@@ -469,7 +560,8 @@ async def run_model(model_spec: ModelSpec):
                 )
                 if modalities:
                     server_logger.info(
-                        f"Inferred modalities for {model_spec.model_name} on port {port}: {modalities}"
+                        f"Inferred modalities for {model_spec.model_name} on port {port}: {modalities}",
+                        extra=basic_log_extra(),
                     )
             instance_info = ModelInstanceInfo(
                 port=port,
@@ -480,6 +572,7 @@ async def run_model(model_spec: ModelSpec):
                 strict=model_spec.strict,
                 modalities=modalities,
                 max_concurrent_requests=model_spec.max_concurrent_requests,
+                cuda_visible_devices=env.get("CUDA_VISIBLE_DEVICES", ""),
             )
             server_manager.models[model_spec.model_name].instances.append(instance_info)
         else:
@@ -487,23 +580,29 @@ async def run_model(model_spec: ModelSpec):
             await stop_model_instance(model_spec.model_name, port)
             return
 
-        server_logger.info(f"Model {model_spec.model_id} instance on port {port} is fully loaded and ready")
+        server_logger.info(
+            f"Model {model_spec.model_id} instance on port {port} is fully loaded and ready",
+            extra=basic_log_extra(),
+        )
         log_model_status(server_manager.models, custom_logger=server_logger)  # Log status after successfully loading a model
 
         # Instead of entering an infinite loop, we'll exit the function here
         return
 
     except Exception as e:
-        server_logger.exception(f"Error running model {model_spec.model_name} instance on port {port}: {str(e)}")
-        await stop_model_instance(model_spec.model_name, port)
+        location = f" on port {port}" if port is not None else ""
+        server_logger.exception(f"Error running model {model_spec.model_name} instance{location}: {str(e)}")
+        if port is not None:
+            await stop_model_instance(model_spec.model_name, port)
     finally:
         await cleanup_after_model_load(model_spec.model_name)
-        server_logger.info(f"Exiting run_model for {model_spec.model_name} on port {port}")
+        location = f" on port {port}" if port is not None else ""
+        server_logger.info(f"Exiting run_model for {model_spec.model_name}{location}", extra=basic_log_extra())
 
 
 async def cleanup_after_model_load(model: str):
     # Perform any necessary cleanup here
-    server_logger.info(f"Performing cleanup after loading model: {model}")
+    server_logger.info(f"Performing cleanup after loading model: {model}", extra=basic_log_extra())
     # For example, you might want to close any open connections or release resources
     # This is a placeholder - add specific cleanup tasks as needed
 
@@ -550,11 +649,39 @@ async def get_instance_for_model(model: str):
     return min(running_instances, key=get_instance_load_key)
 
 
+async def acquire_instance_slot(
+    instances: list[ModelInstanceInfo],
+    request: Request,
+    poll_interval: float = 0.05,
+) -> ModelInstanceInfo:
+    """
+    Wait until one instance is below its configured concurrency limit, then
+    atomically reserve a slot on that instance.
+    """
+    server_manager = get_server_manager()
+
+    while True:
+        async with server_manager.active_requests_lock:
+            candidates = [
+                inst for inst in instances
+                if active_requests[inst.port] < get_instance_concurrency_limit(inst)
+            ]
+            if candidates:
+                instance = min(candidates, key=get_instance_load_key)
+                active_requests[instance.port] += 1
+                return instance
+
+        if await request.is_disconnected():
+            raise HTTPException(status_code=499, detail="Client disconnected while waiting for model capacity")
+
+        await asyncio.sleep(poll_interval)
+
 
 async def load_balanced_router(request: Request, path: str):
     server_manager = get_server_manager()
 
     body_json, is_multipart = await parse_request_body(request)
+    request.state.request_stream = bool(body_json.get("stream", False)) if isinstance(body_json, dict) else False
 
     if request.url.path in EXCLUDED_ENDPOINTS:
         server_logger.info(body_json)
@@ -564,6 +691,7 @@ async def load_balanced_router(request: Request, path: str):
         return create_options_response(dict(request.headers))
 
     model = await get_model_from_body(request, parsed_body=body_json)
+    request.state.request_model = model or None
 
     async with request_semaphore:
         is_embedding = any(subpath["original"] in path for subpath in EMBEDDING_SUBPATHS)
@@ -607,17 +735,14 @@ async def load_balanced_router(request: Request, path: str):
         if not available_instances:
             raise HTTPException(status_code=503, detail=f"No suitable running instances with requested model '{model}'")
 
-        # Select the instance with the lowest normalized load so higher-capacity
-        # instances can absorb more concurrent traffic.
-        instance = min(available_instances, key=get_instance_load_key)
-
-        # Increment the active request count for the selected instance
-        async with server_manager.active_requests_lock:
-            active_requests[instance.port] += 1
+        # Select an instance with spare capacity and reserve a slot on it.
+        instance = await acquire_instance_slot(available_instances, request)
 
         try:
             server_logger.info(f"active_requests: {str(active_requests)}")
             server_logger.info(f"Request routed to model {instance.model_name} instance at port {instance.port}")
+            request.state.routed_model = instance.model_name
+            request.state.instance_port = instance.port
 
             if (
                 request.method == "POST"
@@ -689,15 +814,15 @@ async def main(model_list=None, port=8000, strict_mode=False, log_file: str | No
     server_manager.log_file = log_file
 
     receiver_thread = start_log_receiver(DEFAULT_ZMQ_URL, log_file=log_file)
-    server_logger.info("Starting main function")
-    server_logger.info(f"Strict mode: {'enabled' if strict_mode else 'disabled'}")
+    server_logger.info("Starting main function", extra=basic_log_extra())
+    server_logger.info(f"Strict mode: {'enabled' if strict_mode else 'disabled'}", extra=basic_log_extra())
 
     model_loader_task = asyncio.create_task(model_loader())
-    server_logger.info("Created model_loader task")
+    server_logger.info("Created model_loader task", extra=basic_log_extra())
 
     # Load initial models
     if model_list:
-        server_logger.info(f"Loading initial models: {[model.model_name for model in model_list]}")
+        server_logger.info(f"Loading initial models: {[model.model_name for model in model_list]}", extra=basic_log_extra())
         for model in model_list:
             await server_manager.model_load_queue.put(model)
 
@@ -705,7 +830,7 @@ async def main(model_list=None, port=8000, strict_mode=False, log_file: str | No
         while not server_manager.model_load_queue.empty():
             await asyncio.sleep(1)
 
-        server_logger.info("All initial models have been queued for loading")
+        server_logger.info("All initial models have been queued for loading", extra=basic_log_extra())
 
     # Start periodic health checks
     health_check_task = asyncio.create_task(periodic_health_check())
@@ -752,7 +877,7 @@ def llama_picture():
              ||----w |
              ||     ||
     """
-    server_logger.info(llama_art)
+    server_logger.info(llama_art, extra=basic_log_extra())
 
 
 def run_from_script(args):
@@ -760,7 +885,7 @@ def run_from_script(args):
     requested_verbosity = max(
         getattr(args, "global_verbose", 0) or 0,
         getattr(args, "verbose", 0) or 0,
-    ) + 1
+    )
     set_log_verbosity(requested_verbosity)
     configure_server_logging(getattr(args, "log_file", None))
     server_logger = get_server_logger()
@@ -779,7 +904,7 @@ def run_from_script(args):
         for item in args.model_id:
             model_spec = ModelSpec.from_dict(item)
             model_list.append(model_spec)
-            server_logger.info(model_spec)
+            server_logger.info(model_spec, extra=basic_log_extra())
 
     # simple loading with model_name
     if args.model_name:
@@ -787,12 +912,12 @@ def run_from_script(args):
         model_list.append(model_spec)
 
     if model_list:
-        server_logger.info("Initial models: " + str(model_list))
+        server_logger.info("Initial models: " + str(model_list), extra=basic_log_extra())
 
     server_logger.setLevel(get_log_level_for_verbosity())
 
 
-    server_logger.info("Parsed Arguments:" + str(args))
+    server_logger.info("Parsed Arguments:" + str(args), extra=basic_log_extra())
 
     asyncio.run(
         main(
@@ -806,7 +931,7 @@ def run_from_script(args):
 
 if __name__ == "__main__":
 
-    server_logger.info("Script started")
+    server_logger.info("Script started", extra=basic_log_extra())
     arg_parser = argparse.ArgumentParser(description="Launch multi model src instance")
     arg_parser.add_argument("--strict_mode", action="store_true", default=False,
                             help="Enable strict mode for routing non-embedding requests to matching model names")
@@ -828,7 +953,7 @@ if __name__ == "__main__":
         "--verbose",
         action='count',
         default=0,
-        help="Increase logging verbosity. Use -vv for maximum request/body detail.",
+        help="Increase logging verbosity. Use -v for current logs, -vv for debug, -vvv for maximum request/body detail.",
     )
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
