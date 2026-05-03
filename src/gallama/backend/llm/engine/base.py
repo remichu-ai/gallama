@@ -103,18 +103,23 @@ class ModelInterface(ABC):
 
         # handle draft model
         draft_model_config = {}
-        if model_spec.draft_model_id:
+        if model_spec.draft_model_name:
             draft_model_config = config_manager.get_model_config(model_spec.draft_model_name)
             if not draft_model_config:
                 raise HTTPException(f"Model config for '{model_spec.draft_model_name}' not exist")
 
 
-        # draft model is via cli only
-        self.draft_model_id = draft_model_config.get("model_id")
-        self.draft_model_name = model_spec.draft_model_name or None
-        self.draft_gpus = model_spec.draft_gpus or draft_model_config.get("draft_gpus") or "auto"
+        # draft model may be supplied directly or through a named model config
+        self.draft_model_id = model_spec.draft_model_id or draft_model_config.get("model_id")
+        self.draft_model_name = model_spec.draft_model_name or draft_model_config.get("model_name") or None
+        self.draft_gpus = (
+            model_spec.draft_gpus
+            or draft_model_config.get("draft_gpus")
+            or draft_model_config.get("gpus")
+            or "auto"
+        )
         self.draft_cache_size = self.cache_size   # set to the same as main model
-        self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "Q4"
+        self.draft_cache_quant = model_spec.draft_cache_quant or draft_model_config.get("cache_quant") or "FP16"
         # assert (self.draft_model_id is None) == (self.draft_model_name is None)
 
         # get the eos_token_str by merging the default config with anything set by user
@@ -385,7 +390,8 @@ class ModelInterface(ABC):
                 thinking_tag = prompt_eng.tag_dict.get("thinking")
 
                 if thinking_tag:
-                    stop_words = query.stop_words if query.stop_words else []
+                    # for thinking generation, we dont apply stop word, so that the LLM can reasoning about the stop word itself
+                    stop_words = []
                     stop_words.append(thinking_tag.end_marker)
 
                     generation_args = {

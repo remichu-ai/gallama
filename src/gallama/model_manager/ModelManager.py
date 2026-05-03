@@ -163,7 +163,7 @@ class ModelManager:
             else:
                 raise Exception(f"Unknown backend: {model_spec.backend}")
 
-            if model_spec.draft_model_id:
+            if model_spec.draft_model_name:
                 draft_model_config = self.config_manager.get_model_config(model_spec.draft_model_name)
                 if not draft_model_config:
                     raise Exception(

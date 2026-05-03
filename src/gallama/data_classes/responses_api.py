@@ -85,6 +85,8 @@ def _convert_message_content_to_parts(
             )
         elif part.type in {"reasoning_text", "summary_text"} and part.text:
             reasoning_parts.append(part.text)
+        elif part.type == "item_reference":
+            continue
         elif part.text is not None:
             multimodal_content.append(MultiModalTextContent(type="text", text=part.text))
 
@@ -131,6 +133,9 @@ def _convert_input_item_to_messages(item: Union[str, "ResponseInputItem"]) -> Li
     if item.type in {"mcp_list_tools", "mcp_call"}:
         return []
 
+    if item.type == "item_reference":
+        return []
+
     if item.type == "reasoning":
         reasoning_parts: List[str] = []
         for part in item.content or []:
@@ -153,6 +158,66 @@ def _convert_input_item_to_messages(item: Union[str, "ResponseInputItem"]) -> Li
             tool_calls=tool_calls,
         )
     ]
+
+
+def _stringify_message_content(content: Optional[Union[str, List[Any]]]) -> str:
+    if isinstance(content, str):
+        return content
+
+    if not content:
+        return ""
+
+    text_parts: List[str] = []
+    for part in content:
+        if isinstance(part, MultiModalTextContent):
+            text_parts.append(part.text)
+            continue
+
+        part_text = getattr(part, "text", None)
+        if part_text:
+            text_parts.append(part_text)
+
+    return "".join(text_parts)
+
+
+def normalize_input_messages(
+    messages: List[BaseMessage],
+    *,
+    ensure_user: bool = False,
+) -> List[BaseMessage]:
+    normalized_messages = [message.model_copy(deep=True) for message in messages]
+    instruction_fragments: List[str] = []
+    non_instruction_messages: List[BaseMessage] = []
+
+    for message in normalized_messages:
+        if message.role in {"system", "developer"}:
+            instruction_text = _stringify_message_content(message.content)
+            if instruction_text:
+                instruction_fragments.append(instruction_text)
+            continue
+
+        non_instruction_messages.append(message)
+
+    ordered_messages: List[BaseMessage] = []
+    if instruction_fragments:
+        ordered_messages.append(
+            BaseMessage(
+                role="system",
+                content="\n\n".join(fragment for fragment in instruction_fragments if fragment),
+            )
+        )
+
+    ordered_messages.extend(non_instruction_messages)
+
+    if ensure_user and not any(message.role == "user" for message in ordered_messages):
+        ordered_messages.append(
+            BaseMessage(
+                role="user",
+                content="Please continue based on the conversation above.",
+            )
+        )
+
+    return ordered_messages
 
 
 class ResponseTextFormatText(BaseModel):
@@ -435,7 +500,12 @@ class ResponsesCreateRequest(BaseModel):
     def _convert_input_item(self, item: Union[str, ResponseInputItem]) -> List[BaseMessage]:
         return _convert_input_item_to_messages(item)
 
-    def to_input_messages(self, include_instructions: bool = True) -> List[BaseMessage]:
+    def to_input_messages(
+        self,
+        include_instructions: bool = True,
+        *,
+        ensure_user: bool = False,
+    ) -> List[BaseMessage]:
         messages: List[BaseMessage] = []
 
         if include_instructions and self.instructions:
@@ -445,7 +515,7 @@ class ResponsesCreateRequest(BaseModel):
         for item in input_items:
             messages.extend(self._convert_input_item(item))
 
-        return messages
+        return normalize_input_messages(messages, ensure_user=ensure_user)
 
     def to_chat_ml_query(self, messages: Optional[List[BaseMessage]] = None) -> ChatMLQuery:
         if messages is None:

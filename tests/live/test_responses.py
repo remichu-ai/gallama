@@ -43,9 +43,11 @@ from helpers.dummy_mcp_server import (
 
 MODEL = os.getenv("TEST_MODEL", "gpt-4o")
 LOG_FILE = os.getenv("TEST_LOG_FILE", str(SCRIPT_DIR / "test_responses_api.json"))
+_SHARED_SYSTEM_PROMPT = (SCRIPT_DIR / "shared_system_prompt.txt").read_text(encoding="utf-8").strip()
+
 COMMON_INSTRUCTIONS = os.getenv(
     "TEST_SYSTEM_PROMPT",
-    "You are a helpful assistant. Follow the user's instructions exactly.",
+    _SHARED_SYSTEM_PROMPT,
 )
 PIRATE_INSTRUCTIONS = (
     f"{COMMON_INSTRUCTIONS}\n\nYou are a pirate. Every answer must contain 'Arrr'."

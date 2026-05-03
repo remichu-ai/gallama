@@ -1052,6 +1052,21 @@ class ModelSpec(BaseModel):
         child_env.setdefault('CUDA_DEVICE_ORDER', 'PCI_BUS_ID')
         return child_env
 
+    def build_child_model_spec(self) -> 'ModelSpec':
+        child_model_spec = self.model_copy(deep=True)
+
+        if isinstance(child_model_spec.gpus, list):
+            child_model_spec.gpus = [
+                float(vram) for vram in child_model_spec.gpus if vram > 0
+            ]
+
+        if isinstance(child_model_spec.draft_gpus, list):
+            child_model_spec.draft_gpus = [
+                float(vram) for vram in child_model_spec.draft_gpus if vram > 0
+            ]
+
+        return child_model_spec
+
     @staticmethod
     def deep_merge_dicts(dict1: Dict[str, Any], dict2: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1162,7 +1177,8 @@ class AnthropicToolUseContent(BaseModel):
 class AnthropicToolResultContent(BaseModel):
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str
-    content: Union[str, List[AnthropicTextContent]]
+    is_error: bool = False
+    content: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
 
 
 class AnthropicMCPToolUseContent(BaseModel):
@@ -1177,7 +1193,7 @@ class AnthropicMCPToolResultContent(BaseModel):
     type: Literal["mcp_tool_result"] = "mcp_tool_result"
     tool_use_id: str
     is_error: bool = False
-    content: Union[str, List[AnthropicTextContent]]
+    content: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
 
 
 class AnthropicToolInputSchema(BaseModel):
@@ -1400,6 +1416,40 @@ class AnthropicMessagesRequest(BaseModel):
         import json
         chat_messages = []
 
+        def _anthropic_blocks_to_multimodal_content(
+            blocks: Union[str, List[Union[AnthropicTextContent, AnthropicImageContent]]]
+        ) -> Union[str, List[Union[MultiModalTextContent, MultiModalImageContent]]]:
+            if isinstance(blocks, str):
+                return blocks
+
+            multimodal_content: List[Union[MultiModalTextContent, MultiModalImageContent]] = []
+            text_parts: List[str] = []
+            has_non_text_content = False
+
+            for block in blocks:
+                if getattr(block, "type", "") == "text":
+                    text_parts.append(block.text)
+                    multimodal_content.append(
+                        MultiModalTextContent(type="text", text=block.text)
+                    )
+                elif getattr(block, "type", "") == "image":
+                    has_non_text_content = True
+
+                    if getattr(block.source, "type", None) == "base64":
+                        data_uri = f"data:{block.source.media_type};base64,{block.source.data}"
+                        img_detail = MultiModalImageContent.ImageDetail(url=data_uri)
+                    else:
+                        img_detail = MultiModalImageContent.ImageDetail(url=block.source.url)
+
+                    multimodal_content.append(
+                        MultiModalImageContent(type="image_url", image_url=img_detail)
+                    )
+
+            if has_non_text_content:
+                return multimodal_content
+
+            return "\n".join(text_parts)
+
         # 1. Translate Top-Level System Prompt to System Message
         if self.system:
             sys_content = ""
@@ -1466,29 +1516,17 @@ class AnthropicMessagesRequest(BaseModel):
                     elif block.type == "tool_result":
                         # Anthropic passes tool results inside a "user" message.
                         # OpenAI requires these to be separate "tool" role messages.
-                        content_str = ""
-                        if isinstance(block.content, str):
-                            content_str = block.content
-                        elif isinstance(block.content, list):
-                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
-
                         tool_results.append(BaseMessage(
                             role="tool",
                             tool_call_id=block.tool_use_id,
-                            content=content_str
+                            content=_anthropic_blocks_to_multimodal_content(block.content)
                         ))
 
                     elif block.type == "mcp_tool_result":
-                        content_str = ""
-                        if isinstance(block.content, str):
-                            content_str = block.content
-                        elif isinstance(block.content, list):
-                            content_str = "\n".join([b.text for b in block.content if getattr(b, "type", "") == "text"])
-
                         tool_results.append(BaseMessage(
                             role="tool",
                             tool_call_id=block.tool_use_id,
-                            content=content_str
+                            content=_anthropic_blocks_to_multimodal_content(block.content)
                         ))
 
                 # Handling the assembled blocks
@@ -1627,3 +1665,11 @@ class AnthropicMessagesRequest(BaseModel):
             configs.append(server.to_mcp_server_config(allowed_tools=toolset.get_allowed_tool_names()))
 
         return configs
+
+
+class AnthropicCountTokensRequest(AnthropicMessagesRequest):
+    max_tokens: Optional[int] = None
+
+
+class AnthropicCountTokensResponse(BaseModel):
+    input_tokens: int

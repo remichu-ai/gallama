@@ -602,12 +602,12 @@ async def chat_completion_response(
 
     non_stream_kwargs = {
         "parsed_blocks": parsed_blocks,
-        "input_tokens": gen_stats.input_tokens_count,
-        "output_tokens": gen_stats.output_tokens_count,
-        "total_tokens": gen_stats.total_tokens_count,
+        "input_tokens": gen_stats.input_tokens_count if gen_stats else 0,
+        "output_tokens": gen_stats.output_tokens_count if gen_stats else 0,
+        "total_tokens": gen_stats.total_tokens_count if gen_stats else 0,
         "finish_reason": finish_reason,
     }
-    if provider == "anthropic":
+    if provider == "anthropic" and gen_stats:
         non_stream_kwargs["stop_sequence"] = gen_stats.stop_sequence
 
     response_obj = formatter.non_stream_response(**non_stream_kwargs)

@@ -177,6 +177,9 @@ class PromptEngineCustom:
     def _format_tool_result(self, msg: BaseMessage) -> str:
         content = msg.content if msg.content else ""
 
+        if isinstance(content, list):
+            content = self.convert_multimodal_content_list_to_string(content)
+
         try:
             content = self._get_role_token(role="tool_result",token_type="start") + f"Result of tool call reference id {msg.tool_call_id}:\n" + str(json.dumps(json.loads(content), indent=2)) + "\n---\n\n"
         except:

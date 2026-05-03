@@ -67,10 +67,60 @@ if "zmq" not in sys.modules:
 
 if "fastapi" not in sys.modules:
     fastapi_stub = types.ModuleType("fastapi")
+    class _APIRouter:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def _decorator(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        def post(self, *args, **kwargs):
+            return self._decorator(*args, **kwargs)
+
+        def get(self, *args, **kwargs):
+            return self._decorator(*args, **kwargs)
+
+        def delete(self, *args, **kwargs):
+            return self._decorator(*args, **kwargs)
+
+    class _Request:
+        pass
+
+    class _HTTPException(Exception):
+        def __init__(self, status_code=None, detail=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fastapi_stub.APIRouter = _APIRouter
+    fastapi_stub.Request = _Request
+    fastapi_stub.HTTPException = _HTTPException
     fastapi_stub.Query = lambda default=None, **kwargs: default
     sys.modules["fastapi"] = fastapi_stub
 
-from gallama.data_classes.data_class import AnthropicHostedTool, AnthropicMessagesRequest
+if "sse_starlette.sse" not in sys.modules:
+    sse_starlette_stub = types.ModuleType("sse_starlette")
+    sse_module_stub = types.ModuleType("sse_starlette.sse")
+
+    class _EventSourceResponse:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    sse_starlette_stub.EventSourceResponse = _EventSourceResponse
+    sse_module_stub.EventSourceResponse = _EventSourceResponse
+    sys.modules["sse_starlette"] = sse_starlette_stub
+    sys.modules["sse_starlette.sse"] = sse_module_stub
+
+from gallama.data_classes.data_class import (
+    AnthropicCountTokensRequest,
+    AnthropicHostedTool,
+    AnthropicMessagesRequest,
+    MultiModalImageContent,
+    MultiModalTextContent,
+)
 
 
 def test_anthropic_messages_request_accepts_hosted_tools_and_skips_local_conversion():
@@ -125,3 +175,78 @@ def test_anthropic_messages_request_preserves_reasoning_overrides_from_extra_bod
     assert query.reasoning_effort is None
     assert query.thinking_token_budget == 0
     assert query.use_thinking == "Skip"
+
+
+def test_anthropic_count_tokens_request_allows_missing_max_tokens():
+    request = AnthropicCountTokensRequest.model_validate(
+        {
+            "model": "minimax",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Count tokens for this prompt without requiring max_tokens.",
+                }
+            ],
+        }
+    )
+
+    query = request.get_ChatMLQuery()
+
+    assert request.max_tokens is None
+    assert query.max_tokens == 16000
+
+
+def test_anthropic_tool_result_accepts_image_blocks_and_preserves_multimodal_content():
+    request = AnthropicMessagesRequest.model_validate(
+        {
+            "model": "minimax",
+            "max_tokens": 128,
+            "messages": [
+                {"role": "user", "content": "What is in this screenshot?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "call_123",
+                            "name": "inspect_image",
+                            "input": {"mode": "brief"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_123",
+                            "content": [
+                                {"type": "text", "text": "Screenshot returned from tool."},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnS6j0AAAAASUVORK5CYII=",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    query = request.get_ChatMLQuery()
+
+    tool_messages = [msg for msg in query.messages if msg.role == "tool"]
+    assert len(tool_messages) == 1
+
+    tool_message = tool_messages[0]
+    assert tool_message.tool_call_id == "call_123"
+    assert isinstance(tool_message.content, list)
+    assert isinstance(tool_message.content[0], MultiModalTextContent)
+    assert isinstance(tool_message.content[1], MultiModalImageContent)
+    assert tool_message.content[0].text == "Screenshot returned from tool."
+    assert tool_message.content[1].image_url.url.startswith("data:image/png;base64,")

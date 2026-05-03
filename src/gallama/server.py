@@ -466,6 +466,7 @@ async def get_instance_modalities(port, timeout=5.0) -> List[str]:
 
 async def run_model(model_spec: ModelSpec):
     server_manager = get_server_manager()
+    port = None
 
     try:
         model_config = config_manager.get_effective_model_config(model_spec.model_name) or {}
@@ -496,13 +497,14 @@ async def run_model(model_spec: ModelSpec):
             )
 
         env = model_spec.build_child_env(os.environ)
+        child_model_spec = model_spec.build_child_model_spec()
         server_logger.info("CUDA_VISIBLE_DEVICES: {}".format(env['CUDA_VISIBLE_DEVICES']), extra=basic_log_extra())
         server_logger.info("Child env overrides: {}".format(model_spec.env), extra=basic_log_extra())
-        server_logger.info(f"Resolved model spec: {model_spec}", extra=basic_log_extra())
+        server_logger.info(f"Resolved model spec: {child_model_spec}", extra=basic_log_extra())
 
         try:
             # Serialize the ModelSpec to JSON and encode to base64
-            model_json = model_spec.model_dump_json()
+            model_json = child_model_spec.model_dump_json()
             model_b64 = base64.b64encode(model_json.encode('utf-8')).decode('utf-8')
 
 
@@ -588,11 +590,14 @@ async def run_model(model_spec: ModelSpec):
         return
 
     except Exception as e:
-        server_logger.exception(f"Error running model {model_spec.model_name} instance on port {port}: {str(e)}")
-        await stop_model_instance(model_spec.model_name, port)
+        location = f" on port {port}" if port is not None else ""
+        server_logger.exception(f"Error running model {model_spec.model_name} instance{location}: {str(e)}")
+        if port is not None:
+            await stop_model_instance(model_spec.model_name, port)
     finally:
         await cleanup_after_model_load(model_spec.model_name)
-        server_logger.info(f"Exiting run_model for {model_spec.model_name} on port {port}", extra=basic_log_extra())
+        location = f" on port {port}" if port is not None else ""
+        server_logger.info(f"Exiting run_model for {model_spec.model_name}{location}", extra=basic_log_extra())
 
 
 async def cleanup_after_model_load(model: str):

@@ -383,6 +383,35 @@ def test_ministral3_stream_parser_supports_thinking_and_tool_calls():
     assert _arguments(parsed_tools[1]) == {"city": "Tokyo"}
 
 
+def test_chat_completion_response_handles_missing_generation_stats():
+    async def _run():
+        gen_queue = GenQueueDynamic()
+        gen_queue.put_nowait(GenText(content="partial response"))
+        gen_queue.put_nowait(GenEnd())
+
+        response = await chat_completion_response(
+            query=ChatMLQuery.model_validate(
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "Say it."}],
+                }
+            ),
+            gen_queue=gen_queue,
+            model_name="test-model",
+            request=None,
+            provider="openai",
+            tag_definitions=list(gemma4.values()),
+        )
+
+        assert response.choices[0].message.content == "partial response"
+        assert response.choices[0].finish_reason == "stop"
+        assert response.usage.prompt_tokens == 0
+        assert response.usage.completion_tokens == 0
+        assert response.usage.total_tokens == 0
+
+    asyncio.run(_run())
+
+
 def test_chat_completion_response_assigns_sequential_tool_call_indexes():
     async def _run():
         gen_queue = GenQueueDynamic()

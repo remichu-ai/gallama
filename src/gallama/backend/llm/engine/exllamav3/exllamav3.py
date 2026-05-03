@@ -123,6 +123,22 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
     return normalized
 
 
+def _align_cache_size(cache_size: int | None, max_seq_len: int) -> int:
+    base_size = cache_size or max_seq_len
+    return ((max(base_size, max_seq_len) + 255) // 256) * 256
+
+
+def _apply_dflash_generator_defaults(generator_kwargs: Dict, draft_model) -> Dict:
+    normalized = dict(generator_kwargs)
+    if (
+        draft_model is not None
+        and draft_model.caps.get("dflash_draft", False)
+        and normalized.get("num_draft_tokens") is None
+    ):
+        normalized["num_draft_tokens"] = 15
+    return normalized
+
+
 def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
     if num_devices <= 0:
         return []
@@ -182,6 +198,7 @@ def _resolve_vision_device(vision_device, num_devices: int):
 
     return torch.device(f"cuda:{vision_device}")
 
+
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
@@ -209,30 +226,47 @@ class ModelExllamaV3(ModelInterface):
             backend_extra_args=self.backend_extra_args,
         )
 
-        # # load draft model
-        # if self.draft_model_id:
-        #     # tokenizer and processor already set above
-        #     self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
-        #         model_id=self.draft_model_id,
-        #         backend=self.backend,
-        #         max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
-        #         cache_size=self.draft_cache_size,
-        #         cache_quant=self.draft_cache_quant,
-        #         gpus=self.draft_gpus,
-        #         reserve_vram=self.reserve_vram,
-        #     )
+        # load draft model
+        if self.draft_model_id:
+            # tokenizer and processor already set above
+            self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
+                model_id=self.draft_model_id,
+                backend=self.backend,
+                max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
+                cache_size=cache.max_num_tokens,
+                cache_quant=self.draft_cache_quant,
+                gpus=self.draft_gpus,
+                reserve_vram=self.reserve_vram,
+                tensor_parallel=False,
+                backend_extra_args=self.backend_extra_args,
+                load_tokenizer=False,
+                load_processor=False,
+            )
 
         self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)
 
         return model, tokenizer, cache, processor
 
-    def load_model_exllama(self, model_id, backend, cache_size, cache_quant, gpus, reserve_vram, max_seq_len=None, tensor_parallel=False, backend_extra_args=None):
+    def load_model_exllama(
+        self,
+        model_id,
+        backend,
+        cache_size,
+        cache_quant,
+        gpus,
+        reserve_vram,
+        max_seq_len=None,
+        tensor_parallel=False,
+        backend_extra_args=None,
+        load_tokenizer=True,
+        load_processor=True,
+    ):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
         config = Config.from_directory(model_id)
         model = Model.from_config(config)
-        tokenizer = Tokenizer.from_config(config)
+        tokenizer = Tokenizer.from_config(config) if load_tokenizer else None
         processor = None    # placeholder for visual processing tower
 
         if tensor_parallel and not model.caps.get("supports_tp", False):
@@ -258,12 +292,8 @@ class ModelExllamaV3(ModelInterface):
             "Q8": {"k_bits": 8, "v_bits": 8},
         }
 
-        # cache size needed to minimally max_seq_len size
-        # Use provided cache_size or default to max_seq_len
-        base_size = cache_size or self.max_seq_len
-
         # Align to 256, but ensure it is at least max_seq_len
-        cache_size_to_use = (max(base_size, self.max_seq_len) // 256) * 256
+        cache_size_to_use = _align_cache_size(cache_size, self.max_seq_len)
 
         # get the cache quantization to use
         cache_quant_to_use = cache_quant_dict.get(cache_quant, None)
@@ -319,6 +349,9 @@ class ModelExllamaV3(ModelInterface):
         # load vision processor if there is
         # if there is error, assume that the model doesnt have vision
         processor = None
+        if not load_processor:
+            return model, tokenizer, cache, processor
+
         try:
             processor = Model.from_config(config, component = "vision")
             vision_device = _resolve_vision_device(
@@ -429,18 +462,65 @@ class ModelExllamaV3(ModelInterface):
         """
 
         generator_kwargs = _normalize_generator_kwargs(self.backend_extra_args)
+        generator_kwargs = _apply_dflash_generator_defaults(generator_kwargs, self.draft_model)
 
         generator = AsyncGenerator(
             model=self.model,
             cache=self.cache,
             tokenizer=self.tokenizer,
+            draft_model=self.draft_model,
+            draft_cache=self.draft_cache,
             **generator_kwargs,
         )
+
+        if self.draft_model is not None:
+            mode = "dflash" if generator.generator.dflash_draft else "flash"
+            logger.info(f"ExLlamaV3 speculative draft mode: {mode}", extra=basic_log_extra())
 
         return self.ExllamaV3Pipeline(
             cache=self.cache,
             generator=generator,
         )
+
+    async def _ensure_pipeline_ready(self):
+        """Create or replace the ExLlamaV3 async generator if its worker died."""
+        if self.pipeline is None:
+            self.pipeline = await self._get_pipeline_async()
+            return
+
+        iteration_task = getattr(self.pipeline.generator, "iteration_task", None)
+        if iteration_task is not None and iteration_task.done():
+            exc = None
+            if not iteration_task.cancelled():
+                try:
+                    exc = iteration_task.exception()
+                except Exception:
+                    exc = None
+            if exc:
+                logger.error(f"ExLlamaV3 async generator stopped unexpectedly: {format_exception_summary(exc)}")
+            else:
+                logger.warning("ExLlamaV3 async generator is not running; restarting it")
+            self.pipeline = await self._get_pipeline_async()
+
+    async def _cancel_job_safely(self, job):
+        if not job:
+            return
+        try:
+            await job.cancel()
+        except AssertionError:
+            logger.debug("ExLlamaV3 job was already removed from async generator")
+        except Exception as e:
+            logger.debug(f"Error cancelling ExLlamaV3 job: {format_exception_summary(e)}")
+
+    @staticmethod
+    def _stop_event_is_set(stop_event: asyncio.Event | None) -> bool:
+        return bool(stop_event and stop_event.is_set())
+
+    @staticmethod
+    def _put_gen_end(gen_queue_list):
+        for g_queue in gen_queue_list:
+            if g_queue.include_GenEnd:
+                g_queue.put_nowait(GenEnd())
 
     @staticmethod
     def _get_exllama_gen_settings(
@@ -667,9 +747,8 @@ class ModelExllamaV3(ModelInterface):
 
         try:
             top_k = kwargs.get("top_k")
-            # Ensure that the generator is initialized
-            if self.pipeline is None:
-                self.pipeline = await self._get_pipeline_async()
+            # Ensure that the generator is initialized and its worker is alive.
+            await self._ensure_pipeline_ready()
 
             # Convert gen_queue to List[GenQueueDynamic] format to standardize downstream handling
             gen_queue_list = []
@@ -701,6 +780,13 @@ class ModelExllamaV3(ModelInterface):
 
             # Vision support - get image embedding and construct the prompt with placeholder tokens for images
             prompt, image_embeddings = self._process_vision_inputs(prompt, vision_token, messages, video)
+            if image_embeddings:
+                inner_generator = self.pipeline.generator.generator
+                if inner_generator.draft_model is not None and not inner_generator.dflash_draft:
+                    raise ValueError(
+                        "ExLlamaV3 normal draft flash does not support multimodal embeddings; "
+                        "disable draft or use a DFlash draft model."
+                    )
 
             # Create filters for format enforcement
             # for now the filter is only for prefix string
@@ -808,8 +894,8 @@ class ModelExllamaV3(ModelInterface):
 
                 # Start the generation
                 async for result in job:
-                    if eos or stop_event.is_set():
-                        await job.cancel()
+                    if eos or self._stop_event_is_set(stop_event):
+                        await self._cancel_job_safely(job)
                         break
 
                     chunk_text = result.get("text", "")
@@ -872,7 +958,13 @@ class ModelExllamaV3(ModelInterface):
                         return full_completion
 
             except Exception as e:
-                logger.error(e)
+                logger.error(e, exc_info=True)
+                if stop_event:
+                    stop_event.set()
+                await self._cancel_job_safely(job)
+                self.pipeline = None
+                self._put_gen_end(gen_queue_list)
+                raise
             finally:
                 if disconnect_check_task:
                     disconnect_check_task.cancel()

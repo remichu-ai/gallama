@@ -144,6 +144,39 @@ def test_build_child_env_maps_explicit_gpu_split_against_visible_device_order():
     assert "REMOVE_ME" not in child_env
 
 
+def test_build_child_model_spec_compacts_explicit_gpu_split_for_visible_devices():
+    model_spec = ModelSpec.from_dict(
+        {
+            "model_name": "vision-model",
+            "model_id": "/models/vision",
+            "backend": "exllamav3",
+            "gpus": [0.0, 90.0],
+        }
+    )
+
+    child_model_spec = model_spec.build_child_model_spec()
+
+    assert model_spec.gpus == [0.0, 90.0]
+    assert child_model_spec.gpus == [90.0]
+
+
+def test_build_child_model_spec_compacts_draft_gpu_split_for_visible_devices():
+    model_spec = ModelSpec.from_dict(
+        {
+            "model_name": "vision-model",
+            "model_id": "/models/vision",
+            "backend": "exllamav3",
+            "gpus": [12.0, 0.0, 10.0, 0.0],
+            "draft_gpus": [0.0, 8.0, 0.0, 6.0],
+        }
+    )
+
+    child_model_spec = model_spec.build_child_model_spec()
+
+    assert child_model_spec.gpus == [12.0, 10.0]
+    assert child_model_spec.draft_gpus == [8.0, 6.0]
+
+
 def test_build_child_env_preserves_visible_device_order_for_auto_gpu_mode():
     model_spec = ModelSpec.from_dict(
         {

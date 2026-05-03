@@ -72,6 +72,8 @@ async def read_root():
 
 
 @router.options("/v1/chat/completions")
+@router.options("/v1/messages")
+@router.options("/v1/messages/count_tokens")
 @router.options("/v1/responses")
 @router.options("/v1/conversations")
 @router.options("/v1/conversations/{conversation_id}")

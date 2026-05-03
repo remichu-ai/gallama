@@ -28,6 +28,8 @@ def _load_generator_helpers():
         and node.name in {
             "_is_truthy",
             "_normalize_generator_kwargs",
+            "_align_cache_size",
+            "_apply_dflash_generator_defaults",
             "_normalize_reserve_vram",
             "_resolve_load_kwargs",
         }
@@ -37,12 +39,20 @@ def _load_generator_helpers():
     exec(compile(helper_module, MODULE_PATH, "exec"), namespace)
     return (
         namespace["_normalize_generator_kwargs"],
+        namespace["_align_cache_size"],
+        namespace["_apply_dflash_generator_defaults"],
         namespace["_normalize_reserve_vram"],
         namespace["_resolve_load_kwargs"],
     )
 
 
-normalize_generator_kwargs, normalize_reserve_vram, resolve_load_kwargs = _load_generator_helpers()
+(
+    normalize_generator_kwargs,
+    align_cache_size,
+    apply_dflash_generator_defaults,
+    normalize_reserve_vram,
+    resolve_load_kwargs,
+) = _load_generator_helpers()
 
 
 def test_normalize_generator_kwargs_defaults_prompt_chunk_size_to_4096():
@@ -55,6 +65,25 @@ def test_normalize_generator_kwargs_preserves_explicit_prompt_chunk_size():
 
     assert normalized["max_chunk_size"] == 2048
     assert normalized["max_batch_size"] == 32
+
+
+def test_align_cache_size_rounds_up_to_page_size():
+    assert align_cache_size(4097, 4097) == 4352
+    assert align_cache_size(4096, 4097) == 4352
+    assert align_cache_size(None, 4097) == 4352
+
+
+def test_apply_dflash_generator_defaults_sets_15_for_dflash_only():
+    class DraftModel:
+        caps = {"dflash_draft": True}
+
+    class FlashDraftModel:
+        caps = {}
+
+    assert apply_dflash_generator_defaults({}, DraftModel())["num_draft_tokens"] == 15
+    assert apply_dflash_generator_defaults({"num_draft_tokens": None}, DraftModel())["num_draft_tokens"] == 15
+    assert apply_dflash_generator_defaults({"num_draft_tokens": 7}, DraftModel())["num_draft_tokens"] == 7
+    assert "num_draft_tokens" not in apply_dflash_generator_defaults({}, FlashDraftModel())
 
 
 def test_normalize_reserve_vram_defaults_to_zero_point_eight_gb_for_gpu_zero():
