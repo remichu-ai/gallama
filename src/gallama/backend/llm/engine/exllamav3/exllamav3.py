@@ -224,8 +224,6 @@ def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices:
         return load_kwargs
 
     if isinstance(gpus, str) and gpus == "auto":
-        if reserve_vram is not None:
-            load_kwargs["reserve_per_device"] = _normalize_reserve_vram(reserve_vram, num_devices)
         return load_kwargs
 
     raise ValueError("Device map should be either 'auto' or a GPU split list")
@@ -307,7 +305,9 @@ class ModelExllamaV3(ModelInterface):
                     load_tokenizer=False,
                     load_processor=False,
                 )
-            except RuntimeError as exc:
+            except RuntimeError:
+                _reset_cuda_memory_fraction()
+                torch.cuda.empty_cache()
                 raise
 
         self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)

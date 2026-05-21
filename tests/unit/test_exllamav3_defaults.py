@@ -134,11 +134,11 @@ def test_auto_use_vram_for_existing_allocations_uses_total_minus_reserve():
     assert auto_use_vram_for_existing_allocations([1.0, -1.0], 2) == [99.0, 0.0]
 
 
-def test_resolve_load_kwargs_uses_reserve_per_device_for_auto_mode():
+def test_resolve_load_kwargs_omits_reserve_per_device_for_auto_mode():
     resolved = resolve_load_kwargs("auto", 0.75, False, 2)
 
-    assert resolved["reserve_per_device"] == [0.75, 0.75]
     assert resolved["tensor_p"] is False
+    assert "reserve_per_device" not in resolved
     assert "use_per_device" not in resolved
 
 
