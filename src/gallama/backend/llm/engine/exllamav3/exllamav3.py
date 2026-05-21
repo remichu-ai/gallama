@@ -224,7 +224,8 @@ def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices:
         return load_kwargs
 
     if isinstance(gpus, str) and gpus == "auto":
-        load_kwargs["reserve_per_device"] = _normalize_reserve_vram(reserve_vram, num_devices)
+        if reserve_vram is not None:
+            load_kwargs["reserve_per_device"] = _normalize_reserve_vram(reserve_vram, num_devices)
         return load_kwargs
 
     raise ValueError("Device map should be either 'auto' or a GPU split list")
