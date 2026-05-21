@@ -26,6 +26,8 @@ class BaseStreamParser(ABC):
 
 class DummyParser(BaseStreamParser):
     def __init__(self, *args, **kwargs) -> None:
+        self.generation_should_stop = False
+        self.stop_reason = None
         self.default_tag_type = TagDefinition(
             tag_type="text",
             api_tag="content",

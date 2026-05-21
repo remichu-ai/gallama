@@ -7,3 +7,4 @@ from .minimax import minimax
 from .glm4 import glm4
 from .gemma4 import gemma4
 from .ministral3 import ministral3
+from .mimo import mimo

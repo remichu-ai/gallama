@@ -82,9 +82,8 @@ async def root_head():
 
 def _log_request_received(request: Request) -> None:
     request_id = getattr(request.state, "request_id", "-")
-    server_logger.info(
+    server_logger.debug(
         f"REQ {request_id} {request.method} {request.url.path}",
-        extra=basic_log_extra(),
     )
 
 

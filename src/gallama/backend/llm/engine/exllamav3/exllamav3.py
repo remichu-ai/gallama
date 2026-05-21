@@ -139,6 +139,30 @@ def _apply_dflash_generator_defaults(generator_kwargs: Dict, draft_model) -> Dic
     return normalized
 
 
+def _is_insufficient_vram_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return (
+        "Insufficient VRAM in split for model and cache" in message
+        or "CUDA out of memory" in message
+        or "HIP out of memory" in message
+    )
+
+
+def _reset_cuda_memory_fraction():
+    """Undo ExLlamaV3 autosplit's temporary per-process memory caps.
+
+    ExLlamaV3 sets torch.cuda.set_per_process_memory_fraction while loading.
+    If autosplit raises before its cleanup path, PyTorch keeps that cap for the
+    process and later tiny allocations can fail despite many GiB being free.
+    """
+
+    for device_idx in range(torch.cuda.device_count()):
+        try:
+            torch.cuda.set_per_process_memory_fraction(1.0, device=device_idx)
+        except Exception as exc:
+            logger.debug(f"Failed to reset CUDA memory fraction for device {device_idx}: {exc}")
+
+
 def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
     if num_devices <= 0:
         return []
@@ -159,6 +183,29 @@ def _normalize_reserve_vram(raw_reserve_vram, num_devices: int) -> List[float]:
         return normalized[:num_devices]
 
     raise ValueError("reserve_vram must be a float or list[float]")
+
+
+def _auto_use_vram_for_existing_allocations(raw_reserve_vram, num_devices: int) -> List[float]:
+    """Return per-device use limits that preserve auto reserve semantics after a model is already loaded.
+
+    ExLlamaV3's reserve_per_device mode calls torch.cuda.set_per_process_memory_fraction
+    based on currently free VRAM. That works for the first model in a fresh process, but
+    if we load a draft model after the target model, the process already owns tens of GiB
+    and reserve mode can set a cap below current PyTorch allocations. use_per_device is a
+    total process cap, so total_vram - reserve_vram gives the intended remaining headroom.
+    """
+
+    reserves = _normalize_reserve_vram(raw_reserve_vram, num_devices)
+    use_per_device = []
+    gib = 1024 ** 3
+    for device_idx in range(num_devices):
+        reserve = reserves[device_idx] if device_idx < len(reserves) else 0.0
+        if reserve < 0:
+            use_per_device.append(0.0)
+            continue
+        total_gb = torch.cuda.get_device_properties(device_idx).total_memory / gib
+        use_per_device.append(max(0.0, total_gb - reserve))
+    return use_per_device
 
 
 def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices: int) -> Dict:
@@ -232,19 +279,35 @@ class ModelExllamaV3(ModelInterface):
         # load draft model
         if self.draft_model_id:
             # tokenizer and processor already set above
-            self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
-                model_id=self.draft_model_id,
-                backend=self.backend,
-                max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
-                cache_size=cache.max_num_tokens,
-                cache_quant=self.draft_cache_quant,
-                gpus=self.draft_gpus,
-                reserve_vram=self.reserve_vram,
-                tensor_parallel=False,
-                backend_extra_args=self.backend_extra_args,
-                load_tokenizer=False,
-                load_processor=False,
-            )
+            draft_gpus = self.draft_gpus
+            draft_reserve_vram = self.reserve_vram
+            if draft_gpus == "auto":
+                draft_gpus = _auto_use_vram_for_existing_allocations(
+                    raw_reserve_vram=self.reserve_vram,
+                    num_devices=torch.cuda.device_count(),
+                )
+                draft_reserve_vram = None
+                logger.info(
+                    "Resolved draft_gpus auto to post-target-load use limits: " + str(draft_gpus),
+                    extra=basic_log_extra(),
+                )
+
+            try:
+                self.draft_model, _, self.draft_cache, _ = self.load_model_exllama(
+                    model_id=self.draft_model_id,
+                    backend=self.backend,
+                    max_seq_len=self.max_seq_len,  # draft model max_seq_len must be same as main model
+                    cache_size=cache.max_num_tokens,
+                    cache_quant=self.draft_cache_quant,
+                    gpus=draft_gpus,
+                    reserve_vram=draft_reserve_vram,
+                    tensor_parallel=False,
+                    backend_extra_args=self.backend_extra_args,
+                    load_tokenizer=False,
+                    load_processor=False,
+                )
+            except RuntimeError as exc:
+                raise
 
         self.eos_token_ids = self.generate_eos_tokens_id(tokenizer)
 
@@ -345,30 +408,25 @@ class ModelExllamaV3(ModelInterface):
             logger.info("Tensor parallel backend: " + str(tp_backend), extra=basic_log_extra())
             load_kwargs["tp_backend"] = tp_backend
 
-        model.load(
-            **load_kwargs,
-        )
-
-        # load vision processor if there is
-        # if there is error, assume that the model doesnt have vision
-        processor = None
-        if not load_processor:
-            return model, tokenizer, cache, processor
+        # Load the vision tower before loading the text model/cache. ExLlamaV3's
+        # upstream multimodal example does this so the subsequent text-model
+        # autosplit sees the VRAM already occupied by vision weights. Loading
+        # vision after a large text cache can fail even when the combined model
+        # would fit with a better split.
+        if load_processor:
+            processor = self._load_vision_processor(config, backend_extra_args)
 
         try:
-            processor = Model.from_config(config, component = "vision")
-            vision_device = _resolve_vision_device(
-                (backend_extra_args or {}).get("vision_device"),
-                torch.cuda.device_count(),
+            model.load(
+                **load_kwargs,
             )
-            if vision_device is not None:
-                logger.info("Vision device: " + str(vision_device), extra=basic_log_extra())
-                processor.load(device=vision_device)
-            else:
-                processor.load()
-        except AssertionError:
-            logger.info("No Vision Tower", extra=basic_log_extra())
-            processor = None
+        except RuntimeError:
+            try:
+                model.unload()
+            finally:
+                _reset_cuda_memory_fraction()
+                torch.cuda.empty_cache()
+            raise
 
         # if processor is not None, meaning at least image is supported
         if processor:
@@ -384,6 +442,30 @@ class ModelExllamaV3(ModelInterface):
         # logger.info(f"Supported Modalities: {self.modalities}")
 
         return model, tokenizer, cache, processor
+
+
+    @staticmethod
+    def _load_vision_processor(config, backend_extra_args=None):
+        """Load optional ExLlamaV3 vision component before the text model."""
+
+        try:
+            processor = Model.from_config(config, component="vision")
+        except AssertionError:
+            logger.info("No Vision Tower", extra=basic_log_extra())
+            return None
+
+        vision_device = _resolve_vision_device(
+            (backend_extra_args or {}).get("vision_device"),
+            torch.cuda.device_count(),
+        )
+        if vision_device is not None:
+            logger.info("Vision device: " + str(vision_device), extra=basic_log_extra())
+            processor.load(device=vision_device)
+        else:
+            logger.info("Loading Vision Tower", extra=basic_log_extra())
+            processor.load()
+
+        return processor
 
 
     @property

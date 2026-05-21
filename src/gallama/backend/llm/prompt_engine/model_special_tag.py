@@ -5,7 +5,8 @@ from .by_model import (
     minimax,
     glm4,
     gemma4,
-    ministral3
+    ministral3,
+    mimo
 )
 
 # the key here should match the model_type field from transformers.AutoConfig
@@ -30,6 +31,7 @@ MODEL_SPECIAL_TAG = {
     "ministral3": ministral3,
     "mistral3": ministral3,
     "mistral4": ministral3,
+    "mimo_v2": mimo,
     "step3p5": qwen35,
     "nemotron_h": qwen35,
 }
@@ -52,7 +54,8 @@ MODEL_VISION_TOKEN = {
     "qwen3_vl": "<|vision_start|><|image_pad|><|vision_end|>",
     "qwen3_vl_moe": "<|vision_start|><|image_pad|><|vision_end|>",
     "glm4v": "<|begin_of_image|><|image|><|end_of_image|>",
-    "glm4v_moe": "<|begin_of_image|><|image|><|end_of_image|>"
+    "glm4v_moe": "<|begin_of_image|><|image|><|end_of_image|>",
+    "mimo_v2": "<|vision_start|><|image_pad|><|vision_end|>",
 }
 
 _VISION_TOKEN_PATTERNS = (

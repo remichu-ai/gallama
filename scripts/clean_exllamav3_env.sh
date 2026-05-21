@@ -97,13 +97,13 @@ fi
 echo "Cleaning ExLlamaV3 state for conda env: $ENV_NAME"
 echo "Python: $PYTHON_BIN"
 
-if [[ "$KILL_PROCS" == "1" ]]; then
-  echo "Stopping Gallama/ExLlamaV3 build processes if present..."
-  run_shell 'pkill -f "gallama run" 2>/dev/null || true'
-  run_shell 'pkill -f "src/gallama/app.py" 2>/dev/null || true'
-  run_shell 'pkill -f "ninja.*exllamav3_ext" 2>/dev/null || true'
-  run_shell 'pkill -f "nvcc.*exllamav3" 2>/dev/null || true'
-fi
+#if [[ "$KILL_PROCS" == "1" ]]; then
+#  echo "Stopping Gallama/ExLlamaV3 build processes if present..."
+#  run_shell 'pkill -f "gallama run" 2>/dev/null || true'
+#  run_shell 'pkill -f "src/gallama/app.py" 2>/dev/null || true'
+#  run_shell 'pkill -f "ninja.*exllamav3_ext" 2>/dev/null || true'
+#  run_shell 'pkill -f "nvcc.*exllamav3" 2>/dev/null || true'
+#fi
 
 BUILD_DIR="$($PYTHON_BIN - <<'PY'
 from torch.utils.cpp_extension import _get_build_directory

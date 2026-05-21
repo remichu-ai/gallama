@@ -2,7 +2,7 @@ import json
 import asyncio
 
 from gallama.api_response.chat_response import chat_completion_response, chat_completion_response_stream
-from gallama.api_response.stream_parser_v2 import StreamParserByTag
+from gallama.api_response.stream_parser_v2 import DummyParser, StreamParserByTag
 from gallama.data_classes.data_class import ChatMLQuery, TagDefinition
 from gallama.data_classes.generation_data_class import GenEnd, GenQueueDynamic, GenText, GenerationStats
 from gallama.backend.llm.prompt_engine.by_model.default import tool_parser
@@ -10,6 +10,7 @@ from gallama.backend.llm.prompt_engine.by_model.gemma4 import gemma4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_parser, gpt_oss
 from gallama.backend.llm.prompt_engine.by_model.glm4 import glm4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.minimax import minimax_tool_parser
+from gallama.backend.llm.prompt_engine.by_model.mimo import mimo_tool_parser, mimo
 from gallama.backend.llm.prompt_engine.by_model.ministral3 import ministral3_tool_parser
 from gallama.backend.llm.prompt_engine.pe_transformers import PromptEngineTransformers
 from gallama.backend.llm.prompt_engine.by_model.qwen3 import qwen3_tool_parser
@@ -52,6 +53,7 @@ def test_model_special_tag_maps_exllamav3_scoped_aliases_to_expected_parsers():
     assert MODEL_SPECIAL_TAG["gemma4"] is gemma4
     assert MODEL_SPECIAL_TAG["ministral3"] is MODEL_SPECIAL_TAG["mistral3"]
     assert MODEL_SPECIAL_TAG["mistral4"] is MODEL_SPECIAL_TAG["mistral3"]
+    assert MODEL_SPECIAL_TAG["mimo_v2"] is mimo
 
 
 def test_default_tool_parser_supports_multiple_json_objects():
@@ -285,6 +287,13 @@ def test_stream_parser_allowed_next_tag_treats_strings_as_literal_only():
     assert parser.generation_should_stop is True
 
 
+def test_dummy_parser_exposes_generation_stop_state():
+    parser = DummyParser()
+
+    assert parser.generation_should_stop is False
+    assert parser.stop_reason is None
+
+
 def test_chat_completion_response_omits_gemma4_trailing_text_from_assistant_message():
     async def _run():
         gen_queue = GenQueueDynamic()
@@ -347,6 +356,47 @@ def test_minimax_tool_parser_supports_multiple_tool_calls():
     assert _tool_name(parsed[1]) == "get_weather"
     assert _arguments(parsed[0]) == {"city": "Seoul"}
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
+
+
+def test_mimo_tool_parser_supports_multiple_tool_calls():
+    tool_text = """
+    <tool_call>
+    <function=get_weather>
+    <parameter=city>Seoul</parameter>
+    <parameter=options>{"units": "metric", "alerts": true}</parameter>
+    </function>
+    </tool_call>
+    <tool_call>
+    <function=get_weather>
+    <parameter=city>Tokyo</parameter>
+    </function>
+    </tool_call>
+    """
+
+    parsed = mimo_tool_parser(tool_text)
+
+    assert len(parsed) == 2
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _tool_name(parsed[1]) == "get_weather"
+    assert _arguments(parsed[0]) == {"city": "Seoul", "options": {"units": "metric", "alerts": True}}
+    assert _arguments(parsed[1]) == {"city": "Tokyo"}
+
+
+def test_mimo_stream_parser_supports_thinking_and_tool_calls():
+    parser = StreamParserByTag(tag_definitions=list(MODEL_SPECIAL_TAG["mimo_v2"].values()))
+    generated = (
+        "<think>Need weather data</think>"
+        "<tool_call>\n<function=get_weather>\n<parameter=city>Seoul</parameter>\n</function>\n</tool_call>"
+    )
+
+    parsed_blocks = parser.parse_full_text(generated)
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["reasoning", "tool_calls"]
+    assert parsed_blocks[0][1] == "Need weather data"
+
+    parsed_tools = parsed_blocks[1][0].post_processor(parsed_blocks[1][1])
+    assert len(parsed_tools) == 1
+    assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
 
 
 def test_ministral3_tool_parser_supports_multiple_tool_calls():
@@ -590,6 +640,10 @@ def test_resolve_vision_token_prefers_explicit_model_mapping():
 
 def test_resolve_vision_token_knows_gemma4_placeholder():
     assert resolve_vision_token("gemma4", tokenizer=None) == "<|image|>"
+
+
+def test_resolve_vision_token_knows_mimo_v2_placeholder():
+    assert resolve_vision_token("mimo_v2", tokenizer=None) == "<|vision_start|><|image_pad|><|vision_end|>"
 
 
 def test_resolve_vision_token_infers_sequence_from_tokenizer_metadata():

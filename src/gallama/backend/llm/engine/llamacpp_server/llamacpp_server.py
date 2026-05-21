@@ -134,6 +134,7 @@ class ModelLlamaCppServer(ModelInterface):
             "host": self.server_host,
             "port": self.server_port,
             "ctx-size": self.max_seq_len,
+            "parallel": self.max_concurrent_requests,
         }
 
         optional_map = {

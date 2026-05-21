@@ -74,6 +74,39 @@ def test_llama_cpp_server_applies_default_multimodal_marker():
     assert resolved["multimodal_marker"] == "<__media__>"
 
 
+def test_llama_cpp_server_uses_model_concurrency_for_parallel_flag():
+    server = ModelLlamaCppServer.__new__(ModelLlamaCppServer)
+    server.start_up_cmd = "llama-server"
+    server.model_id = "/models/model.gguf"
+    server.server_host = "127.0.0.1"
+    server.server_port = 8080
+    server.max_seq_len = 4096
+    server.max_concurrent_requests = 1
+    server.backend_extra_args = {}
+    server.start_up_extra = None
+
+    cmd = server._build_startup_command()
+
+    assert "--parallel" in cmd
+    assert cmd[cmd.index("--parallel") + 1] == "1"
+
+
+def test_llama_cpp_server_parallel_backend_arg_overrides_model_concurrency():
+    server = ModelLlamaCppServer.__new__(ModelLlamaCppServer)
+    server.start_up_cmd = "llama-server"
+    server.model_id = "/models/model.gguf"
+    server.server_host = "127.0.0.1"
+    server.server_port = 8080
+    server.max_seq_len = 4096
+    server.max_concurrent_requests = 1
+    server.backend_extra_args = {"parallel": 3}
+    server.start_up_extra = None
+
+    cmd = server._build_startup_command()
+
+    assert cmd[cmd.index("--parallel") + 1] == "3"
+
+
 def test_ik_llama_preserves_explicit_multimodal_marker_override():
     resolved = ModelIKLlama.apply_backend_defaults({"multimodal_marker": "<custom>"})
 

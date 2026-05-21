@@ -12,7 +12,7 @@ from gallama.data_classes.data_class import (
     MultiModalImageHFContent,
     MultiModalAudioContent, TagDefinition
 )
-from gallama.logger.logger import logger
+from gallama.logger.logger import basic_log_extra, logger
 from pydantic import BaseModel
 from copy import deepcopy
 from gallama.utils.utils import parse_xml_to_dict
@@ -30,18 +30,18 @@ from ....api_response.stream_parser_v2 import StreamParserByTag
 
 class PromptEngineTransformers:
     def __init__(self, prompt_format: str| None = None, model_path: str = None):
-        logger.info("Use transformers tokenizer for prompt templating")
+        logger.info("Use transformers tokenizer for prompt templating", extra=basic_log_extra())
 
         assert model_path is not None
 
-        self._transformer_tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self._transformer_tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         # patch the template to standardized format
         self.patch_thinking_template()
 
         self._transformer_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         self.model_prompt = None
         self.model_type = self._transformer_config.model_type
-        logger.info(f"transformer model_type: {self.model_type}")
+        logger.info(f"transformer model_type: {self.model_type}", extra=basic_log_extra())
 
         self.special_tag = MODEL_SPECIAL_TAG.get(self.model_type, None)
         self._tag_definitions = list(self.special_tag.values()) if self.special_tag else None
