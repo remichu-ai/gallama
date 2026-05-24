@@ -80,7 +80,8 @@ def infer_model_modalities_fallback(
     Priority:
     1. Explicit config/default-model-list modalities.
     2. Known backend behavior.
-    3. Prompt-engine style vision inference from model metadata.
+    3. Cheap prompt-template/model-name heuristics.
+    4. Prompt-engine style vision inference from model metadata.
     """
     modalities: set[str] = set()
 
@@ -95,17 +96,20 @@ def infer_model_modalities_fallback(
     if backend == "llama_cpp_server":
         modalities.add("image")
 
+    if not modalities and _looks_like_vision_prompt_template(prompt_template):
+        modalities.add("image")
+
+    if not modalities and _looks_like_vision_model_name(model_name):
+        modalities.add("image")
+
+    if modalities:
+        return sorted(modalities)
+
     if model_id:
         loader = model_type_loader or _default_model_type_loader
         resolver = vision_token_resolver or _default_vision_token_resolver
         model_type = loader(model_id)
         if resolver(model_type):
             modalities.add("image")
-
-    if not modalities and _looks_like_vision_prompt_template(prompt_template):
-        modalities.add("image")
-
-    if not modalities and _looks_like_vision_model_name(model_name):
-        modalities.add("image")
 
     return sorted(modalities)

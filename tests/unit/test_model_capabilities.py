@@ -38,12 +38,27 @@ def test_infer_model_modalities_uses_prompt_engine_style_model_type_fallback():
     assert modalities == ["image"]
 
 
-def test_infer_model_modalities_uses_prompt_template_heuristic_last():
+def test_infer_model_modalities_uses_prompt_template_heuristic():
     modalities = infer_model_modalities_fallback(
         model_name="custom-vlm",
         model_id=None,
         backend="transformers",
         prompt_template="Qwen2-VL",
+    )
+
+    assert modalities == ["image"]
+
+
+def test_infer_model_modalities_uses_model_name_before_model_type_loader():
+    def fail_loader(model_id):
+        raise AssertionError("model type loader should not run for obvious vision model names")
+
+    modalities = infer_model_modalities_fallback(
+        model_name="Qwen3-VL-Embedding-2B",
+        model_id="/models/Qwen3-VL-Embedding-2B",
+        backend="embedding",
+        prompt_template=None,
+        model_type_loader=fail_loader,
     )
 
     assert modalities == ["image"]
