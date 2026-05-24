@@ -30,7 +30,6 @@ def _load_generator_helpers():
             "_is_truthy",
             "_normalize_generator_kwargs",
             "_align_cache_size",
-            "_apply_dflash_generator_defaults",
             "_is_insufficient_vram_error",
             "_normalize_reserve_vram",
             "_auto_use_vram_for_existing_allocations",
@@ -43,7 +42,6 @@ def _load_generator_helpers():
     return (
         namespace["_normalize_generator_kwargs"],
         namespace["_align_cache_size"],
-        namespace["_apply_dflash_generator_defaults"],
         namespace["_is_insufficient_vram_error"],
         namespace["_normalize_reserve_vram"],
         namespace["_auto_use_vram_for_existing_allocations"],
@@ -67,7 +65,6 @@ def _load_model_method_ast(method_name):
 (
     normalize_generator_kwargs,
     align_cache_size,
-    apply_dflash_generator_defaults,
     is_insufficient_vram_error,
     normalize_reserve_vram,
     auto_use_vram_for_existing_allocations,
@@ -75,12 +72,17 @@ def _load_model_method_ast(method_name):
 ) = _load_generator_helpers()
 
 
-def test_normalize_generator_kwargs_defaults_prompt_chunk_size_to_4096():
-    assert normalize_generator_kwargs({})["max_chunk_size"] == 4096
-    assert normalize_generator_kwargs(None)["max_chunk_size"] == 4096
+def test_normalize_generator_kwargs_defaults():
+    result = normalize_generator_kwargs({})
+    assert result["max_chunk_size"] == 2048
+    assert result["max_batch_size"] == 4
+
+    result_none = normalize_generator_kwargs(None)
+    assert result_none["max_chunk_size"] == 2048
+    assert result_none["max_batch_size"] == 4
 
 
-def test_normalize_generator_kwargs_preserves_explicit_prompt_chunk_size():
+def test_normalize_generator_kwargs_preserves_explicit_values():
     normalized = normalize_generator_kwargs({"max_chunk_size": "2048", "max_batch_size": "32"})
 
     assert normalized["max_chunk_size"] == 2048
@@ -91,19 +93,6 @@ def test_align_cache_size_rounds_up_to_page_size():
     assert align_cache_size(4097, 4097) == 4352
     assert align_cache_size(4096, 4097) == 4352
     assert align_cache_size(None, 4097) == 4352
-
-
-def test_apply_dflash_generator_defaults_sets_15_for_dflash_only():
-    class DraftModel:
-        caps = {"dflash_draft": True}
-
-    class FlashDraftModel:
-        caps = {}
-
-    assert apply_dflash_generator_defaults({}, DraftModel())["num_draft_tokens"] == 15
-    assert apply_dflash_generator_defaults({"num_draft_tokens": None}, DraftModel())["num_draft_tokens"] == 15
-    assert apply_dflash_generator_defaults({"num_draft_tokens": 7}, DraftModel())["num_draft_tokens"] == 7
-    assert "num_draft_tokens" not in apply_dflash_generator_defaults({}, FlashDraftModel())
 
 
 def test_is_insufficient_vram_error_matches_exllamav3_and_cuda_oom_messages():

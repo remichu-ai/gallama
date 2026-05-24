@@ -487,7 +487,7 @@ gallama run -id "model_id=qwen2-72B gpus=20,15,15,0" -id "model_id=Llama3.1-8B g
 ```
 
 ## OpenAI Embedding Endpoint
-Utilize Infinity Embedding library for both embedding via OpenAI client.
+Utilize the sentence-transformers embedding backend via the OpenAI client.
 
 ```python
 response = client.embeddings.create(
@@ -648,12 +648,12 @@ If you're starting from scratch and don't have these dependencies yet, follow th
 
 2. Install and verify your backend:
    - Exllama V3 is the recommended path if you want the setup closest to what is actively tested.
-   - DFlash speculative decoding requires `exllamav3>=0.0.31`.
+   - ExLlamaV3 requires `exllamav3>=0.0.35` for concurrent request batching (`max_batch_size`), prompt chunk tuning (`max_chunk_size`), and draft cache history (`max_history`). DFlash speculative decoding requires `exllamav3>=0.0.31`.
    - Exllama V2, llama.cpp, transformers, vLLM, sglang, and other backends are still available, but expect some backend-specific rough edges.
 
-   For ExLlamaV3 with DFlash support:
+   For ExLlamaV3:
    ```shell
-   pip install -U "exllamav3>=0.0.31"
+   pip install -U "exllamav3>=0.0.35"
    ```
 
    (Optional) Install llama cpp-python:
@@ -758,6 +758,28 @@ Typical keys:
 - `draft_model_name`: optional name of another `model_config.yaml` entry to use as the draft model.
 - `draft_gpus`: optional GPU split for the draft model. If omitted, Gallama uses `auto`.
 - `draft_cache_quant`: draft KV cache quantization. Defaults to `FP16`; use `Q4`, `Q6`, or `Q8` only if you intentionally want a quantized draft cache.
+
+#### ExLlamaV3 `backend_extra_args`
+
+Requires `exllamav3>=0.0.35`. These settings are passed to the ExLlamaV3 Generator and also used to size the model workspace and KV cache at load time:
+
+| Key | Default | Description |
+|---|---|---|
+| `max_batch_size` | `4` | Maximum concurrent requests batched per forward pass. Must be consistent across `model.load()`, `Cache`, and `Generator`. Higher values increase throughput but also VRAM usage. |
+| `max_chunk_size` | `2048` | Tokens per prompt-processing chunk. Controls VRAM peaks during prompt ingestion. Must be a multiple of 256. |
+| `max_q_size` | `8` | Maximum tokens to evaluate per sequence per generation step. |
+| `num_draft_tokens` | auto | Speculative draft tokens per step. When omitted, the Generator auto-detects the value from the DFlash draft model caps. Set explicitly to override. If using a draft model, `max_history` on the draft KV cache is set to this value for draft verification rollback. |
+| `recurrent_cache_size` | `4 GiB` | Recurrent model cache size (Mamba, etc.). |
+
+```yaml
+qwen3.6-27B:
+  backend: exllamav3
+  model_id: /path/to/model
+  backend_extra_args:
+    max_batch_size: 4
+    max_chunk_size: 2048
+    num_draft_tokens: 15    # optional; auto-detected from DFlash caps if omitted
+```
 
 Example with default sampling:
 
@@ -996,7 +1018,7 @@ Notes:
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
 - `reserve_vram` is interpreted in GB against the final visible-device order after `CUDA_VISIBLE_DEVICES` is applied. For ExLlamaV3, it only applies when `gpus=auto`; explicit `gpus=...` and `reserve_vram` cannot be combined.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
-- ExLlamaV3 DFlash speculative decoding requires `exllamav3>=0.0.31`. Gallama detects DFlash from the draft model and defaults DFlash to `num_draft_tokens=15` unless you override it in `backend_extra_args`.
+- ExLlamaV3 DFlash speculative decoding requires `exllamav3>=0.0.31`. As of `exllamav3>=0.0.35`, the Generator auto-detects DFlash and sets `num_draft_tokens` from the draft model caps (`default_draft_size`). Explicit `backend_extra_args.num_draft_tokens` overrides the auto-detected value.
 - This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 
 #### Speculative Decoding Parameters
@@ -1005,7 +1027,7 @@ Notes:
 - `draft_gpus`: VRAM usage for each GPU for the draft model, comma-separated list of floats (optional)
 - `draft_cache_size`: Context length for cache text in integers for the draft model (optional; ExLlamaV3 keeps the draft cache size matched to the main cache)
 - `draft_cache_quant`: Quantization to use for cache for the draft model, options are `FP16`, `Q4`, `Q6`, `Q8`. Defaults to `FP16`
-- `backend_extra_args.num_draft_tokens`: Number of draft tokens. For ExLlamaV3 DFlash, Gallama defaults this to `15`; explicit values override the default
+- `backend_extra_args.num_draft_tokens`: Number of draft tokens. As of `exllamav3>=0.0.35`, the Generator auto-detects the correct value from the DFlash draft model caps. Set explicitly to override the auto-detected value. The draft KV cache uses this as `max_history` for speculative verification rollback.
 
 ### Examples
 
@@ -1039,6 +1061,9 @@ Notes:
    ```shell
    gallama run -id "model_name=gte-large-en-v1.5 model_id=Alibaba-NLP/gte-large-en-v1.5 backend=embedding"
    ```
+   The embedding backend uses sentence-transformers. You can pass supported
+   SentenceTransformer or encode options through `backend_extra_args` in
+   `model_config.yaml`.
 
 6. Launch a model with speculative decoding:
    Only use a draft model that is compatible with the target model. For normal draft models this usually means the same tokenizer/vocabulary. For DFlash, use a DFlash draft model built for that target model family.
@@ -1057,7 +1082,9 @@ Notes:
      draft_model_id: /path/to/Qwen3.6-27B-DFlash
      draft_cache_quant: FP16
      backend_extra_args:
-       num_draft_tokens: 15
+       max_batch_size: 4
+       max_chunk_size: 2048
+       num_draft_tokens: 15    # optional; auto-detected from DFlash caps if omitted
    ```
 
    Then launch it by model name:
@@ -1067,7 +1094,7 @@ Notes:
 
    You can also pass a direct draft path from the CLI. Dotted keys can be used for `backend_extra_args`:
    ```shell
-   gallama run -id "model_name=qwen3.6-27B model_id=/path/to/Qwen3.6-27B-exl3 backend=exllamav3 draft_model_id=/path/to/Qwen3.6-27B-DFlash draft_cache_quant=FP16 backend_extra_args.num_draft_tokens=15"
+   gallama run -id "model_name=qwen3.6-27B model_id=/path/to/Qwen3.6-27B-exl3 backend=exllamav3 draft_model_id=/path/to/Qwen3.6-27B-DFlash draft_cache_quant=FP16 backend_extra_args.max_batch_size=4 backend_extra_args.max_chunk_size=2048 backend_extra_args.num_draft_tokens=15"
    ```
 
    For normal flash speculative decoding with ExLlamaV3, use a standard compatible draft model instead:

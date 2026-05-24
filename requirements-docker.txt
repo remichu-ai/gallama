@@ -17,7 +17,6 @@ chardet
 sse_starlette
 fastapi
 lxml
-infinity-emb[all]
 colorama
 pyyaml
 rich

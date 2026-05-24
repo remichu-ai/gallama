@@ -123,7 +123,7 @@ def main_cli():
                                    "cache_size can be more than context length, which will help model perform better in batched generation"
                                    "cache_size is not application to embedding model"
                                    "VRAM is specified in GB. Cache size is integer which is the context length to cache."
-                                   "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
+                                   "Embedding models use sentence-transformers and rely on CUDA_VISIBLE_DEVICES for GPU selection")
     serve_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     serve_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")

@@ -606,12 +606,65 @@ class CompletionStreamResponse(BaseModel):
 
 
 # embedding dataclass from here
+
+
+class EmbeddingContentText(BaseModel):
+    """OpenAI-style content part: text block."""
+    type: Literal["text"] = "text"
+    text: str
+
+
+class EmbeddingContentImageUrl(BaseModel):
+    """URL for an image in content-part format."""
+    url: str = Field(description="Image URL (https://...) or data URI (data:image/...;base64,...)")
+
+
+class EmbeddingContentImage(BaseModel):
+    """OpenAI-style content part: image block."""
+    type: Literal["image_url"] = "image_url"
+    image_url: EmbeddingContentImageUrl
+
+
+# Union of OpenAI content-part types
+EmbeddingContentPart = Union[EmbeddingContentText, EmbeddingContentImage]
+
+
+class MultimodalEmbeddingInput(BaseModel):
+    """Simple multimodal input dict — mirrors sentence-transformers format.
+
+    At least one of ``text`` or ``image`` must be provided.
+    ``image`` can be: URL, file path, or base64 data URI.
+    """
+    text: Optional[str] = Field(default=None, description="Optional text content")
+    image: Optional[str] = Field(default=None, description="Image as URL, file path, or base64 data URI")
+
+
 class EmbeddingRequest(BaseModel):
     """ Request to embedding some text in the input"""
-    input: Union[str, List[str], List[List[int]]] = Field(description="text to embed, a str or list of str")
+    input: Union[
+        str,
+        List[str],
+        List[List[int]],
+        List[Union[
+            str,
+            MultimodalEmbeddingInput,
+            List[EmbeddingContentPart],
+        ]],
+    ] = Field(
+        description=(
+            "Input to embed. Accepts: string, list of strings, list of token-id lists, "
+            "or for multimodal models: list of MultimodalEmbeddingInput dicts "
+            "({text: ..., image: ...}) or OpenAI-style content parts "
+            "([{type: text, text: ...}, {type: image_url, image_url: {url: ...}}])"
+        )
+    )
     model: str
     dimension: Optional[int] = None
     encoding_format: Optional[Literal["float", "base64"]] = "float"
+    task: Optional[str] = Field(
+        default=None,
+        description="Task hint for encode (e.g., 'query', 'document'). Passed to model.encode(task=...)"
+    )
 
 
 class EmbeddingObject(BaseModel):

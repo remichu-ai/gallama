@@ -42,7 +42,8 @@ try:
         CacheLayer_quant,
         AsyncGenerator,
         AsyncJob,
-        FormatronFilter
+        FormatronFilter,
+        Job,
     )
 except ImportError:
     Model = None
@@ -51,6 +52,18 @@ except ImportError:
     Tokenizer = None
     AsyncGenerator = None
     Job = None
+
+# Monkey-patch: ExLlamaV3 v0.0.35 changed Job.is_checkpoint_boundary to require an
+# override_interval argument, but Generator.iterate_gen calls it with no arguments.
+# This patches the method to accept None as default (the existing logic already
+# handles None correctly: `if override_interval: ...`).
+if Job is not None:
+    _original_is_checkpoint_boundary = Job.is_checkpoint_boundary
+
+    def _patched_is_checkpoint_boundary(self, override_interval=None):
+        return _original_is_checkpoint_boundary(self, override_interval)
+
+    Job.is_checkpoint_boundary = _patched_is_checkpoint_boundary
 
 # import exllama v3 sampler
 try:
@@ -117,8 +130,11 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
         if isinstance(value, str):
             normalized[key] = _is_truthy(value)
 
+    if normalized.get("max_batch_size") is None:
+        normalized["max_batch_size"] = 4
+
     if normalized.get("max_chunk_size") is None:
-        normalized["max_chunk_size"] = 4096
+        normalized["max_chunk_size"] = 2048
 
     return normalized
 
@@ -126,17 +142,6 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
 def _align_cache_size(cache_size: int | None, max_seq_len: int) -> int:
     base_size = cache_size or max_seq_len
     return ((max(base_size, max_seq_len) + 255) // 256) * 256
-
-
-def _apply_dflash_generator_defaults(generator_kwargs: Dict, draft_model) -> Dict:
-    normalized = dict(generator_kwargs)
-    if (
-        draft_model is not None
-        and draft_model.caps.get("dflash_draft", False)
-        and normalized.get("num_draft_tokens") is None
-    ):
-        normalized["num_draft_tokens"] = 15
-    return normalized
 
 
 def _is_insufficient_vram_error(exc: BaseException) -> bool:
@@ -263,6 +268,17 @@ class ModelExllamaV3(ModelInterface):
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
 
+        # Resolve num_draft_tokens early so the main Cache can size its recurrent
+        # state buffer for draft verification rollback (DFlash attaches to target).
+        draft_extra = _normalize_generator_kwargs(self.backend_extra_args)
+        # When num_draft_tokens is not explicitly set, use 0 as the default;
+        # the Generator will auto-detect the correct value at pipeline creation.
+        # Using 0 means the cache allocates the minimal recurrent state buffer,
+        # which is fine for models without recurrent layers. For DFlash draft
+        # models with recurrent (gated delta net) layers, the user should set
+        # num_draft_tokens explicitly in backend_extra_args.
+        draft_num_tokens = draft_extra.get("num_draft_tokens") or 0
+
         model, tokenizer, cache, processor = self.load_model_exllama(
             model_id=self.model_id,
             backend=self.backend,
@@ -273,6 +289,7 @@ class ModelExllamaV3(ModelInterface):
             reserve_vram=self.reserve_vram,
             tensor_parallel=self.tensor_parallel,
             backend_extra_args=self.backend_extra_args,
+            max_history=draft_num_tokens,
         )
 
         # load draft model
@@ -304,6 +321,7 @@ class ModelExllamaV3(ModelInterface):
                     backend_extra_args=self.backend_extra_args,
                     load_tokenizer=False,
                     load_processor=False,
+                    max_history=draft_num_tokens,
                 )
             except RuntimeError:
                 _reset_cuda_memory_fraction()
@@ -327,6 +345,7 @@ class ModelExllamaV3(ModelInterface):
         backend_extra_args=None,
         load_tokenizer=True,
         load_processor=True,
+        max_history=0,
     ):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id, extra=basic_log_extra())
@@ -351,6 +370,11 @@ class ModelExllamaV3(ModelInterface):
             # set the self.max_seq_len using model config file as it is None at the moment
             self.max_seq_len = config.config_dict.get("max_position_embeddings", 16384)
 
+        # Normalize backend_extra_args to extract batch/chunk settings for Cache and model.load
+        normalized_extra = _normalize_generator_kwargs(backend_extra_args)
+        max_batch_size = normalized_extra.get("max_batch_size", 4)
+        max_chunk_size = normalized_extra.get("max_chunk_size", 2048)
+
         # # a simple dict to help map cache quant
         cache_quant_dict = {
             "FP16": None,
@@ -370,6 +394,7 @@ class ModelExllamaV3(ModelInterface):
         logger.info("Cache Quantization: " + str(cache_quant), extra=basic_log_extra())
         logger.info("gpus: " + str(gpus), extra=basic_log_extra())
         logger.info("reserve_vram: " + str(reserve_vram), extra=basic_log_extra())
+        logger.info("max_batch_size (for load/cache): " + str(max_batch_size), extra=basic_log_extra())
 
         assert (isinstance(gpus, str) and gpus == "auto") or (isinstance(gpus, list)), \
             "Device map should be either 'auto', 'gpu' split"
@@ -387,6 +412,8 @@ class ModelExllamaV3(ModelInterface):
                 model,
                 max_num_tokens=cache_size_to_use,
                 layer_type=cache_layer,
+                max_batch_size=max_batch_size,
+                max_history=max_history,
                 **cache_quant_to_use
             )
         else:
@@ -394,7 +421,9 @@ class ModelExllamaV3(ModelInterface):
             logger.info("Not using cache quant", extra=basic_log_extra())
             cache = Cache(
                 model,
-                max_num_tokens=cache_size_to_use
+                max_num_tokens=cache_size_to_use,
+                max_batch_size=max_batch_size,
+                max_history=max_history,
             )
         # ExLlamaV3 supports either reserve_per_device or use_per_device, not both.
         load_kwargs = _resolve_load_kwargs(
@@ -408,6 +437,10 @@ class ModelExllamaV3(ModelInterface):
         if tp_backend:
             logger.info("Tensor parallel backend: " + str(tp_backend), extra=basic_log_extra())
             load_kwargs["tp_backend"] = tp_backend
+
+        # Pass batch/chunk settings to model.load so the workspace is sized correctly
+        load_kwargs["max_batch_size"] = max_batch_size
+        load_kwargs["max_chunk_size"] = max_chunk_size
 
         # Load the vision tower before loading the text model/cache. ExLlamaV3's
         # upstream multimodal example does this so the subsequent text-model
@@ -449,11 +482,11 @@ class ModelExllamaV3(ModelInterface):
     def _load_vision_processor(config, backend_extra_args=None):
         """Load optional ExLlamaV3 vision component before the text model."""
 
-        try:
-            processor = Model.from_config(config, component="vision")
-        except AssertionError:
+        if "vision" not in config.model_classes:
             logger.info("No Vision Tower", extra=basic_log_extra())
             return None
+
+        processor = Model.from_config(config, component="vision")
 
         vision_device = _resolve_vision_device(
             (backend_extra_args or {}).get("vision_device"),
@@ -548,7 +581,6 @@ class ModelExllamaV3(ModelInterface):
         """
 
         generator_kwargs = _normalize_generator_kwargs(self.backend_extra_args)
-        generator_kwargs = _apply_dflash_generator_defaults(generator_kwargs, self.draft_model)
 
         generator = AsyncGenerator(
             model=self.model,

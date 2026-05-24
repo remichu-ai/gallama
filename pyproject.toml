@@ -47,7 +47,6 @@ utils = [
     "huggingface-hub",
 ]
 embedding = [
-    "infinity-emb[all]",
     "sentence-transformers",
 ]
 exl2 = [
@@ -116,7 +115,6 @@ all = [
     "formatron>=0.4.4",
     "fuzzywuzzy",
     "huggingface-hub",
-    "infinity-emb[all]",
     "kokoro",
     "librosa",
     "livekit>=0.20.2",

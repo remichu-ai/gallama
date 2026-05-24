@@ -104,8 +104,7 @@ class ModelTransformers(ModelInterface):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id, extra=basic_log_extra())
 
-        # infinity emb set this to 1 and cause some bug with current version of Huggingface
-        # to remove this env for tqdm to work
+        # Ensure progress bars are available even if another backend disabled them.
         if huggingface_hub is not None and enable_progress_bars is not None:
             huggingface_hub.constants.HF_HUB_DISABLE_PROGRESS_BARS = False
             os.environ.pop('HF_HUB_DISABLE_PROGRESS_BARS', None)

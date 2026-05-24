@@ -946,7 +946,7 @@ if __name__ == "__main__":
                                  "cache_size can be more than context length, which will help model perform better in batched generation"
                                  "cache_size is not application to embedding model"
                                  "VRAM is specified in GB. Cache size is integer which is the context length to cache."
-                                 "VRAM for embedding will simple set env parameter to allow infinity_embedding to view the specific GPU and can not enforce VRAM size restriction")
+                                 "Embedding models use sentence-transformers and rely on CUDA_VISIBLE_DEVICES for GPU selection")
     arg_parser.add_argument(
         '-v',
         "--verbose",

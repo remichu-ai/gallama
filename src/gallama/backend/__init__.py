@@ -1,11 +1,23 @@
-try:
-    from .llm import ModelExllama, ModelLlamaCpp, ModelTransformers
-except ImportError:
-    ModelExllama = None
-    ModelLlamaCpp = None
-    ModelTransformers = None
+from importlib import import_module
 
-try:
-    from .embedding.embedding import EmbeddingModel
-except ImportError:
-    EmbeddingModel = None
+
+__all__ = [
+    "EmbeddingModel",
+    "ModelExllama",
+    "ModelLlamaCpp",
+    "ModelTransformers",
+]
+
+
+def __getattr__(name):
+    if name == "EmbeddingModel":
+        from .embedding.embedding import EmbeddingModel
+
+        return EmbeddingModel
+
+    if name in {"ModelExllama", "ModelLlamaCpp", "ModelTransformers"}:
+        llm = import_module(f"{__name__}.llm")
+
+        return getattr(llm, name, None)
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
