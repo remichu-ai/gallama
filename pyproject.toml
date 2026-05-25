@@ -55,7 +55,7 @@ exl2 = [
     "lm-format-enforcer",
 ]
 exl3 = [
-    "exllamav3",
+    "exllamav3>=0.0.36",
     "formatron>=0.4.4",
 ]
 llama-cpp = [
@@ -109,7 +109,7 @@ vllm = [
 all = [
     "cmake",
     "exllamav2",
-    "exllamav3",
+    "exllamav3>=0.0.36",
     "faster-whisper",
     "ffmpeg-python",
     "formatron>=0.4.4",

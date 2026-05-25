@@ -648,12 +648,12 @@ If you're starting from scratch and don't have these dependencies yet, follow th
 
 2. Install and verify your backend:
    - Exllama V3 is the recommended path if you want the setup closest to what is actively tested.
-   - ExLlamaV3 requires `exllamav3>=0.0.35` for concurrent request batching (`max_batch_size`), prompt chunk tuning (`max_chunk_size`), and draft cache history (`max_history`). DFlash speculative decoding requires `exllamav3>=0.0.31`.
+   - ExLlamaV3 requires `exllamav3>=0.0.36` for concurrent request batching (`max_batch_size`), prompt chunk tuning (`max_chunk_size`), and draft cache history (`max_history`). DFlash speculative decoding requires `exllamav3>=0.0.31`.
    - Exllama V2, llama.cpp, transformers, vLLM, sglang, and other backends are still available, but expect some backend-specific rough edges.
 
    For ExLlamaV3:
    ```shell
-   pip install -U "exllamav3>=0.0.35"
+   pip install -U "exllamav3>=0.0.36"
    ```
 
    (Optional) Install llama cpp-python:
@@ -761,7 +761,7 @@ Typical keys:
 
 #### ExLlamaV3 `backend_extra_args`
 
-Requires `exllamav3>=0.0.35`. These settings are passed to the ExLlamaV3 Generator and also used to size the model workspace and KV cache at load time:
+Requires `exllamav3>=0.0.36`. These settings are passed to the ExLlamaV3 Generator and also used to size the model workspace and KV cache at load time:
 
 | Key | Default | Description |
 |---|---|---|
@@ -1018,7 +1018,7 @@ Notes:
 - If you omit `prompt_template`, Gallama will use the tokenizer's built-in Hugging Face chat template. That is usually fine for modern transformers models, but older or custom models may still need an explicit prompt template.
 - `reserve_vram` is interpreted in GB against the final visible-device order after `CUDA_VISIBLE_DEVICES` is applied. For ExLlamaV3, it only applies when `gpus=auto`; explicit `gpus=...` and `reserve_vram` cannot be combined.
 - Draft/speculative decoding still expects the draft model to exist in `model_config.yaml` unless you pass a full `draft_model_id` directly.
-- ExLlamaV3 DFlash speculative decoding requires `exllamav3>=0.0.31`. As of `exllamav3>=0.0.35`, the Generator auto-detects DFlash and sets `num_draft_tokens` from the draft model caps (`default_draft_size`). Explicit `backend_extra_args.num_draft_tokens` overrides the auto-detected value.
+- ExLlamaV3 DFlash speculative decoding requires `exllamav3>=0.0.31`. As of `exllamav3>=0.0.36`, the Generator auto-detects DFlash and sets `num_draft_tokens` from the draft model caps (`default_draft_size`). Explicit `backend_extra_args.num_draft_tokens` overrides the auto-detected value.
 - This is mainly useful for multimodal requests with large message histories or `data:image/...;base64,...` inputs. At normal verbosity Gallama truncates those image payloads in logs to keep them readable.
 
 #### Speculative Decoding Parameters
@@ -1027,7 +1027,7 @@ Notes:
 - `draft_gpus`: VRAM usage for each GPU for the draft model, comma-separated list of floats (optional)
 - `draft_cache_size`: Context length for cache text in integers for the draft model (optional; ExLlamaV3 keeps the draft cache size matched to the main cache)
 - `draft_cache_quant`: Quantization to use for cache for the draft model, options are `FP16`, `Q4`, `Q6`, `Q8`. Defaults to `FP16`
-- `backend_extra_args.num_draft_tokens`: Number of draft tokens. As of `exllamav3>=0.0.35`, the Generator auto-detects the correct value from the DFlash draft model caps. Set explicitly to override the auto-detected value. The draft KV cache uses this as `max_history` for speculative verification rollback.
+- `backend_extra_args.num_draft_tokens`: Number of draft tokens. As of `exllamav3>=0.0.36`, the Generator auto-detects the correct value from the DFlash draft model caps. Set explicitly to override the auto-detected value. The draft KV cache uses this as `max_history` for speculative verification rollback.
 
 ### Examples
 

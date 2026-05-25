@@ -30,6 +30,7 @@ def _load_generator_helpers():
             "_is_truthy",
             "_normalize_generator_kwargs",
             "_align_cache_size",
+            "_resolve_draft_max_history",
             "_is_insufficient_vram_error",
             "_normalize_reserve_vram",
             "_auto_use_vram_for_existing_allocations",
@@ -42,6 +43,7 @@ def _load_generator_helpers():
     return (
         namespace["_normalize_generator_kwargs"],
         namespace["_align_cache_size"],
+        namespace["_resolve_draft_max_history"],
         namespace["_is_insufficient_vram_error"],
         namespace["_normalize_reserve_vram"],
         namespace["_auto_use_vram_for_existing_allocations"],
@@ -65,6 +67,7 @@ def _load_model_method_ast(method_name):
 (
     normalize_generator_kwargs,
     align_cache_size,
+    resolve_draft_max_history,
     is_insufficient_vram_error,
     normalize_reserve_vram,
     auto_use_vram_for_existing_allocations,
@@ -93,6 +96,28 @@ def test_align_cache_size_rounds_up_to_page_size():
     assert align_cache_size(4097, 4097) == 4352
     assert align_cache_size(4096, 4097) == 4352
     assert align_cache_size(None, 4097) == 4352
+
+
+def test_resolve_draft_max_history_uses_configured_num_draft_tokens():
+    assert resolve_draft_max_history("/draft", {"num_draft_tokens": "15"}) == 15
+
+
+def test_resolve_draft_max_history_uses_draft_model_default_when_omitted():
+    class FakeConfig:
+        @staticmethod
+        def from_directory(model_id):
+            assert model_id == "/draft"
+            return SimpleNamespace()
+
+    class FakeModel:
+        @staticmethod
+        def from_config(config):
+            return SimpleNamespace(caps={"default_draft_size": 12})
+
+    resolve_draft_max_history.__globals__["Config"] = FakeConfig
+    resolve_draft_max_history.__globals__["Model"] = FakeModel
+
+    assert resolve_draft_max_history("/draft", {}) == 12
 
 
 def test_is_insufficient_vram_error_matches_exllamav3_and_cuda_oom_messages():

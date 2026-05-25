@@ -43,7 +43,6 @@ try:
         AsyncGenerator,
         AsyncJob,
         FormatronFilter,
-        Job,
     )
 except ImportError:
     Model = None
@@ -51,19 +50,6 @@ except ImportError:
     Cache = None
     Tokenizer = None
     AsyncGenerator = None
-    Job = None
-
-# Monkey-patch: ExLlamaV3 v0.0.35 changed Job.is_checkpoint_boundary to require an
-# override_interval argument, but Generator.iterate_gen calls it with no arguments.
-# This patches the method to accept None as default (the existing logic already
-# handles None correctly: `if override_interval: ...`).
-if Job is not None:
-    _original_is_checkpoint_boundary = Job.is_checkpoint_boundary
-
-    def _patched_is_checkpoint_boundary(self, override_interval=None):
-        return _original_is_checkpoint_boundary(self, override_interval)
-
-    Job.is_checkpoint_boundary = _patched_is_checkpoint_boundary
 
 # import exllama v3 sampler
 try:
@@ -142,6 +128,22 @@ def _normalize_generator_kwargs(raw_kwargs: Dict | None) -> Dict:
 def _align_cache_size(cache_size: int | None, max_seq_len: int) -> int:
     base_size = cache_size or max_seq_len
     return ((max(base_size, max_seq_len) + 255) // 256) * 256
+
+
+def _resolve_draft_max_history(draft_model_id: str | None, backend_extra_args: Dict | None) -> int:
+    """Resolve recurrent cache history needed for speculative verification."""
+
+    draft_extra = _normalize_generator_kwargs(backend_extra_args)
+    configured_num_draft_tokens = draft_extra.get("num_draft_tokens")
+    if configured_num_draft_tokens:
+        return configured_num_draft_tokens
+
+    if not draft_model_id:
+        return 0
+
+    draft_config = Config.from_directory(draft_model_id)
+    draft_model = Model.from_config(draft_config)
+    return draft_model.caps.get("default_draft_size") or 4
 
 
 def _is_insufficient_vram_error(exc: BaseException) -> bool:
@@ -268,16 +270,9 @@ class ModelExllamaV3(ModelInterface):
     def load_model(self):
         """Load the model, tokenizer, cache, and optional processor."""
 
-        # Resolve num_draft_tokens early so the main Cache can size its recurrent
-        # state buffer for draft verification rollback (DFlash attaches to target).
-        draft_extra = _normalize_generator_kwargs(self.backend_extra_args)
-        # When num_draft_tokens is not explicitly set, use 0 as the default;
-        # the Generator will auto-detect the correct value at pipeline creation.
-        # Using 0 means the cache allocates the minimal recurrent state buffer,
-        # which is fine for models without recurrent layers. For DFlash draft
-        # models with recurrent (gated delta net) layers, the user should set
-        # num_draft_tokens explicitly in backend_extra_args.
-        draft_num_tokens = draft_extra.get("num_draft_tokens") or 0
+        # Resolve draft history before cache construction because ExLlamaV3's
+        # recurrent cache must reserve rollback space up front.
+        draft_num_tokens = _resolve_draft_max_history(self.draft_model_id, self.backend_extra_args)
 
         model, tokenizer, cache, processor = self.load_model_exllama(
             model_id=self.model_id,
