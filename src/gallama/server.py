@@ -698,6 +698,8 @@ async def load_balanced_router(request: Request, path: str):
             model_type = "stt"
         elif "embeddings" in path:
             model_type = "embedding"
+        elif "rerank" in path:
+            model_type = "reranker"
         elif "/audio/speech" in path:
             model_type = "tts"
         else:

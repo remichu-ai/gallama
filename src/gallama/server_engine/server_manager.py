@@ -14,7 +14,7 @@ class ServerManager:
 
     def get_instance(
         self,
-        model_type: Literal["stt", "llm", "tts", "embedding"],
+        model_type: Literal["stt", "llm", "tts", "embedding", "reranker"],
         model_name: Optional[str] = None
     ) -> Optional[ModelInstanceInfo]:
         # Iterate through all models to find a matching instance

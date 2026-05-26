@@ -1011,6 +1011,14 @@ class ModelExllamaV3(ModelInterface):
                         await self._cancel_job_safely(job)
                         break
 
+                    if not isinstance(result, dict):
+                        logger.error(
+                            f"BUG: AsyncJob yielded non-dict result! "
+                            f"type={type(result).__name__}, "
+                            f"repr={repr(result)[:500]}"
+                        )
+                        result = dict(result) if hasattr(result, '__iter__') else {"text": str(result)}
+
                     chunk_text = result.get("text", "")
                     if chunk_text:
                         # logger.info(f"chunk_text: {chunk_text}")

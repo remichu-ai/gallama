@@ -15,7 +15,7 @@ class ModelInstanceInfo(BaseModel):
     port: int
     pid: int  # Changed from process to pid
     status: str
-    model_type: Literal["stt", "llm", "tts", "embedding"]
+    model_type: Literal["stt", "llm", "tts", "embedding", "reranker"]
     strict: bool = Field(description="whether require api call to match model name or not", default=False)
     modalities: List[str] = Field(
         description="modalities reported by the loaded model instance",

@@ -1,3 +1,5 @@
+"""Unit tests for gallama embedding backend (Phase 26.2 / 26.6)."""
+
 import asyncio
 import base64
 import struct
@@ -112,3 +114,57 @@ def test_text_embeddings_supports_base64_and_token_arrays(monkeypatch):
     expected = base64.b64encode(struct.pack("fff", 1.0, 2.0, 3.0)).decode("utf-8")
     assert response.data[0].embedding == expected
     assert model.model.encode_calls[0][0] == ["10 20"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 26.6 — Batch embedding ordering (200+ texts)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_batch_embedding_200_texts_preserves_order(monkeypatch):
+    """Embedding 200+ texts preserves input order: text[i] → vector[i]."""
+    model = make_model(monkeypatch)
+    input_count = 200
+    texts = [f"document number {i}" for i in range(input_count)]
+
+    query = EmbeddingRequest(
+        input=texts,
+        model="fake-embed",
+        encoding_format="float",
+    )
+
+    response = asyncio.run(model.text_embeddings(query))
+
+    assert len(response.data) == input_count, (
+        f"Expected {input_count} embeddings, got {len(response.data)}"
+    )
+
+    # Verify indices match 0..199 and each vector corresponds to its index
+    indices = [item.index for item in response.data]
+    assert indices == list(range(input_count)), (
+        f"Indices not sequential 0..{input_count - 1}"
+    )
+
+    # Each vector should match the FakeSentenceTransformer pattern:
+    # text[i] → [i+1.0, i+2.0, i+3.0]
+    for item in response.data:
+        i = item.index
+        expected_vec = [float(i + 1), float(i + 2), float(i + 3)]
+        assert item.embedding == expected_vec, (
+            f"Vector at index {i} should be {expected_vec}, got {item.embedding}"
+        )
+
+
+def test_batch_embedding_single_text_preserves_order(monkeypatch):
+    """Single text embedding returns correct index 0 vector."""
+    model = make_model(monkeypatch)
+    query = EmbeddingRequest(
+        input=["only one"],
+        model="fake-embed",
+        encoding_format="float",
+    )
+
+    response = asyncio.run(model.text_embeddings(query))
+
+    assert len(response.data) == 1
+    assert response.data[0].index == 0
+    assert response.data[0].embedding == [1.0, 2.0, 3.0]

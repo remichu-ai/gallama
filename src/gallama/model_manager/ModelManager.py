@@ -16,6 +16,8 @@ class ModelManager:
         self.stt_dict_non_strict: Dict[str, Any] = {}
         self.embedding_dict: Dict[str, Any] = {}
         self.embedding_dict_non_strict: Dict[str, Any] = {}
+        self.reranker_dict: Dict[str, Any] = {}
+        self.reranker_dict_non_strict: Dict[str, Any] = {}
         self.config_manager = ConfigManager()
         self.model_ready = False
 
@@ -26,6 +28,7 @@ class ModelManager:
             self.tts_dict,
             self.stt_dict,
             self.embedding_dict,
+            self.reranker_dict,
         )
 
         for model_dict in all_model_dicts:
@@ -40,7 +43,7 @@ class ModelManager:
                     except Exception as exc:
                         logger.error(f"Failed to close model resource cleanly: {exc}")
 
-    def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding"]) -> Optional[Any]:
+    def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding", "reranker"]) -> Optional[Any]:
         # Determine which dictionaries to use based on the type
         if _type == "llm":
             strict_dict = self.llm_dict
@@ -54,6 +57,9 @@ class ModelManager:
         elif _type == "embedding":
             strict_dict = self.embedding_dict
             non_strict_dict = self.embedding_dict_non_strict
+        elif _type == "reranker":
+            strict_dict = self.reranker_dict
+            non_strict_dict = self.reranker_dict_non_strict
         else:
             raise ValueError(f"Invalid model type: {_type}")
 
@@ -86,6 +92,10 @@ class ModelManager:
             self.embedding_dict[model_name] = model_object
             if not model_spec.strict:
                 self.embedding_dict_non_strict[model_name] = model_object
+        elif model_spec.model_type == "reranker":
+            self.reranker_dict[model_name] = model_object
+            if not model_spec.strict:
+                self.reranker_dict_non_strict[model_name] = model_object
 
 
     def load_model(self, model_spec: ModelSpec):
@@ -186,6 +196,15 @@ class ModelManager:
                 model_name=model_name,
                 model_spec=model_spec,
                 model_object=EmbeddingModel(model_spec=model_spec)
+            )
+
+        elif model_spec.backend == "reranker":  # reranker model
+            from gallama.backend.reranker.reranker import RerankerModel
+
+            self._update_model(
+                model_name=model_name,
+                model_spec=model_spec,
+                model_object=RerankerModel(model_spec=model_spec)
             )
 
 

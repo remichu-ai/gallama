@@ -798,6 +798,7 @@ SUPPORTED_BACKENDS = [
     "mlx_vlm",
     "sglang",
     "embedding",
+    "reranker",
     "faster_whisper",
     "mlx_whisper",
     "kokoro",
@@ -807,7 +808,7 @@ SUPPORTED_BACKENDS = [
 class ModelSpec(BaseModel):
     model_id: Optional[str] = Field(description='id of the model which should be the path to the model', default=None)
     model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
-    model_type: Optional[Literal["stt", "llm", "tts", "embedding", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
+    model_type: Optional[Literal["stt", "llm", "tts", "embedding", "reranker", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
     gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     reserve_vram: Optional[Union[float, List[float]]] = Field(
         description="ExLlamaV3 auto-split reserve per visible GPU in GB. Scalar applies to all visible GPUs; list is positional.",
@@ -967,6 +968,8 @@ class ModelSpec(BaseModel):
             return "tts"
         elif backend in ["embedding"]:
             return "embedding"
+        elif backend in ["reranker"]:
+            return "reranker"
 
     @classmethod
     def from_dict(cls, input_data: Union[str, Dict[str, Any]]):
@@ -1726,3 +1729,24 @@ class AnthropicCountTokensRequest(AnthropicMessagesRequest):
 
 class AnthropicCountTokensResponse(BaseModel):
     input_tokens: int
+
+
+# ── Rerank data classes ────────────────────────────────────────────
+
+class RerankRequest(BaseModel):
+    model: str
+    query: str
+    documents: List[str] = Field(default_factory=list, max_length=1000)
+    top_n: Optional[int] = None
+    return_documents: bool = False
+
+
+class RerankResult(BaseModel):
+    index: int
+    relevance_score: float
+    document: Optional[Dict[str, str]] = None  # Only if return_documents=True
+
+
+class RerankResponse(BaseModel):
+    model: str
+    results: List[RerankResult]

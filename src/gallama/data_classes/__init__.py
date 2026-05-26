@@ -28,7 +28,10 @@ from .data_class import (
     UsageResponse,
     MultiModalTextContent,
     MultiModalImageContent,
-    TagDefinition
+    TagDefinition,
+    RerankRequest,
+    RerankResult,
+    RerankResponse,
 )
 
 from .responses_api import (

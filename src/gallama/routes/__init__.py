@@ -4,6 +4,12 @@ from .embedding import router as embedding_router
 from .model_management import router as model_management_router
 from .ws_llm import router as ws_llm_router
 
+rerank_router = APIRouter()
+try:
+    from .rerank import router as rerank_router
+except ImportError:
+    pass
+
 audio_router = APIRouter()
 try:
     from .audio import router as audio_router

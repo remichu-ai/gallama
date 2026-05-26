@@ -39,7 +39,8 @@ from gallama.routes import (
     ws_stt_router,
     ws_llm_router,
     ws_tts_router,
-    ws_video_router
+    ws_video_router,
+    rerank_router,
 )
 from tempfile import SpooledTemporaryFile
 
@@ -60,6 +61,7 @@ router.include_router(ws_stt_router)
 router.include_router(ws_llm_router)
 router.include_router(ws_tts_router)
 router.include_router(ws_video_router)
+router.include_router(rerank_router)
 
 
 config_manager = ConfigManager()

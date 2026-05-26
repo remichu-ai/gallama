@@ -3,6 +3,7 @@ from importlib import import_module
 
 __all__ = [
     "EmbeddingModel",
+    "RerankerModel",
     "ModelExllama",
     "ModelLlamaCpp",
     "ModelTransformers",
@@ -14,6 +15,11 @@ def __getattr__(name):
         from .embedding.embedding import EmbeddingModel
 
         return EmbeddingModel
+
+    if name == "RerankerModel":
+        from .reranker.reranker import RerankerModel
+
+        return RerankerModel
 
     if name in {"ModelExllama", "ModelLlamaCpp", "ModelTransformers"}:
         llm = import_module(f"{__name__}.llm")

@@ -33,6 +33,8 @@ async def get_models(request: Request):
         model_ids.append(model_name)
     for model_name in model_manager.embedding_dict.keys():
         model_ids.append(model_name)
+    for model_name in model_manager.reranker_dict.keys():
+        model_ids.append(model_name)
 
     return build_models_response(model_ids, request.headers)
 
