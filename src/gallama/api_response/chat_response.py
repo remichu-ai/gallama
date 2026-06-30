@@ -99,21 +99,37 @@ def _materialize_tool_calls(calls: Any, start_index: int) -> tuple[Any, int]:
 
 def format_generation_stats_log(model_name: str, gen_stats: GenerationStats) -> str:
     parts = [
-        f"{model_name} | generation {gen_stats.generation_speed:.1f} tok/s",
-        f"prefill {gen_stats.prefill_speed:.1f} tok/s",
-        f"input {gen_stats.input_tokens_count}",
-        f"output {gen_stats.output_tokens_count}",
-        f"total {gen_stats.total_tokens_count}",
+        f"{model_name} | gen {gen_stats.generation_speed:.1f} tok/s",
+    ]
+
+    if gen_stats.measured_generation_speed is not None:
+        parts.append(f"wall_gen {gen_stats.measured_generation_speed:.1f} tok/s")
+
+    parts += [
+        f"pref {gen_stats.prefill_speed:.1f} tok/s",
+        f"in {gen_stats.input_tokens_count}",
+        f"out {gen_stats.output_tokens_count}",
+        f"tot {gen_stats.total_tokens_count}",
         f"ttft {gen_stats.time_to_first_token:.2f}s",
-        f"gen {gen_stats.time_generate:.2f}s",
-        f"total_time {gen_stats.total_time:.2f}s",
+        f"gen_t {gen_stats.time_generate:.2f}s",
+        f"total_t {gen_stats.total_time:.2f}s",
         f"stop {gen_stats.stop_reason}",
     ]
 
     if gen_stats.cached_tokens:
-        parts.append(f"cached_tokens {gen_stats.cached_tokens}")
+        parts.append(f"cache_tok {gen_stats.cached_tokens}")
     if gen_stats.cached_pages:
-        parts.append(f"cached_pages {gen_stats.cached_pages}")
+        parts.append(f"cache_pg {gen_stats.cached_pages}")
+    if gen_stats.accepted_draft_tokens is not None or gen_stats.rejected_draft_tokens is not None:
+        accepted = gen_stats.accepted_draft_tokens or 0
+        rejected = gen_stats.rejected_draft_tokens or 0
+        parts.append(f"draft_acc {accepted}")
+        parts.append(f"draft_rej {rejected}")
+        if gen_stats.draft_hit_ratio is not None:
+            parts.append(
+                f"draft_hit {accepted}/{gen_stats.output_tokens_count} "
+                f"({gen_stats.draft_hit_ratio * 100:.1f}%)"
+            )
 
     return " | ".join(parts)
 
@@ -467,6 +483,7 @@ async def chat_completion_response_stream(
                     "input_tokens": gen_stats.input_tokens_count,
                     "output_tokens": gen_stats.output_tokens_count,
                     "total_tokens": gen_stats.total_tokens_count,
+                    "cached_tokens": gen_stats.cached_tokens,
                     "finish_reason": base_finish_reason,
                 }
                 if provider == "anthropic":
@@ -490,6 +507,7 @@ async def chat_completion_response_stream(
                             input_tokens=gen_stats.input_tokens_count if gen_stats else None,
                             output_tokens=gen_stats.output_tokens_count if gen_stats else None,
                             total_tokens=gen_stats.total_tokens_count if gen_stats else None,
+                            cached_tokens=gen_stats.cached_tokens if gen_stats else None,
                         )
                     if response_obj is not None:
                         await completion_callback(response_obj)
@@ -605,6 +623,7 @@ async def chat_completion_response(
         "input_tokens": gen_stats.input_tokens_count if gen_stats else 0,
         "output_tokens": gen_stats.output_tokens_count if gen_stats else 0,
         "total_tokens": gen_stats.total_tokens_count if gen_stats else 0,
+        "cached_tokens": gen_stats.cached_tokens if gen_stats else 0,
         "finish_reason": finish_reason,
     }
     if provider == "anthropic" and gen_stats:

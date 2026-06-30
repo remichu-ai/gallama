@@ -1,44 +1,30 @@
-try:
-    from .exllama import ModelExllama
-except ImportError:
-    ModelExllama = None
+from importlib import import_module
 
-try:
-    from .llamacpp import ModelLlamaCpp
-except ImportError:
-    ModelLlamaCpp = None
+_MODEL_IMPORTS = {
+    "ModelExllama": ".exllama",
+    "ModelLlamaCpp": ".llamacpp",
+    "ModelLlamaCppServer": ".llamacpp_server",
+    "ModelIKLlama": ".ik_llama",
+    "ModelTransformers": ".transformers",
+    "ModelMLXVLM": ".mlx_vllm",
+    "ModelSGLang": ".sglang",
+    "ModelExllamaV3": ".exllamav3",
+    "ModelVLLM": ".vllm",
+}
 
-try:
-    from .llamacpp_server import ModelLlamaCppServer
-except ImportError:
-    ModelLlamaCppServer = None
+__all__ = list(_MODEL_IMPORTS)
 
-try:
-    from .ik_llama import ModelIKLlama
-except ImportError:
-    ModelIKLlama = None
 
-try:
-    from .transformers import ModelTransformers
-except ImportError:
-    ModelTransformers = None
+def __getattr__(name):
+    module_path = _MODEL_IMPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-try:
-    from .mlx_vllm import ModelMLXVLM
-except ImportError:
-    ModelMLXVLM = None
+    try:
+        module = import_module(module_path, __name__)
+        value = getattr(module, name)
+    except ImportError:
+        value = None
 
-try:
-    from .sglang import ModelSGLang
-except ImportError:
-    ModelSGLang = None
-
-try:
-    from .exllamav3 import ModelExllamaV3
-except ImportError:
-    ModelExllamaV3 = None
-
-try:
-    from .vllm import ModelVLLM
-except ImportError:
-    ModelVLLM = None
+    globals()[name] = value
+    return value

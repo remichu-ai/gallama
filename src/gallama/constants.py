@@ -11,6 +11,7 @@ SUPPORTED_BACKENDS = (
     "embedding",
     "faster_whisper",
     "mlx_whisper",
+    "nemo_asr",
     "kokoro",
     None,
 )

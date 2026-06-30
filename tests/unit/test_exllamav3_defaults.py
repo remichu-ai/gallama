@@ -120,6 +120,25 @@ def test_resolve_draft_max_history_uses_draft_model_default_when_omitted():
     assert resolve_draft_max_history("/draft", {}) == 12
 
 
+def test_resolve_draft_max_history_loads_configured_draft_component():
+    class FakeConfig:
+        @staticmethod
+        def from_directory(model_id):
+            assert model_id == "/draft"
+            return SimpleNamespace()
+
+    class FakeModel:
+        @staticmethod
+        def from_config(config, component="text"):
+            assert component == "mtp"
+            return SimpleNamespace(caps={"default_draft_size": 4})
+
+    resolve_draft_max_history.__globals__["Config"] = FakeConfig
+    resolve_draft_max_history.__globals__["Model"] = FakeModel
+
+    assert resolve_draft_max_history("/draft", {}, "mtp") == 4
+
+
 def test_is_insufficient_vram_error_matches_exllamav3_and_cuda_oom_messages():
     assert is_insufficient_vram_error(RuntimeError("Insufficient VRAM in split for model and cache"))
     assert is_insufficient_vram_error(RuntimeError("CUDA out of memory. Tried to allocate 1 GiB"))

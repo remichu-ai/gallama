@@ -13,7 +13,11 @@ router = APIRouter(prefix="/v1", tags=["embedding"])
 async def embeddings(request: Request, query: EmbeddingRequest):
     model_manager = get_model_manager()
     embedding_model = model_manager.get_model(query.model, _type="embedding")
-    # embedding_model = model_manager.embedding_dict[query.model]
+    if embedding_model is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Embedding model not loaded: {query.model}",
+        )
 
     # for embedding, hard enforcement of matching model name
     if query.model != embedding_model.model_name:

@@ -32,6 +32,7 @@ from ..data_classes.responses_api import (
     ResponseReasoningSummaryConfig,
     ResponseReasoningText,
     ResponseUsage,
+    ResponseUsageInputTokensDetails,
     ResponsesCreateRequest,
     ResponsesCreateResponse,
 )
@@ -90,6 +91,7 @@ class BaseAPIFormatter:
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         finish_reason: str = "stop",
+        cached_tokens: Optional[int] = None,
     ) -> List[dict]:
         return []
 
@@ -118,6 +120,7 @@ class BaseAPIFormatter:
         output_tokens: int,
         total_tokens: int,
         finish_reason: str = "stop",
+        cached_tokens: Optional[int] = None,
     ) -> Any:
         raise NotImplementedError
 
@@ -163,6 +166,7 @@ class OpenAIFormatter(BaseAPIFormatter):
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         finish_reason: OpenAIStopReason = "stop",
+        cached_tokens: Optional[int] = None,
     ) -> List[dict]:
         events = []
  
@@ -196,6 +200,7 @@ class OpenAIFormatter(BaseAPIFormatter):
                     prompt_tokens=input_tokens,
                     completion_tokens=output_tokens,
                     total_tokens=total_tokens,
+                    prompt_tokens_details={"cached_tokens": cached_tokens or 0},
                 ),
             )
             events.append({"data": json.dumps(usage_chunk.model_dump(exclude_unset=True))})
@@ -210,6 +215,7 @@ class OpenAIFormatter(BaseAPIFormatter):
         output_tokens: int,
         total_tokens: int,
         finish_reason: str = "stop",
+        cached_tokens: Optional[int] = None,
     ):
         message = {"role": parsed_blocks[0].role if parsed_blocks else "assistant"}
         for block in parsed_blocks:
@@ -244,6 +250,7 @@ class OpenAIFormatter(BaseAPIFormatter):
                 prompt_tokens=input_tokens,
                 completion_tokens=output_tokens,
                 total_tokens=total_tokens,
+                prompt_tokens_details={"cached_tokens": cached_tokens or 0},
             ),
         )
 
@@ -370,12 +377,13 @@ class AnthropicFormatter(BaseAPIFormatter):
         total_tokens: Optional[int] = None,
         finish_reason: AnthropicStopReason = "end_turn",
         stop_sequence: Optional[str] = None,
+        cached_tokens: Optional[int] = None,
     ) -> List[dict]:
         stop_reason = "tool_use" if self._current_api_tag == "tool_calls" else finish_reason
         delta = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": stop_sequence},
-            "usage": {"output_tokens": output_tokens or 0},
+            "usage": {"input_tokens": input_tokens or 0, "output_tokens": output_tokens or 0},
         }
         return [
             {"event": "message_delta", "data": json.dumps(delta)},
@@ -485,6 +493,7 @@ class AnthropicFormatter(BaseAPIFormatter):
         total_tokens: int,
         finish_reason: str = "end_turn",
         stop_sequence: Optional[str] = None,
+        cached_tokens: Optional[int] = None,
     ):
         content_blocks = []
         for block in parsed_blocks:
@@ -568,11 +577,13 @@ class ResponsesFormatter(BaseAPIFormatter):
         input_tokens: Optional[int],
         output_tokens: Optional[int],
         total_tokens: Optional[int],
+        cached_tokens: Optional[int] = None,
     ) -> Optional[ResponseUsage]:
         if input_tokens is None and output_tokens is None and total_tokens is None:
             return None
         return ResponseUsage(
             input_tokens=input_tokens or 0,
+            input_tokens_details=ResponseUsageInputTokensDetails(cached_tokens=cached_tokens or 0),
             output_tokens=output_tokens or 0,
             total_tokens=total_tokens or 0,
         )
@@ -584,6 +595,7 @@ class ResponsesFormatter(BaseAPIFormatter):
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ) -> ResponsesCreateResponse:
         conversation_id = self.request_model.get_conversation_id()
         return ResponsesCreateResponse(
@@ -609,7 +621,7 @@ class ResponsesFormatter(BaseAPIFormatter):
             tools=self._tools_payload(),
             top_p=self.request_model.top_p,
             truncation=self.request_model.truncation,
-            usage=self._usage_payload(input_tokens, output_tokens, total_tokens),
+            usage=self._usage_payload(input_tokens, output_tokens, total_tokens, cached_tokens),
             user=self.request_model.user,
             metadata=self.request_model.metadata,
         )
@@ -962,6 +974,7 @@ class ResponsesFormatter(BaseAPIFormatter):
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         finish_reason: str = "stop",
+        cached_tokens: Optional[int] = None,
     ) -> List[dict]:
         response = self._response_payload(
             status="completed",
@@ -969,6 +982,7 @@ class ResponsesFormatter(BaseAPIFormatter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
         )
         return [self._event("response.completed", {"type": "response.completed", "response": response})]
 
@@ -977,6 +991,7 @@ class ResponsesFormatter(BaseAPIFormatter):
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
     ) -> ResponsesCreateResponse:
         return self._response_payload(
             status="completed",
@@ -984,6 +999,7 @@ class ResponsesFormatter(BaseAPIFormatter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
         )
 
     def non_stream_response(
@@ -993,6 +1009,7 @@ class ResponsesFormatter(BaseAPIFormatter):
         output_tokens: int,
         total_tokens: int,
         finish_reason: str = "stop",
+        cached_tokens: Optional[int] = None,
     ):
         output: List[Any] = []
         current_message: Optional[ResponseOutputMessage] = None
@@ -1038,4 +1055,5 @@ class ResponsesFormatter(BaseAPIFormatter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
         )

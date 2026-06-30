@@ -743,6 +743,7 @@ Typical keys:
 
 - `backend`: backend name such as `exllama`, `exllamav3`, `llama_cpp`, `llama_cpp_server`, `ik_llama`, `transformers`, `embedding`, or `kokoro`
 - `model_id`: local path to the model or model directory
+- `alias` / `aliases`: optional alternate API model name(s). `/v1/models` returns both the config model name and aliases, and requests can use either name.
 - `prompt_template`: prompt formatter to use for the model family
 - `gpus`: usually `auto`, but can also be a per-GPU split
 - `reserve_vram`: ExLlamaV3 auto-mode reserve in GB per visible GPU. Scalar applies to all visible GPUs; list values follow the final logical CUDA order after `CUDA_VISIBLE_DEVICES`
@@ -991,6 +992,12 @@ To also write the same CLI logs to a file:
 gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" `--log-file ./log/gallama.log`
 ```
 
+To keep terminal verbosity unchanged while writing detailed logs to an auto-named temp file:
+
+```shell
+gallama run -id "model_name=minimax model_id=/path/to/model backend=exllamav3" --auto-log
+```
+
 To control log verbosity:
 
 ```shell
@@ -1010,6 +1017,7 @@ Useful optional arguments:
 - `strict=True`
 - `max_concurrent_requests=<n>`
 - `--log-file ./log/gallama.log` to mirror CLI logs into a file
+- `--auto-log` to write maximum-verbosity logs to `/tmp/gallama-<model>-<timestamp>.log` without increasing terminal verbosity
 - `-v` to enable debug logging while still truncating large base64 image payloads in API request logs
 - `-vv` to enable maximum verbosity, including full base64 image payloads in API request logs
 

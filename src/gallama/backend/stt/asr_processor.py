@@ -66,7 +66,7 @@ class ASRProcessor:
 
         self.vad = None
         if self.vad_enable:
-            self.initialize_vad(self.vad_config)
+            self.vad_enable = self.initialize_vad(self.vad_config)
 
         self.vad_speech_active = False
         self.vad_start_sent = False
@@ -204,9 +204,15 @@ class ASRProcessor:
             buffer.is_processing = False
             return None, None, "", vad_events
 
-    def initialize_vad(self, vad_config: TurnDetectionConfig):
+    def initialize_vad(self, vad_config: TurnDetectionConfig) -> bool:
         logger.info("Initializing VAD processor")
-        self.vad = VADProcessor(vad_config)
+        try:
+            self.vad = VADProcessor(vad_config)
+            return True
+        except Exception as exc:
+            logger.error(f"VAD initialization failed; disabling VAD: {str(exc)}")
+            self.vad = None
+            return False
 
     def update_vad_config(self, vad_config: TurnDetectionConfig):
         """
@@ -225,8 +231,7 @@ class ASRProcessor:
             # Initialize VAD and the VAD audio buffer if not already initialized
             if self.vad_audio_buffer is None:
                 self.vad_audio_buffer = AudioBufferWithTiming(sample_rate=self.SAMPLING_RATE)
-            self.initialize_vad(self.vad_config)
-            self.vad_enable = True
+            self.vad_enable = self.initialize_vad(self.vad_config)
         else:
             self.vad = None
             self.vad_enable = False
@@ -252,6 +257,50 @@ class ASRProcessor:
         self.vad_end_sent = False
         if self.vad:
             self.vad.reset()
+
+    def supports_native_streaming(self) -> bool:
+        return hasattr(self.asr, "create_streaming_session")
+
+    def create_native_streaming_session(self, language: Optional[LanguageType] = None):
+        if not self.supports_native_streaming():
+            return None
+        return self.asr.create_streaming_session(language=language)
+
+    def process_vad_events(self, audio_chunk: Optional[np.ndarray] = None, is_final: bool = False):
+        if not self.vad_enable or not self.vad:
+            return []
+
+        buffer = self.vad_audio_buffer
+        if audio_chunk is not None and len(audio_chunk) > 0:
+            buffer.add_chunk(audio_chunk)
+
+        vad_events = []
+        current_offset = buffer.last_processed_sample_vad
+        vad_result_start, vad_result_end = self.vad.process_chunk(buffer, current_offset, is_final=is_final)
+
+        if vad_result_start and vad_result_start['speech_detected'] and not self.vad_speech_active and not self.vad_start_sent:
+            self.vad_speech_active = True
+            self.vad_start_sent = True
+            self.vad_end_sent = False
+            speech_start_ms = vad_result_start.get('start_time', 0.0)
+            vad_events.append({
+                'type': 'start',
+                'timestamp_ms': int(speech_start_ms),
+                'confidence': vad_result_start.get('confidence', 0.0)
+            })
+
+        if vad_result_end and (vad_result_end['speech_ended'] or (is_final and self.vad_speech_active)) and not self.vad_end_sent:
+            self.vad_speech_active = False
+            self.vad_end_sent = True
+            self.vad_start_sent = False
+            speech_end_ms = vad_result_end.get("end_time") if self.vad else buffer.get_time_ms(current_offset)
+            vad_events.append({
+                'type': 'end',
+                'timestamp_ms': int(speech_end_ms),
+                'confidence': vad_result_end.get('confidence', 0.0)
+            })
+
+        return vad_events
 
 
     def save_debug_audio(self, audio_data: np.ndarray, suffix: str = ""):

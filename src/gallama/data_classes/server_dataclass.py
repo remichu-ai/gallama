@@ -17,6 +17,10 @@ class ModelInstanceInfo(BaseModel):
     status: str
     model_type: Literal["stt", "llm", "tts", "embedding", "reranker"]
     strict: bool = Field(description="whether require api call to match model name or not", default=False)
+    aliases: List[str] = Field(
+        description="alternate names accepted for this loaded model instance",
+        default_factory=list,
+    )
     modalities: List[str] = Field(
         description="modalities reported by the loaded model instance",
         default_factory=list,

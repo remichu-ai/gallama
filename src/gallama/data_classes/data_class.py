@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint, root_validator
+from pydantic import AliasChoices, BaseModel, Field, validator, ConfigDict, RootModel, field_validator, constr, model_validator, HttpUrl, conint, root_validator
 from typing import Optional, Literal, List, Dict, Union, Any, Type, Callable, Set
 import asyncio
 import os
@@ -348,7 +348,7 @@ class ChatMLQuery(BaseModel):
         default=None,
         description="Budget for the preliminary thinking/reasoning pass. Defaults to max(4096, max_tokens * 2)."
     )
-    reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = "medium"
+    reasoning_effort: Optional[Literal[None, "minimal", "low", "medium", "high"]] = "high"
     store: Optional[bool] = Field(
         description="Whether or not to store the output of this chat completion request for use in model distillation or evals products.",
         default=False,
@@ -521,10 +521,14 @@ class ChatMessage(BaseModel):
             raise ValueError(f"Unsupported role: {self.role}")
 
 
+class PromptTokensDetails(BaseModel):
+    cached_tokens: int = 0
+
 class UsageResponse(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    prompt_tokens_details: Optional[PromptTokensDetails] = None
 
 OpenAIStopReason = Literal["stop", "length", "tool_calls", "content_filter"]
 AnthropicStopReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded"]
@@ -801,6 +805,7 @@ SUPPORTED_BACKENDS = [
     "reranker",
     "faster_whisper",
     "mlx_whisper",
+    "nemo_asr",
     "kokoro",
     None
 ]
@@ -808,6 +813,11 @@ SUPPORTED_BACKENDS = [
 class ModelSpec(BaseModel):
     model_id: Optional[str] = Field(description='id of the model which should be the path to the model', default=None)
     model_name: Optional[str] = Field(description='name of the model, which is the key inside yml configuration file', default=None)
+    aliases: List[str] = Field(
+        description='alternate names accepted for API requests and shown in model listings',
+        default_factory=list,
+        validation_alias=AliasChoices('aliases', 'alias'),
+    )
     model_type: Optional[Literal["stt", "llm", "tts", "embedding", "reranker", None]] = Field(description='type of the model, will be automatically determined based on backend', default=None)
     gpus: Optional[Union[Literal["auto"], List[float]]] = Field(description='VRam usage for each GPU', default="auto")
     reserve_vram: Optional[Union[float, List[float]]] = Field(
@@ -864,7 +874,7 @@ class ModelSpec(BaseModel):
     language: Optional[str] = Field(description="language of the audio", default="auto")
 
     # dont allow non recognizable option
-    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=())  # disable protected_namespaces due to it field use model_ in the name
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, protected_namespaces=(), populate_by_name=True)  # disable protected_namespaces due to it field use model_ in the name
 
 
     @validator('gpus', pre=True, always=True)
@@ -875,6 +885,24 @@ class ModelSpec(BaseModel):
             # Convert the dict to a list based on GPU IDs
             return [v.get(i, 0.0) for i in range(torch.cuda.device_count())]
         return v
+
+    @field_validator('aliases', mode='before')
+    @classmethod
+    def validate_aliases(cls, v):
+        if v is None or v == "":
+            return []
+        if isinstance(v, str):
+            return [alias.strip() for alias in v.split(',') if alias.strip()]
+        if isinstance(v, (list, tuple, set)):
+            aliases = []
+            for alias in v:
+                if not isinstance(alias, str):
+                    raise ValueError("model aliases must be strings")
+                alias = alias.strip()
+                if alias:
+                    aliases.append(alias)
+            return aliases
+        raise ValueError("'aliases' must be a string or list of strings")
 
     @field_validator('env', mode='before')
     @classmethod
@@ -962,7 +990,7 @@ class ModelSpec(BaseModel):
             return None
         elif backend in ["exllama", "llama_cpp", "llama_cpp_server", "ik_llama", "transformers", "mlx_vlm", "sglang", "exllamav3", "vllm"]:
             return "llm"
-        elif backend in ["faster_whisper", "mlx_whisper"]:
+        elif backend in ["faster_whisper", "mlx_whisper", "nemo_asr"]:
             return "stt"
         elif backend in ["kokoro"]:
             return "tts"
@@ -988,6 +1016,7 @@ class ModelSpec(BaseModel):
         if model_id:
             model_id = input_dict.get('model_id').strip("'")  # Remove single quotes if present
         model_name = input_dict.get('model_name')
+        aliases = input_dict.get('aliases', input_dict.get('alias', []))
         max_seq_len = input_dict.get('max_seq_len', None)
         gpus = input_dict.get('gpus')
         reserve_vram = input_dict.get('reserve_vram')
@@ -1043,7 +1072,7 @@ class ModelSpec(BaseModel):
         if draft_cache_size:
             draft_cache_size = int(draft_cache_size)
 
-        return cls(model_id=model_id, model_name=model_name, model_type=model_type,
+        return cls(model_id=model_id, model_name=model_name, aliases=aliases, model_type=model_type,
                    gpus=gpus, reserve_vram=reserve_vram, cache_size=cache_size, backend=backend, cache_quant=cache_quant,
                    strict=strict,
                    voice=voice,

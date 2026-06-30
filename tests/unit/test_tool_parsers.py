@@ -10,6 +10,7 @@ from gallama.backend.llm.prompt_engine.by_model.gemma4 import gemma4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.gpt_oss import gpt_oss_tool_parser, gpt_oss
 from gallama.backend.llm.prompt_engine.by_model.glm4 import glm4_tool_parser
 from gallama.backend.llm.prompt_engine.by_model.minimax import minimax_tool_parser
+from gallama.backend.llm.prompt_engine.by_model.minimax_m3 import minimax_m3_tool_parser, minimax_m3
 from gallama.backend.llm.prompt_engine.by_model.mimo import mimo_tool_parser, mimo
 from gallama.backend.llm.prompt_engine.by_model.ministral3 import ministral3_tool_parser
 from gallama.backend.llm.prompt_engine.pe_transformers import PromptEngineTransformers
@@ -54,6 +55,7 @@ def test_model_special_tag_maps_exllamav3_scoped_aliases_to_expected_parsers():
     assert MODEL_SPECIAL_TAG["ministral3"] is MODEL_SPECIAL_TAG["mistral3"]
     assert MODEL_SPECIAL_TAG["mistral4"] is MODEL_SPECIAL_TAG["mistral3"]
     assert MODEL_SPECIAL_TAG["mimo_v2"] is mimo
+    assert MODEL_SPECIAL_TAG["minimax_m3_vl"] is minimax_m3
 
 
 def test_default_tool_parser_supports_multiple_json_objects():
@@ -358,6 +360,46 @@ def test_minimax_tool_parser_supports_multiple_tool_calls():
     assert _arguments(parsed[1]) == {"city": "Tokyo"}
 
 
+def test_minimax_m3_tool_parser_supports_namespaced_xml_tool_calls():
+    tool_text = """
+    ]<]minimax[>[<invoke name="get_weather">
+    ]<]minimax[>[<city>"Seoul"]<]minimax[>[</city>
+    ]<]minimax[>[<options>]<]minimax[>[<units>metric]<]minimax[>[</units>]<]minimax[>[<alerts>true]<]minimax[>[</alerts>]<]minimax[>[</options>
+    ]<]minimax[>[</invoke>
+    ]<]minimax[>[<invoke name="get_weather">
+    ]<]minimax[>[<city>"Tokyo"]<]minimax[>[</city>
+    ]<]minimax[>[</invoke>
+    """
+
+    parsed = minimax_m3_tool_parser(tool_text)
+
+    assert len(parsed) == 2
+    assert _tool_name(parsed[0]) == "get_weather"
+    assert _arguments(parsed[0]) == {"city": "Seoul", "options": {"units": "metric", "alerts": True}}
+    assert _arguments(parsed[1]) == {"city": "Tokyo"}
+
+
+def test_minimax_m3_stream_parser_supports_thinking_and_tool_calls():
+    parser = StreamParserByTag(tag_definitions=list(MODEL_SPECIAL_TAG["minimax_m3_vl"].values()))
+    generated = (
+        "<mm:think>Need weather data</mm:think>"
+        "]<]minimax[>[<tool_call>"
+        "]<]minimax[>[<invoke name=\"get_weather\">"
+        "]<]minimax[>[<city>Seoul]<]minimax[>[</city>"
+        "]<]minimax[>[</invoke>"
+        "]<]minimax[>[</tool_call>"
+    )
+
+    parsed_blocks = parser.parse_full_text(generated)
+
+    assert [tag.api_tag for tag, _ in parsed_blocks] == ["reasoning", "tool_calls"]
+    assert parsed_blocks[0][1] == "Need weather data"
+
+    parsed_tools = parsed_blocks[1][0].post_processor(parsed_blocks[1][1])
+    assert len(parsed_tools) == 1
+    assert _arguments(parsed_tools[0]) == {"city": "Seoul"}
+
+
 def test_mimo_tool_parser_supports_multiple_tool_calls():
     tool_text = """
     <tool_call>
@@ -601,7 +643,8 @@ class _ReasoningEffortProbeTokenizer:
             raise TypeError("unexpected keyword argument")
 
         reasoning_effort = kwargs.get("reasoning_effort", "missing")
-        return f"{self.chat_template}|reasoning_effort={reasoning_effort}"
+        thinking_mode = kwargs.get("thinking_mode", "missing")
+        return f"{self.chat_template}|reasoning_effort={reasoning_effort}|thinking_mode={thinking_mode}"
 
 
 class _TemplateProbeTokenizer:
@@ -610,6 +653,7 @@ class _TemplateProbeTokenizer:
         self.rendered_prompt = rendered_prompt
 
     def apply_chat_template(self, **kwargs):
+        self.last_kwargs = kwargs
         return self.rendered_prompt
 
 
@@ -646,6 +690,10 @@ def test_resolve_vision_token_knows_mimo_v2_placeholder():
     assert resolve_vision_token("mimo_v2", tokenizer=None) == "<|vision_start|><|image_pad|><|vision_end|>"
 
 
+def test_resolve_vision_token_knows_step3p7_placeholder():
+    assert resolve_vision_token("step3p7", tokenizer=None) == "<im_patch>"
+
+
 def test_resolve_vision_token_infers_sequence_from_tokenizer_metadata():
     tokenizer = _VisionProbeTokenizer(
         all_special_tokens=["<|vision_bos|>", "<|IMAGE|>", "<|vision_eos|>"],
@@ -657,6 +705,14 @@ def test_resolve_vision_token_infers_sequence_from_tokenizer_metadata():
     )
 
     assert resolve_vision_token("unknown_model_type", tokenizer) == "<|vision_bos|><|IMAGE|><|vision_eos|>"
+
+
+def test_resolve_vision_token_infers_im_patch_from_tokenizer_metadata():
+    tokenizer = _VisionProbeTokenizer(
+        added_tokens_decoder={1: _VisionProbeToken("<im_patch>")},
+    )
+
+    assert resolve_vision_token("unknown_model_type", tokenizer) == "<im_patch>"
 
 
 def test_transformers_ensure_vision_token_backfills_from_tokenizer_metadata():
@@ -686,6 +742,13 @@ def test_transformers_reasoning_effort_probe_rejects_unsupported_template():
     assert engine._template_supports_reasoning_effort(no_runtime_support) is False
 
 
+def test_transformers_thinking_mode_probe_detects_supported_template():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    tokenizer = _ReasoningEffortProbeTokenizer("{{ thinking_mode }}")
+
+    assert engine._template_supports_thinking_mode(tokenizer) is True
+
+
 def test_transformers_thinking_detection_handles_mistral_think_tags():
     engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
     engine._transformer_tokenizer = _ReasoningEffortProbeTokenizer(
@@ -693,6 +756,46 @@ def test_transformers_thinking_detection_handles_mistral_think_tags():
     )
 
     assert engine.check_thinking_model() is True
+
+
+def test_transformers_thinking_detection_handles_minimax_m3_think_tags():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    engine._transformer_tokenizer = _ReasoningEffortProbeTokenizer(
+        "{%- set think_begin_token = '<mm:think>' -%}{{ thinking_mode }}"
+    )
+
+    assert engine.check_thinking_model() is True
+
+
+def test_transformers_get_prompt_passes_thinking_mode_for_minimax_m3_templates():
+    engine = PromptEngineTransformers.__new__(PromptEngineTransformers)
+    engine._transformer_tokenizer = _TemplateProbeTokenizer(
+        chat_template="{{ thinking_mode }}",
+        rendered_prompt="<mm:think>",
+    )
+    engine.thinking_tag = MODEL_SPECIAL_TAG["minimax_m3_vl"]["thinking"]
+    engine.is_thinking_model = True
+    engine.support_developer_role = True
+    engine.support_list_content = True
+    engine.support_thinking_mode = True
+    engine.reasoning_effort_mode = "none"
+    engine.model_type = "minimax_m3_vl"
+    engine._vision_token = None
+
+    query = ChatMLQuery.model_validate(
+        {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+            ],
+            "reasoning_effort": None,
+        }
+    )
+
+    prompt, starting_tag = engine.get_prompt(query=query)
+
+    assert engine._transformer_tokenizer.last_kwargs["thinking_mode"] == "disabled"
+    assert prompt == "<mm:think>\n</mm:think>"
+    assert starting_tag.tag_type == "text"
 
 
 def test_transformers_get_prompt_does_not_append_extra_closed_gemma4_thought_end_marker():

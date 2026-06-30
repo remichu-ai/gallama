@@ -1,5 +1,5 @@
 from ..data_classes import ModelSpec
-from typing import Dict, Any, Literal, Optional
+from typing import Dict, Any, Literal, Optional, Tuple
 from ..logger import logger
 from ..logger.logger import basic_log_extra
 from ..config.config_manager import ConfigManager
@@ -10,14 +10,19 @@ class ModelManager:
     def __init__(self):
         self.llm_dict: Dict[str, Any] = {}               # dict to all llm models process object
         self.llm_dict_non_strict: Dict[str, Any] = {}
+        self.llm_aliases: Dict[str, str] = {}
         self.tts_dict: Dict[str, Any] = {}
         self.tts_dict_non_strict: Dict[str, Any] = {}
+        self.tts_aliases: Dict[str, str] = {}
         self.stt_dict: Dict[str, Any] = {}
         self.stt_dict_non_strict: Dict[str, Any] = {}
+        self.stt_aliases: Dict[str, str] = {}
         self.embedding_dict: Dict[str, Any] = {}
         self.embedding_dict_non_strict: Dict[str, Any] = {}
+        self.embedding_aliases: Dict[str, str] = {}
         self.reranker_dict: Dict[str, Any] = {}
         self.reranker_dict_non_strict: Dict[str, Any] = {}
+        self.reranker_aliases: Dict[str, str] = {}
         self.config_manager = ConfigManager()
         self.model_ready = False
 
@@ -43,29 +48,33 @@ class ModelManager:
                     except Exception as exc:
                         logger.error(f"Failed to close model resource cleanly: {exc}")
 
-    def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding", "reranker"]) -> Optional[Any]:
-        # Determine which dictionaries to use based on the type
+    def _get_model_dicts(
+        self,
+        _type: Literal["llm", "tts", "stt", "embedding", "reranker"]
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, str]]:
         if _type == "llm":
-            strict_dict = self.llm_dict
-            non_strict_dict = self.llm_dict_non_strict
+            return self.llm_dict, self.llm_dict_non_strict, self.llm_aliases
         elif _type == "tts":
-            strict_dict = self.tts_dict
-            non_strict_dict = self.tts_dict_non_strict
+            return self.tts_dict, self.tts_dict_non_strict, self.tts_aliases
         elif _type == "stt":
-            strict_dict = self.stt_dict
-            non_strict_dict = self.stt_dict_non_strict
+            return self.stt_dict, self.stt_dict_non_strict, self.stt_aliases
         elif _type == "embedding":
-            strict_dict = self.embedding_dict
-            non_strict_dict = self.embedding_dict_non_strict
+            return self.embedding_dict, self.embedding_dict_non_strict, self.embedding_aliases
         elif _type == "reranker":
-            strict_dict = self.reranker_dict
-            non_strict_dict = self.reranker_dict_non_strict
+            return self.reranker_dict, self.reranker_dict_non_strict, self.reranker_aliases
         else:
             raise ValueError(f"Invalid model type: {_type}")
+
+    def get_model(self, model_name: str, _type: Literal["llm", "tts", "stt", "embedding", "reranker"]) -> Optional[Any]:
+        strict_dict, non_strict_dict, aliases = self._get_model_dicts(_type)
 
         # Check if the model exists in the strict dictionary
         if model_name in strict_dict:
             return strict_dict[model_name]
+
+        canonical_name = aliases.get(model_name)
+        if canonical_name in strict_dict:
+            return strict_dict[canonical_name]
 
         # If not, check if there are any models in the non-strict dictionary
         if non_strict_dict:
@@ -75,27 +84,43 @@ class ModelManager:
         # If no model is found, return None
         return None
 
+    def list_model_ids(self) -> list[str]:
+        model_ids = []
+        seen = set()
+
+        for strict_dict, _, aliases in (
+            self._get_model_dicts("llm"),
+            self._get_model_dicts("stt"),
+            self._get_model_dicts("tts"),
+            self._get_model_dicts("embedding"),
+            self._get_model_dicts("reranker"),
+        ):
+            for model_name in strict_dict.keys():
+                if model_name not in seen:
+                    model_ids.append(model_name)
+                    seen.add(model_name)
+            for alias in aliases.keys():
+                if alias not in seen:
+                    model_ids.append(alias)
+                    seen.add(alias)
+
+        return model_ids
+
     def _update_model(self, model_name: str, model_spec: ModelSpec, model_object: Any):
-        if model_spec.model_type == "llm":
-            self.llm_dict[model_name] = model_object
-            if not model_spec.strict:
-                self.llm_dict_non_strict[model_name] = model_object
-        elif model_spec.model_type == "tts":
-            self.tts_dict[model_name] = model_object
-            if not model_spec.strict:
-                self.tts_dict_non_strict[model_name] = model_object
-        elif model_spec.model_type == "stt":
-            self.stt_dict[model_name] = model_object
-            if not model_spec.strict:
-                self.stt_dict_non_strict[model_name] = model_object
-        elif model_spec.model_type == "embedding":
-            self.embedding_dict[model_name] = model_object
-            if not model_spec.strict:
-                self.embedding_dict_non_strict[model_name] = model_object
-        elif model_spec.model_type == "reranker":
-            self.reranker_dict[model_name] = model_object
-            if not model_spec.strict:
-                self.reranker_dict_non_strict[model_name] = model_object
+        strict_dict, non_strict_dict, aliases = self._get_model_dicts(model_spec.model_type)
+        strict_dict[model_name] = model_object
+        if not model_spec.strict:
+            non_strict_dict[model_name] = model_object
+
+        for alias in model_spec.aliases:
+            if alias == model_name:
+                continue
+            existing_model_name = aliases.get(alias)
+            if existing_model_name and existing_model_name != model_name:
+                raise ValueError(f"Alias '{alias}' is already assigned to model '{existing_model_name}'")
+            if alias in strict_dict and alias != model_name:
+                raise ValueError(f"Alias '{alias}' conflicts with loaded model '{alias}'")
+            aliases[alias] = model_name
 
 
     def load_model(self, model_spec: ModelSpec):
@@ -230,6 +255,18 @@ class ModelManager:
             stt = ASRProcessor(asr=stt_base)
 
             # update dict
+            self._update_model(
+                model_name=model_name,
+                model_spec=model_spec,
+                model_object=stt
+            )
+
+        elif model_spec.backend == "nemo_asr":
+            from gallama.backend.stt import ASRProcessor, ASRNeMo
+
+            stt_base = ASRNeMo(model_spec=model_spec)
+            stt = ASRProcessor(asr=stt_base)
+
             self._update_model(
                 model_name=model_name,
                 model_spec=model_spec,

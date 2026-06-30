@@ -34,7 +34,7 @@ class PromptEngineTransformers:
 
         assert model_path is not None
 
-        self._transformer_tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        self._transformer_tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, fix_mistral_regex=True)
         # patch the template to standardized format
         self.patch_thinking_template()
 
@@ -75,8 +75,10 @@ class PromptEngineTransformers:
         self.is_thinking_model = self.check_thinking_model()
         self.support_list_content = self._template_supports_list_content(self._transformer_tokenizer)
         self.support_developer_role = self._template_supports_developer_role(self._transformer_tokenizer)
-        self.support_reasoning_effort = self._template_supports_reasoning_effort(self._transformer_tokenizer)
-
+        self.reasoning_effort_mode = self._probe_reasoning_effort_mode(self._transformer_tokenizer)
+        self.support_thinking_mode = self._template_supports_thinking_mode(self._transformer_tokenizer)
+        # Legacy attribute: True for both binary and multilevel modes
+        self.support_reasoning_effort = self.reasoning_effort_mode != "none"
 
 
     @property
@@ -117,7 +119,9 @@ class PromptEngineTransformers:
             "message.reasoning",
             "reasoning_content",
             "reasoning_effort",
+            "thinking_mode",
             "<|think|>",
+            "<mm:think>",
             "<|channel>thought",
             "[THINK]",
             "type'] == 'thinking'",
@@ -214,43 +218,86 @@ class PromptEngineTransformers:
 
     @lru_cache(maxsize=1)
     def _template_supports_reasoning_effort(self, tokenizer) -> bool:
+        return self._probe_reasoning_effort_mode(tokenizer) != "none"
+
+    @lru_cache(maxsize=1)
+    def _template_supports_thinking_mode(self, tokenizer) -> bool:
         """
-        Probes whether the tokenizer chat template consumes a custom reasoning_effort
-        kwarg and renders it into the prompt.
+        Probes templates that use a binary thinking_mode kwarg instead of
+        reasoning_effort. MiniMax-M3 uses: enabled / disabled / adaptive.
+        """
+        template = tokenizer.chat_template
+        if not template or "thinking_mode" not in template:
+            return False
+
+        probe_msg = [{"role": "user", "content": "PROBE_TEST_THINKING_MODE"}]
+        base_kwargs = {"tokenize": False, "add_generation_prompt": True}
+
+        try:
+            result_enabled = tokenizer.apply_chat_template(
+                probe_msg, **base_kwargs, thinking_mode="enabled"
+            )
+            result_disabled = tokenizer.apply_chat_template(
+                probe_msg, **base_kwargs, thinking_mode="disabled"
+            )
+        except TypeError:
+            logger.debug("Tokenizer apply_chat_template does not accept thinking_mode kwarg")
+            return False
+        except Exception:
+            logger.debug("Failed to probe thinking_mode support")
+            return False
+
+        return result_enabled != result_disabled
+
+    @lru_cache(maxsize=1)
+    def _probe_reasoning_effort_mode(self, tokenizer) -> Literal["none", "binary", "multilevel"]:
+        """
+        Probes whether the tokenizer chat template supports reasoning_effort, and if so,
+        whether it distinguishes between multiple effort levels or only a binary on/off.
+
+        Returns:
+            "none"       — template does not consume reasoning_effort at all.
+            "binary"     — template consumes reasoning_effort but only as a toggle
+                           (e.g. "none" disables thinking, everything else enables it).
+            "multilevel" — template renders different output for different effort values
+                           (e.g. "low", "medium", "high" produce distinct prompts).
         """
         template = tokenizer.chat_template
         if not template or "reasoning_effort" not in template:
-            return False
+            return "none"
 
         probe_msg = [{"role": "user", "content": "PROBE_TEST_REASONING"}]
+        base_kwargs = {"tokenize": False, "add_generation_prompt": False}
 
         try:
             result_high = tokenizer.apply_chat_template(
-                probe_msg,
-                tokenize=False,
-                add_generation_prompt=False,
-                reasoning_effort="high",
+                probe_msg, **base_kwargs, reasoning_effort="high"
+            )
+            result_medium = tokenizer.apply_chat_template(
+                probe_msg, **base_kwargs, reasoning_effort="medium"
             )
             result_none = tokenizer.apply_chat_template(
-                probe_msg,
-                tokenize=False,
-                add_generation_prompt=False,
-                reasoning_effort="none",
+                probe_msg, **base_kwargs, reasoning_effort="none"
             )
         except TypeError:
             logger.debug("Tokenizer apply_chat_template does not accept reasoning_effort kwarg")
-            return False
+            return "none"
         except Exception:
-            logger.debug("Failed to probe whether reasoning_effort is supported")
-            return False
+            logger.debug("Failed to probe reasoning_effort levels")
+            return "none"
 
-        supports_reasoning_effort = result_high != result_none
-        if supports_reasoning_effort:
-            logger.info("Chat template supports reasoning_effort")
-        else:
+        if result_high == result_none:
             logger.info("Chat template does not render reasoning_effort")
+            return "none"
 
-        return supports_reasoning_effort
+        # Template distinguishes high from none. Check if it also distinguishes
+        # medium from high (multilevel) or treats them the same (binary).
+        if result_high != result_medium:
+            logger.info("Chat template supports multilevel reasoning_effort")
+            return "multilevel"
+
+        logger.info("Chat template supports binary reasoning_effort only")
+        return "binary"
 
     def convert_openai_to_hf_format(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -390,9 +437,14 @@ class PromptEngineTransformers:
             "enable_thinking": enable_thinking,
         }
 
-        if self.support_reasoning_effort:
-            # Some templates, including recent Mistral variants, only expose a binary
-            # reasoning toggle via reasoning_effort = none|high.
+        reasoning_effort_mode = getattr(self, "reasoning_effort_mode", "none")
+        if getattr(self, "support_thinking_mode", False):
+            template_kwargs["thinking_mode"] = "enabled" if enable_thinking else "disabled"
+        elif reasoning_effort_mode == "multilevel" and query.reasoning_effort is not None:
+            # Template supports fine-grained effort levels — pass the raw value
+            template_kwargs["reasoning_effort"] = query.reasoning_effort
+        elif reasoning_effort_mode == "binary":
+            # Template only distinguishes thinking-on from thinking-off
             template_kwargs["reasoning_effort"] = "high" if enable_thinking else "none"
 
         # 4. Get prompt from transformers

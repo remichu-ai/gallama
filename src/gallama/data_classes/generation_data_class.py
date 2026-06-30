@@ -11,8 +11,20 @@ class GenerationStats(BaseModel):
     output_tokens_count: int = Field(description='output tokens count', default=0)
     time_to_first_token: float = Field(description='time to first token', default=0)
     time_generate: float = Field(description='time to generate tokens', default=0)
+    measured_time_generate: Optional[float] = Field(
+        description='client-observed time from first streamed generation result to EOS, if measured by Gallama',
+        default=None,
+    )
     cached_pages: int = Field(description='number of cached pages', default=0)
     cached_tokens: int = Field(description='number of cached tokens', default=0)
+    accepted_draft_tokens: Optional[int] = Field(
+        description='number of speculative draft tokens accepted by the backend, if reported',
+        default=None,
+    )
+    rejected_draft_tokens: Optional[int] = Field(
+        description='number of speculative draft tokens rejected by the backend, if reported',
+        default=None,
+    )
 
     # use Anthropic stop reason here as it cover more scenario than OpenAI
     stop_reason: Optional[AnthropicStopReason] = Field(default="end_turn", description="Anthropic stop reason")
@@ -30,6 +42,12 @@ class GenerationStats(BaseModel):
             return 0
 
     @property
+    def measured_generation_speed(self) -> Optional[float]:
+        if self.measured_time_generate is not None and self.measured_time_generate > 0:
+            return round(self.output_tokens_count / self.measured_time_generate, ndigits=1)
+        return None
+
+    @property
     def total_time(self) -> float:
         return round(self.time_to_first_token + self.time_generate, ndigits=1)
 
@@ -39,6 +57,12 @@ class GenerationStats(BaseModel):
             return round(self.input_tokens_count / self.time_to_first_token, ndigits=1)
         else:
             return 0
+
+    @property
+    def draft_hit_ratio(self) -> Optional[float]:
+        if self.accepted_draft_tokens is None or self.output_tokens_count <= 0:
+            return None
+        return self.accepted_draft_tokens / self.output_tokens_count
 
     def get_openai_stop_reason(self) -> OpenAIStopReason:
         """

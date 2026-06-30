@@ -1,49 +1,32 @@
+from importlib import import_module
+
 from .format_enforcer import SGLangFormatter
 
-# selective import as not all backend available on all platform
-try:
-    from .engine import ModelExllama
-except ImportError:
-    ModelExllama = None
+_MODEL_IMPORTS = {
+    "ModelExllama": ".engine.exllama",
+    "ModelExllamaV3": ".engine.exllamav3",
+    "ModelLlamaCpp": ".engine.llamacpp",
+    "ModelLlamaCppServer": ".engine.llamacpp_server",
+    "ModelIKLlama": ".engine.ik_llama",
+    "ModelTransformers": ".engine.transformers",
+    "ModelMLXVLM": ".engine.mlx_vllm",
+    "ModelSGLang": ".engine.sglang",
+    "ModelVLLM": ".engine.vllm",
+}
 
-# from .engine import ModelExllamaV3
+__all__ = ["SGLangFormatter", *_MODEL_IMPORTS]
 
-try:
-    from .engine import ModelExllamaV3
-except ImportError as e:
-    ModelExllamaV3 = None
 
-try:
-    from .engine import ModelLlamaCpp
-except ImportError:
-    ModelLlamaCpp = None
+def __getattr__(name):
+    module_path = _MODEL_IMPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-try:
-    from .engine import ModelLlamaCppServer
-except ImportError:
-    ModelLlamaCppServer = None
+    try:
+        module = import_module(module_path, __name__)
+        value = getattr(module, name)
+    except ImportError:
+        value = None
 
-try:
-    from .engine import ModelIKLlama
-except ImportError:
-    ModelIKLlama = None
-
-try:
-    from .engine import ModelTransformers
-except ImportError:
-    ModelTransformers = None
-
-try:
-    from .engine import ModelMLXVLM
-except ImportError:
-    ModelMLXVLM = None
-
-try:
-    from .engine import ModelSGLang
-except ImportError:
-    ModelSGLang = None
-
-try:
-    from .engine import ModelVLLM
-except ImportError:
-    ModelVLLM = None
+    globals()[name] = value
+    return value

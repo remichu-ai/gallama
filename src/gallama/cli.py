@@ -3,7 +3,7 @@ import shutil
 from pathlib import Path
 from gallama.config import ConfigManager
 from gallama.logger.logger import logger, get_logger, get_log_level_for_verbosity, set_log_verbosity
-from gallama.server import run_from_script
+from gallama.server import configure_auto_log_args, run_from_script
 from gallama.server_routes import download_model
 from gallama.data_classes.data_class import ModelDownloadSpec, SUPPORTED_BACKENDS
 from rich.markdown import Markdown
@@ -128,6 +128,11 @@ def main_cli():
     serve_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     serve_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
     serve_parser.add_argument(
+        "--auto-log",
+        action="store_true",
+        help="Write maximum-verbosity logs to an auto-named file in the system temp directory without changing terminal verbosity.",
+    )
+    serve_parser.add_argument(
         '-v',
         "--verbose",
         action='count',
@@ -153,6 +158,7 @@ def main_cli():
     )
 
     args = arg_parser.parse_args()
+    configure_auto_log_args(args)
     requested_verbosity = max(
         getattr(args, "global_verbose", 0) or 0,
         getattr(args, "verbose", 0) or 0,

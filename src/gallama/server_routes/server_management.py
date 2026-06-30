@@ -230,7 +230,7 @@ async def list_available_models():
 async def get_models(request: Request):
     server_manager = get_server_manager()
 
-    return build_models_response(server_manager.models.keys(), request.headers)
+    return build_models_response(server_manager.list_model_ids(), request.headers)
 
 
 @router.get("/loading_status")

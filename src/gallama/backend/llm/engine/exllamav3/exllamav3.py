@@ -1,4 +1,6 @@
+import os
 import re
+import time
 from gallama.backend.llm.engine.base import (
     ModelInterface,
 )
@@ -130,7 +132,11 @@ def _align_cache_size(cache_size: int | None, max_seq_len: int) -> int:
     return ((max(base_size, max_seq_len) + 255) // 256) * 256
 
 
-def _resolve_draft_max_history(draft_model_id: str | None, backend_extra_args: Dict | None) -> int:
+def _resolve_draft_max_history(
+    draft_model_id: str | None,
+    backend_extra_args: Dict | None,
+    draft_model_component: str = "text",
+) -> int:
     """Resolve recurrent cache history needed for speculative verification."""
 
     draft_extra = _normalize_generator_kwargs(backend_extra_args)
@@ -142,7 +148,10 @@ def _resolve_draft_max_history(draft_model_id: str | None, backend_extra_args: D
         return 0
 
     draft_config = Config.from_directory(draft_model_id)
-    draft_model = Model.from_config(draft_config)
+    if draft_model_component == "text":
+        draft_model = Model.from_config(draft_config)
+    else:
+        draft_model = Model.from_config(draft_config, component=draft_model_component)
     return draft_model.caps.get("default_draft_size") or 4
 
 
@@ -236,6 +245,106 @@ def _resolve_load_kwargs(gpus, reserve_vram, tensor_parallel: bool, num_devices:
     raise ValueError("Device map should be either 'auto' or a GPU split list")
 
 
+def _gallama_config_dir() -> str:
+    """The Gallama config directory (~/gallama or $GALLAMA_HOME_PATH)."""
+    home = os.environ.get("GALLAMA_HOME_PATH")
+    if home:
+        return os.path.abspath(home)
+    return os.path.join(os.path.expanduser("~"), "gallama")
+
+
+def _resolve_topology_path(path: str) -> str:
+    """Resolve a segment-topology / placement YAML path.
+
+    Absolute paths and paths that resolve against the current working directory are used as-is.
+    Bare relative paths are also looked up under the Gallama config directory (~/gallama), so a
+    user can keep the topology/placement YAML next to model_config.yaml and reference it by name.
+    """
+    if os.path.isabs(path) or os.path.exists(path):
+        return path
+    candidate = os.path.join(_gallama_config_dir(), path)
+    if os.path.exists(candidate):
+        return candidate
+    return path
+
+
+def _materialize_segment_topology(inline: Dict) -> str:
+    """Write an inline segment-topology mapping to a temp YAML file and return its path.
+
+    Lets users embed the ExLlamaV3 segmented PP+TP topology directly in model_config.yaml under
+    ``backend_extra_args.segment_topology`` instead of pointing ``segment_topology_yaml`` at an
+    external file. The temp file is removed at process exit.
+    """
+    if not isinstance(inline, dict):
+        raise ValueError("backend_extra_args.segment_topology must be a mapping with a 'segments' list")
+    import atexit
+    import tempfile
+    import yaml
+
+    fd, path = tempfile.mkstemp(prefix="gallama_segment_topology_", suffix=".yaml", text=True)
+    with os.fdopen(fd, "w") as f:
+        yaml.safe_dump(inline, f, sort_keys=False)
+    atexit.register(lambda p=path: _cleanup_topology_temp_file(p))
+    return path
+
+
+def _cleanup_topology_temp_file(path: str):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _apply_exllamav3_tp_load_options(load_kwargs: Dict, backend_extra_args, tensor_parallel: bool):
+    """Resolve tensor-parallel / segmented-topology load options from backend_extra_args into load_kwargs.
+
+    Handles three ExLlamaV3 load customizations:
+      * ``tp_backend`` and ``tp_options`` (passed straight through to model.load()).
+      * a top-level ``placement_yaml`` convenience alias that is injected into ``tp_options.placement_yaml``
+        (the manual TP placement overrides). In segmented mode the per-segment placement lives inside the
+        topology YAML's segment ``options.placement_yaml`` and this alias is ignored.
+      * the segmented PP+TP topology, specified either inline as ``segment_topology`` or as a file path via
+        ``segment_topology_yaml`` (e.g. tensor-parallel across GPU pairs). Requires ``tensor_parallel``.
+    """
+    extra = backend_extra_args or {}
+
+    tp_backend = extra.get("tp_backend")
+    if tp_backend:
+        load_kwargs["tp_backend"] = tp_backend
+
+    raw_tp_options = extra.get("tp_options")
+    if raw_tp_options is not None and not isinstance(raw_tp_options, dict):
+        raise ValueError("backend_extra_args.tp_options must be a mapping")
+    tp_options = dict(raw_tp_options or {})
+    placement_yaml = extra.get("placement_yaml")
+    if placement_yaml:
+        if tp_options.get("placement_yaml") not in (None, placement_yaml):
+            raise ValueError(
+                "Conflicting placement_yaml set under both backend_extra_args.placement_yaml "
+                "and backend_extra_args.tp_options.placement_yaml"
+            )
+        tp_options["placement_yaml"] = _resolve_topology_path(str(placement_yaml))
+    if tp_options:
+        load_kwargs["tp_options"] = tp_options
+
+    segment_topology = extra.get("segment_topology")
+    segment_topology_yaml = extra.get("segment_topology_yaml")
+    if segment_topology is not None and segment_topology_yaml is not None:
+        raise ValueError(
+            "Specify either backend_extra_args.segment_topology (inline) or "
+            "segment_topology_yaml (file path), not both"
+        )
+    if segment_topology is not None:
+        segment_topology_yaml = _materialize_segment_topology(segment_topology)
+    if segment_topology_yaml:
+        if not tensor_parallel:
+            raise ValueError(
+                "segment_topology / segment_topology_yaml requires tensor parallel: set `tp: true` "
+                "for this model in model_config.yaml"
+            )
+        load_kwargs["segment_topology_yaml"] = _resolve_topology_path(str(segment_topology_yaml))
+
+
 def _resolve_vision_device(vision_device, num_devices: int):
     if vision_device is None:
         return None
@@ -258,6 +367,14 @@ def _resolve_vision_device(vision_device, num_devices: int):
 class ModelExllamaV3(ModelInterface):
     def __init__(self, model_spec:ModelSpec):
         super().__init__(model_spec)
+        self.draft_model_component = self.backend_extra_args.get("draft_model_component", "text")
+        if _is_truthy(self.backend_extra_args.get("mtp_draft")):
+            if self.draft_model_id and os.path.abspath(self.draft_model_id) != os.path.abspath(self.model_id):
+                raise ValueError("ExLlamaV3 MTP draft uses the main model directory; remove draft_model_id or set it to model_id")
+            self.draft_model_id = self.model_id
+            self.draft_model_component = "mtp"
+        elif self.draft_model_component == "mtp" and not self.draft_model_id:
+            self.draft_model_id = self.model_id
         self.model, self.tokenizer, self.cache, self.processor = self.load_model()
 
     @property
@@ -272,7 +389,11 @@ class ModelExllamaV3(ModelInterface):
 
         # Resolve draft history before cache construction because ExLlamaV3's
         # recurrent cache must reserve rollback space up front.
-        draft_num_tokens = _resolve_draft_max_history(self.draft_model_id, self.backend_extra_args)
+        draft_num_tokens = _resolve_draft_max_history(
+            self.draft_model_id,
+            self.backend_extra_args,
+            self.draft_model_component,
+        )
 
         model, tokenizer, cache, processor = self.load_model_exllama(
             model_id=self.model_id,
@@ -317,6 +438,7 @@ class ModelExllamaV3(ModelInterface):
                     load_tokenizer=False,
                     load_processor=False,
                     max_history=draft_num_tokens,
+                    model_component=self.draft_model_component,
                 )
             except RuntimeError:
                 _reset_cuda_memory_fraction()
@@ -341,12 +463,18 @@ class ModelExllamaV3(ModelInterface):
         load_tokenizer=True,
         load_processor=True,
         max_history=0,
+        model_component="text",
     ):
         """This function return the model and its tokenizer"""
         logger.info("Loading model: " + model_id, extra=basic_log_extra())
+        if model_component != "text":
+            logger.info("Loading model component: " + model_component, extra=basic_log_extra())
 
         config = Config.from_directory(model_id)
-        model = Model.from_config(config)
+        if model_component == "text":
+            model = Model.from_config(config)
+        else:
+            model = Model.from_config(config, component=model_component)
         tokenizer = Tokenizer.from_config(config) if load_tokenizer else None
         processor = None    # placeholder for visual processing tower
 
@@ -428,10 +556,17 @@ class ModelExllamaV3(ModelInterface):
             num_devices=torch.cuda.device_count(),
         )
 
-        tp_backend = (backend_extra_args or {}).get("tp_backend")
-        if tp_backend:
-            logger.info("Tensor parallel backend: " + str(tp_backend), extra=basic_log_extra())
-            load_kwargs["tp_backend"] = tp_backend
+        _apply_exllamav3_tp_load_options(load_kwargs, backend_extra_args, tensor_parallel)
+
+        if load_kwargs.get("tp_backend"):
+            logger.info("Tensor parallel backend: " + str(load_kwargs["tp_backend"]), extra=basic_log_extra())
+        if load_kwargs.get("tp_options"):
+            logger.info("Tensor parallel options: " + str(load_kwargs["tp_options"]), extra=basic_log_extra())
+        if load_kwargs.get("segment_topology_yaml"):
+            logger.info(
+                "Segmented PP+TP topology: " + str(load_kwargs["segment_topology_yaml"]),
+                extra=basic_log_extra(),
+            )
 
         # Pass batch/chunk settings to model.load so the workspace is sized correctly
         load_kwargs["max_batch_size"] = max_batch_size
@@ -587,7 +722,12 @@ class ModelExllamaV3(ModelInterface):
         )
 
         if self.draft_model is not None:
-            mode = "dflash" if generator.generator.dflash_draft else "flash"
+            if generator.generator.mtp_draft:
+                mode = "mtp"
+            elif generator.generator.dflash_draft:
+                mode = "dflash"
+            else:
+                mode = "flash"
             logger.info(f"ExLlamaV3 speculative draft mode: {mode}", extra=basic_log_extra())
 
         return self.ExllamaV3Pipeline(
@@ -895,10 +1035,14 @@ class ModelExllamaV3(ModelInterface):
             prompt, image_embeddings = self._process_vision_inputs(prompt, vision_token, messages, video)
             if image_embeddings:
                 inner_generator = self.pipeline.generator.generator
-                if inner_generator.draft_model is not None and not inner_generator.dflash_draft:
+                if (
+                    inner_generator.draft_model is not None
+                    and not inner_generator.dflash_draft
+                    and not inner_generator.mtp_draft
+                ):
                     raise ValueError(
                         "ExLlamaV3 normal draft flash does not support multimodal embeddings; "
-                        "disable draft or use a DFlash draft model."
+                        "disable draft or use a DFlash/MTP draft model."
                     )
 
             # Create filters for format enforcement
@@ -980,6 +1124,7 @@ class ModelExllamaV3(ModelInterface):
             generate_text = ""
             gen_stats = None
             eos = False
+            wall_generation_start = None
 
             # Kick-start the generation and let downstream know the generation type
             if isinstance(gen_type, str):
@@ -1019,6 +1164,9 @@ class ModelExllamaV3(ModelInterface):
                         )
                         result = dict(result) if hasattr(result, '__iter__') else {"text": str(result)}
 
+                    if result.get("stage") == "streaming" and wall_generation_start is None:
+                        wall_generation_start = time.perf_counter()
+
                     chunk_text = result.get("text", "")
                     if chunk_text:
                         # logger.info(f"chunk_text: {chunk_text}")
@@ -1053,14 +1201,21 @@ class ModelExllamaV3(ModelInterface):
                         stop_reason = self.get_stop_reason(result, use_stop_words)
 
                         if send_eos:
+                            measured_time_generate = None
+                            if wall_generation_start is not None:
+                                measured_time_generate = max(time.perf_counter() - wall_generation_start, 0)
+
                             # refer exllama generator.py for detail
                             gen_stats = GenerationStats(
                                 input_tokens_count=result["prompt_tokens"],
                                 output_tokens_count=result["new_tokens"],
                                 time_to_first_token=result["time_prefill"],
                                 time_generate=result["time_generate"],
+                                measured_time_generate=measured_time_generate,
                                 cached_pages=result["cached_pages"],
                                 cached_tokens=result["cached_tokens"],
+                                accepted_draft_tokens=result.get("accepted_draft_tokens"),
+                                rejected_draft_tokens=result.get("rejected_draft_tokens"),
                                 stop_reason=stop_reason,
                                 stop_sequence=stop_word_used or None,
                             )

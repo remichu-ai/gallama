@@ -24,6 +24,7 @@ from gallama.utils.utils import get_package_file_path
 import os
 import json
 import base64
+import tempfile
 from gallama.server_routes import (
     responses_ws_router,
     server_management_router,
@@ -51,7 +52,10 @@ from gallama.server_engine.request_routing import (
 )
 from gallama.server_engine.model_capabilities import infer_model_modalities_fallback
 from gallama.logger.logger import (
+    FILE_LOG_VERBOSITY_ENV_VAR,
+    MAX_LOG_VERBOSITY,
     REQUEST_ID_HEADER,
+    ZMQ_LOG_VERBOSITY_ENV_VAR,
     basic_log_extra,
     get_log_level_for_verbosity,
     is_max_log_verbosity,
@@ -64,6 +68,35 @@ from gallama.logger.logger import (
 
 server_logger = get_server_logger()
 responses_websocket_hub = get_responses_websocket_hub()
+
+
+def _auto_log_model_label(args) -> str:
+    label = getattr(args, "model_name", None)
+
+    if not label and getattr(args, "model_id", None):
+        first_model = args.model_id[0]
+        if isinstance(first_model, dict):
+            label = first_model.get("model_name") or first_model.get("model_id")
+
+    label = label or "run"
+    label = os.path.basename(str(label).rstrip(os.sep)) or "run"
+    return "".join(char if char.isalnum() or char in "._-" else "-" for char in label)
+
+
+def configure_auto_log_args(args) -> str | None:
+    if not getattr(args, "auto_log", False):
+        return None
+
+    if not getattr(args, "log_file", None):
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        args.log_file = os.path.join(
+            tempfile.gettempdir(),
+            f"gallama-{_auto_log_model_label(args)}-{timestamp}.log",
+        )
+
+    os.environ[FILE_LOG_VERBOSITY_ENV_VAR] = str(MAX_LOG_VERBOSITY)
+    os.environ[ZMQ_LOG_VERBOSITY_ENV_VAR] = str(MAX_LOG_VERBOSITY)
+    return args.log_file
 
 router = APIRouter()
 router.include_router(server_management_router)
@@ -569,6 +602,7 @@ async def run_model(model_spec: ModelSpec):
                 model_name=model_spec.model_name,
                 model_type=ModelSpec.get_model_type_from_backend(backend),
                 strict=model_spec.strict,
+                aliases=model_spec.aliases,
                 modalities=modalities,
                 max_concurrent_requests=model_spec.max_concurrent_requests,
                 cuda_visible_devices=env.get("CUDA_VISIBLE_DEVICES", ""),
@@ -711,15 +745,17 @@ async def load_balanced_router(request: Request, path: str):
 
         available_instances = []
 
+        resolved_model = server_manager.resolve_model_name(model)
+
         if strict_mode:
             # In strict mode, the model must be specified and found
-            if model not in server_manager.models:
+            if resolved_model is None:
                 raise HTTPException(status_code=404, detail="Specified model not found")
-            available_instances = [inst for inst in server_manager.models[model].instances if inst.status == "running"]
+            available_instances = [inst for inst in server_manager.models[resolved_model].instances if inst.status == "running"]
         else:
             # Try to find a matching model first (if model is specified)
-            if model and model in server_manager.models:
-                available_instances = [inst for inst in server_manager.models[model].instances if inst.status == "running"]
+            if resolved_model:
+                available_instances = [inst for inst in server_manager.models[resolved_model].instances if inst.status == "running"]
 
             # If no matching model or no instances found, pick any running instance of the correct type that is not strict
             if not available_instances:
@@ -883,6 +919,7 @@ def llama_picture():
 
 def run_from_script(args):
     global server_logger
+    auto_log_file = configure_auto_log_args(args)
     requested_verbosity = max(
         getattr(args, "global_verbose", 0) or 0,
         getattr(args, "verbose", 0) or 0,
@@ -919,6 +956,8 @@ def run_from_script(args):
 
 
     server_logger.info("Parsed Arguments:" + str(args), extra=basic_log_extra())
+    if auto_log_file:
+        server_logger.info(f"Auto log file: {auto_log_file}", extra=basic_log_extra())
 
     asyncio.run(
         main(
@@ -959,6 +998,11 @@ if __name__ == "__main__":
     arg_parser.add_argument("--host", type=str, default="127.0.0.1", help="The host to bind to.")
     arg_parser.add_argument('-p', "--port", type=int, default=8000, help="The port to bind to.")
     arg_parser.add_argument("--log-file", type=str, default=None, help="Also write CLI logs to this file.")
+    arg_parser.add_argument(
+        "--auto-log",
+        action="store_true",
+        help="Write maximum-verbosity logs to an auto-named file in the system temp directory without changing terminal verbosity.",
+    )
 
     # arg_parser.add_argument("--reload", action="store_true", help="Enable auto-reload.")
 

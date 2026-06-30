@@ -31,6 +31,8 @@ class ConnectionData:
         self.complete_audio = bytearray() if not streaming_mode else None
         self.processing_complete = False
         self.transcription_enabled = True
+        self.native_streaming_session = None
+        self.native_processed_samples = 0
 
     def reset_buffers(self):
         """Reset all buffers and state variables."""
@@ -42,6 +44,9 @@ class ConnectionData:
         if not self.streaming_mode:
             self.complete_audio = bytearray()
         self.processing_complete = False
+        self.native_processed_samples = 0
+        if self.native_streaming_session is not None:
+            self.native_streaming_session.reset()
 
 
 class TranscriptionConnectionManager:
@@ -83,6 +88,9 @@ class TranscriptionConnectionManager:
                 min_chunk_samples=min_chunk_samples,
                 streaming_mode=config.streaming_transcription,
             )
+            if connection_data.streaming_mode and asr_processor.supports_native_streaming():
+                language = config.turn_detection.language if config.turn_detection else None
+                connection_data.native_streaming_session = asr_processor.create_native_streaming_session(language)
 
             self.active_connections[websocket] = connection_data
             return True
@@ -95,6 +103,9 @@ class TranscriptionConnectionManager:
     async def disconnect(self, websocket: WebSocket):
         try:
             if websocket in self.active_connections:
+                connection = self.active_connections[websocket]
+                if connection.native_streaming_session is not None:
+                    connection.native_streaming_session.close()
                 del self.active_connections[websocket]
         except Exception as e:
             logger.error(f"Error in disconnect: {str(e)}")
@@ -118,6 +129,12 @@ class TranscriptionConnectionManager:
 
         # set transcription streaming mode
         connection.streaming_mode = config_update.config.streaming_transcription
+        if connection.native_streaming_session is not None:
+            connection.native_streaming_session.close()
+            connection.native_streaming_session = None
+        if connection.streaming_mode and connection.asr_processor.supports_native_streaming():
+            language = config_update.config.turn_detection.language if config_update.config.turn_detection else None
+            connection.native_streaming_session = connection.asr_processor.create_native_streaming_session(language)
 
         connection.reset_buffers()
 
@@ -237,12 +254,21 @@ class TranscriptionConnectionManager:
                     return success
                 return True
 
+        except WebSocketDisconnect:
+            logger.info("Client disconnected during STT audio processing")
+            raise
         except Exception as e:
-            logger.error(f"Error processing audio chunk: {str(e)}")
-            await websocket.close(code=4000, reason="Processing error")
-            return False
+            logger.error(f"Error processing audio chunk: {type(e).__name__}: {str(e)}", exc_info=True)
+            try:
+                await websocket.close(code=4000, reason="Processing error")
+            except RuntimeError:
+                pass
+            raise
 
     async def _process_streaming_chunk(self, connection: ConnectionData, websocket: WebSocket, audio_chunk: bytes, is_final: bool):
+        if connection.native_streaming_session is not None:
+            return await self._process_native_streaming_chunk(connection, websocket, audio_chunk, is_final)
+
         logger.debug(f"Processing {'final' if is_final else 'intermediate'} streaming chunk")
         is_final_from_vad = False
 
@@ -354,6 +380,67 @@ class TranscriptionConnectionManager:
 
         return True, is_final_from_vad
 
+    async def _process_native_streaming_chunk(self, connection: ConnectionData, websocket: WebSocket, audio_chunk: bytes, is_final: bool):
+        logger.debug(f"Processing {'final' if is_final else 'intermediate'} native streaming chunk")
+        is_final_from_vad = False
+
+        RESAMPLING_WINDOW = int((connection.asr_processor.SAMPLING_RATE / connection.input_sample_rate) * 1024)
+
+        if audio_chunk:
+            connection.raw_buffer.extend(audio_chunk)
+
+        processed_audio = None
+        if len(connection.raw_buffer) >= RESAMPLING_WINDOW or (is_final and len(connection.raw_buffer) > 0):
+            processed_audio = self.process_raw_buffer(connection.raw_buffer, connection.asr_processor, connection.input_sample_rate)
+            if processed_audio is None:
+                return False, False
+            connection.raw_buffer = bytearray()
+            connection.audio_buffer = np.concatenate([connection.audio_buffer, processed_audio])
+        elif is_final:
+            processed_audio = np.array([], dtype=np.float32)
+
+        if processed_audio is None:
+            return True, False
+
+        vad_events = connection.asr_processor.process_vad_events(processed_audio, is_final=is_final)
+        for event in vad_events:
+            if event['type'] == 'start':
+                response = WSInterSTTResponse(
+                    type="stt.vad_speech_start",
+                    vad_timestamp_ms=event['timestamp_ms'],
+                    confidence=event['confidence']
+                )
+                await websocket.send_json(response.dict())
+                await asyncio.sleep(0.1)
+
+            if event['type'] == 'end':
+                response = WSInterSTTResponse(
+                    type="stt.vad_speech_end",
+                    vad_timestamp_ms=event['timestamp_ms'],
+                    confidence=event['confidence']
+                )
+                await websocket.send_json(response.dict())
+                is_final_from_vad = True
+
+        transcription_start_sample = connection.native_processed_samples
+        connection.native_processed_samples += len(processed_audio)
+        transcription_end_sample = connection.native_processed_samples
+
+        transcription = connection.native_streaming_session.accept_audio(
+            processed_audio,
+            is_final=is_final or is_final_from_vad,
+        )
+        if transcription:
+            response = WSInterSTTResponse(
+                type="stt.add_transcription",
+                transcription=transcription,
+                start_time=transcription_start_sample / connection.asr_processor.SAMPLING_RATE,
+                end_time=transcription_end_sample / connection.asr_processor.SAMPLING_RATE,
+            )
+            await websocket.send_json(response.dict())
+
+        return True, is_final_from_vad
+
 
     async def _process_complete_audio(self, connection: ConnectionData, websocket: WebSocket):
         """Handle one-shot audio processing"""
@@ -435,7 +522,7 @@ async def websocket_endpoint(
                     logger.error(f"Error during sound_done processing: {str(e)}")
                     raise  # Re-raise the exception to trigger proper cleanup
 
-            elif message.type == "stt.buffer_clear" or message.type == "common.cancel" or message.type == "common.cleanup":
+            elif message.type in ("stt.buffer_clear", "stt.clear_buffer") or message.type == "common.cancel" or message.type == "common.cleanup":
                 logger.info("STT: received clear_buffer message.")
 
                 connection = manager.active_connections.get(websocket)

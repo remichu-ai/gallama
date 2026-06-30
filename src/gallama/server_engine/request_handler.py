@@ -87,6 +87,8 @@ async def forward_request(
             body = modified_body
             if isinstance(body, str):
                 body = body.encode('utf-8')
+            elif isinstance(body, dict):
+                body = json.dumps(body).encode('utf-8')
         else:
             content_type = headers.get('content-type', '').lower()
             content_encoding = headers.get('content-encoding', '')

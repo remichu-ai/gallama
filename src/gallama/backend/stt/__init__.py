@@ -8,5 +8,10 @@ try:
 except ModuleNotFoundError:
     ASRMLXWhisper = None
 
+try:
+    from .nemo_asr.model import ASRNeMo
+except ModuleNotFoundError:
+    ASRNeMo = None
+
 
 from .asr_processor import ASRProcessor

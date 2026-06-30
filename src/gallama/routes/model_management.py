@@ -24,19 +24,7 @@ def load_model(model_spec: ModelSpec):
 async def get_models(request: Request):
     model_manager = get_model_manager()
 
-    model_ids = []
-    for model_name in model_manager.llm_dict.keys():
-        model_ids.append(model_name)
-    for model_name in model_manager.stt_dict.keys():
-        model_ids.append(model_name)
-    for model_name in model_manager.tts_dict.keys():
-        model_ids.append(model_name)
-    for model_name in model_manager.embedding_dict.keys():
-        model_ids.append(model_name)
-    for model_name in model_manager.reranker_dict.keys():
-        model_ids.append(model_name)
-
-    return build_models_response(model_ids, request.headers)
+    return build_models_response(model_manager.list_model_ids(), request.headers)
 
 # @router.post("/delete_model")
 # def delete_model(model_name: str):

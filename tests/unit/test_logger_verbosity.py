@@ -1,9 +1,12 @@
 import logging
+import sys
 
 from gallama.logger.logger import (
+    FILE_LOG_VERBOSITY_ENV_VAR,
     LOG_VERBOSITY_ENV_VAR,
     PlainTextFormatter,
     VerbosityFilter,
+    get_logger,
     normalize_log_verbosity,
 )
 
@@ -42,3 +45,40 @@ def test_plain_text_formatter_skips_request_prefix_for_basic_logs():
     record.gallama_basic = True
 
     assert formatter.format(record) == "REQ abcd1234 GET /health"
+
+
+def test_plain_text_formatter_includes_exception_traceback_with_request_id():
+    formatter = PlainTextFormatter()
+
+    try:
+        raise TypeError("tuple indices must be integers or slices, not str")
+    except TypeError:
+        record = logging.LogRecord("test", logging.ERROR, __file__, 1, "boom", (), None)
+        record.request_id = "abcd1234"
+        record.exc_info = sys.exc_info()
+
+    formatted = formatter.format(record)
+
+    assert formatted.startswith("[req:abcd1234] boom\nTraceback")
+    assert "TypeError: tuple indices must be integers or slices, not str" in formatted
+
+
+def test_file_verbosity_env_allows_debug_file_logs_with_quiet_default(monkeypatch, tmp_path):
+    monkeypatch.setenv(LOG_VERBOSITY_ENV_VAR, "0")
+    monkeypatch.setenv(FILE_LOG_VERBOSITY_ENV_VAR, "2")
+
+    log_path = tmp_path / "gallama.log"
+    test_logger = get_logger(
+        name="test_file_verbosity_env_allows_debug_file_logs_with_quiet_default",
+        log_file=str(log_path),
+        to_console=False,
+        to_file=True,
+        to_zmq=False,
+    )
+
+    test_logger.debug("debug detail")
+    for handler in test_logger.handlers:
+        handler.flush()
+        handler.close()
+
+    assert "debug detail" in log_path.read_text()

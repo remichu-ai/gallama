@@ -23,6 +23,7 @@
 
 
 #model_name:                                # any no space string here which will be referred to for model loading and api call
+#  alias: local-chat                        # (Optional) alternate API name. Use aliases: [name1, name2] for multiple aliases
 #  model_id:                                # the path to where the model is in the pc
 #  backend: 'exllama'                       # backend option are:  'exllama' or 'llama_cpp' or 'embedding'
 #  gpus: "auto"                             # 'auto' -> model autosplit, or an array of gpus split e.g. [12,24,12] where each number is the VRAM to limit the load on that card

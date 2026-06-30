@@ -21,7 +21,7 @@ class WSInterCleanup(BaseModel):
 
 # STT
 class WSInterSTT(BaseModel):
-    type: Literal["stt.add_sound_chunk", "stt.sound_done", "stt.buffer_clear", "stt.one_time_transcribe"]
+    type: Literal["stt.add_sound_chunk", "stt.sound_done", "stt.buffer_clear", "stt.clear_buffer", "stt.one_time_transcribe"]
     sound: Optional[str] = None
 
 class WSInterSTTResponse(BaseModel):

@@ -3,6 +3,7 @@ from .by_model import (
     qwen3_moe,
     qwen35,
     minimax,
+    minimax_m3,
     glm4,
     gemma4,
     ministral3,
@@ -23,16 +24,19 @@ MODEL_SPECIAL_TAG = {
     "qwen3_5_moe": qwen35,
     "minimax": minimax,
     "minimax_m2": minimax,
+    "minimax_m3_vl": minimax_m3,
     "glm4": glm4,
     "glm4v_moe": glm4,
     "glm4v": glm4,
     "glm4_moe": glm4,
+    "glm_moe_dsa": glm4,
     "gemma4": gemma4,
     "ministral3": ministral3,
     "mistral3": ministral3,
     "mistral4": ministral3,
     "mimo_v2": mimo,
     "step3p5": qwen35,
+    "step3p7": qwen35,
     "nemotron_h": qwen35,
 }
 
@@ -43,6 +47,7 @@ MODEL_EOS_TOKEN = {
     "glm4v":  ["<|user|>", "<|observation|>"],
     "glm4v_moe":  ["<|user|>", "<|observation|>"],
     "glm4_moe":  ["<|user|>", "<|observation|>"],
+    "glm_moe_dsa":  ["<|user|>", "<|observation|>"],
     "gemma4": ["<turn|>"],
     "mistral3": ["</s>"],
     "mistral4": ["</s>"]
@@ -56,13 +61,15 @@ MODEL_VISION_TOKEN = {
     "glm4v": "<|begin_of_image|><|image|><|end_of_image|>",
     "glm4v_moe": "<|begin_of_image|><|image|><|end_of_image|>",
     "mimo_v2": "<|vision_start|><|image_pad|><|vision_end|>",
+    "step3p5": "<|vision_start|><|image_pad|><|vision_end|>",
+    "step3p7": "<im_patch>",
 }
-
 _VISION_TOKEN_PATTERNS = (
     ("<|vision_start|>", "<|image_pad|>", "<|vision_end|>"),
     ("<|vision_bos|>", "<|IMAGE|>", "<|vision_eos|>"),
     ("<|begin_of_image|>", "<|image|>", "<|end_of_image|>"),
     ("<start_of_image>", "<image_soft_token>", "<end_of_image>"),
+    ("", "<im_patch>", ""),
     ("", "<|image|>", ""),
 )
 

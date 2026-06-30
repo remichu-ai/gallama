@@ -11,7 +11,7 @@ from ....data_classes import ModelSpec, TranscriptionResponse, TimeStampedWord, 
 try:
     from faster_whisper.transcribe import TranscriptionOptions, TranscriptionInfo, Segment
 except ImportError:
-    TranscriptionOptions, TranscriptionInfo, Segment = None, None, None, None, None
+    TranscriptionOptions, TranscriptionInfo, Segment = None, None, None
 
 try:
     import mlx_whisper as mlx_model
